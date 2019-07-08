@@ -7,7 +7,8 @@ use hyper::{Body, Request, Response, Server};
 //const PHRASE: &str = "Hello, World!";
 
 fn hello_world(req: Request<Body>) -> Response<Body> {
-    let body = format!("{:#?}", &req);
+    let (parts, body) = req.into_parts();
+    let body = format!("{:#?}\n\n{:?}", &parts, &body);
     Response::new(Body::from(body))
 }
 
