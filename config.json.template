@@ -1,0 +1,9 @@
+{
+"host":"",
+"schema":"",
+"user":"",
+"password":"",
+"port":"80",
+"timeout":"60000",
+"restart-code":""
+}

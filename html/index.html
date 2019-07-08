@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta http-equiv="x-ua-compatible" content="ie=edge">
+<META NAME="ROBOTS" CONTENT="NOINDEX, NOFOLLOW">
+<title>PetScan</title>
+
+<!--<link rel="icon" type="image/png" href="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c6/PET-image.jpg/32px-PET-image.jpg">-->
+
+<link rel="stylesheet" href="https://tools-static.wmflabs.org/cdnjs/ajax/libs/twitter-bootstrap/4.0.0-beta.2/css/bootstrap.min.css">
+<!--<link rel="stylesheet" href="//tools-static.wmflabs.org/cdnjs/ajax/libs/tether/1.1.1/css/tether.min.css">-->
+<link rel="stylesheet" href="https://tools-static.wmflabs.org/magnustools/resources/html/wikimedia.css">
+
+<style>
+.radio-inline {
+	display:inline-block !important;
+}
+textarea, input[type=text], input[type=number], div.input-group-addon {
+	box-shadow:3px 3px 2px #DDD;
+}
+.smaller {
+	font-size:10pt;
+}
+div.ns-block {
+	display:inline-block;
+	padding:1px;
+	margin-bottom:5px;
+	margin-right:5px;
+	white-space: nowrap;
+}
+#main_form textarea {
+	font-size:9pt;
+}
+div.form-group.row > label:first-child {
+	font-weight:bold;
+}
+.num {
+	font-family:courier;
+	text-align:right;
+}
+#autolist_box {
+	float:right;
+	margin-left:5px;
+	margin-bottom:5px;
+	padding:2px;
+	font-size:10pt;
+}
+div.autolist_subbox {
+	display:inline-block;
+	vertical-align:top;
+	margin-left:5px;
+}
+div.tab-pane {
+	margin-top:15px;
+}
+a.pagelink:visited {
+	color:#0056ab
+}
+div.fileusage {
+	white-space: nowrap;
+}
+td.link_container {
+	width:100%;
+}
+div.thumbcard {
+	text-align:center;
+	max-height:120px;
+}
+img.thumbcard-img {
+	max-height:120px;
+	border:0px;
+}
+div.example_psid {
+	padding:5px;
+	text-align:right;
+	font-weight:bold;
+	display:table-cell;
+}
+div.example_desc {
+	padding:5px;
+	display:table-cell;
+}
+#example_list {
+	height:500px;
+	overflow:auto;
+}
+</style>
+
+
+
+<script>
+/*
+var raw_interface_text_object ;
+function receiveRawInterfaceText ( j ) {
+	raw_interface_text_object = j ;
+}
+*/
+var global_namespace_cache = {} ;
+
+function receiveEnglishNamespaceData ( j ) {
+	global_namespace_cache['en.wikipedia.org'] = j ;
+}
+
+</script>
+<!--<script src='https://meta.wikimedia.org/w/api.php?action=parse&prop=wikitext&page=PetScan/Interface&format=json&callback=receiveRawInterfaceText'></script>-->
+<script src='https://en.wikipedia.org/w/api.php?action=query&meta=siteinfo&siprop=namespaces&format=json&callback=receiveEnglishNamespaceData'></script>
+<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/twitter-bootstrap/4.0.0-beta.2/js/bootstrap.bundle.min.js"></script>
+<script src="https://tools-static.wmflabs.org/tooltranslate/tt.js"></script>
+<script src='main.js'></script>
+</head>
+<body style='display:none'>
+
+<nav class="navbar navbar-expand-lg navbar-light bg-light">
+
+	<button class="navbar-toggler navbar-toggler-right" type="button" data-toggle="collapse" data-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+	<span class="navbar-toggler-icon"></span>
+	</button>
+
+	<div class="collapse navbar-collapse" id="bd-main-nav">
+	<ul class="navbar-nav mr-auto">
+		<li class="nav-item"><a class="nav-item nav-link active" tt="toolname" href="/"></a></li>
+		<li class="nav-item"><a target='_blank' class="nav-item nav-link" tt="manual" href="#"></a></li>
+		<li class="nav-item"><a target='_blank' class="nav-item nav-link" tt="issues" href="https://bitbucket.org/magnusmanske/petscan/issues?status=new&status=open"></a></li>
+		<li class="nav-item"><div class="btn-group nav-item nav-link" id='interface_languages_wrapper'></div></li>
+	</ul>
+
+	<div class="btn-group nav-item nav-link"><a target='_blank' class="btn btn-outline-warning" tt="examples" href="#"></a></div>
+	<div class="btn-group nav-item nav-link"><button class='btn btn-outline-default' tt='toggle_list' id='tab-list'></button></div>
+    <a style="margin:0px;padding:0px;margin-top:4px;margin-left:10px;" href="https://tools.wmflabs.org" target='_blank'><img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Toolforge_logo.svg/32px-Toolforge_logo.svg.png" tt_title="wmf_powered" border="0" width="32px"></a>
+
+  </div>
+</nav>
+
+<div class="container mt-2">
+<div class="row">
+<div class="col-md-12">
+
+<form id='main_form' method='post' action='/' class='form'>
+
+<ul class="nav nav-tabs" role="tablist">
+	<li class="nav-item"><a class="nav-link active" data-toggle="tab" href="#tab_categories" role="tab"><span tt='categories'></span></a></li>
+	<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#tab_pageprops" role="tab"><span tt='page_props'></span></a></li>
+	<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#tab_templates_n_links" role="tab"><span tt='templates_links'></span></a></li>
+	<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#tab_other_sources" role="tab"><span tt='other_sources'></span></a></li>
+	<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#tab_wikidata" role="tab"><span tt='wikidata'></span></a></li>
+<!--	<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#tab_wdfist" role="tab"><span>WDFIST</span></a></li>-->
+	<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#tab_output" role="tab"><span tt='output'></span></a></li>
+</ul>
+
+<div class="tab-content">
+
+
+<div class="tab-pane active" id="tab_categories" role="tabpanel">
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="language"></label>
+<div class="col-sm-4"><input type="text" class="form-control" name="language" value='en'></div>
+<div class="col-sm-6">
+<a href='#' style='margin-left:20px;' tabindex="-1" id='quick_commons' tt='site_commons'></a>
+<a href='#' style='margin-left:20px;' tabindex="-1" id='quick_wikispecies' tt='site_wikispecies'></a>
+<a href='#' style='margin-left:20px;' tabindex="-1" id='quick_wikidata' tt='site_wikidata'></a>
+<!--<span class='smaller' tt='projects_note'></span>-->
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="project"></label>
+<div class="col-sm-4"><input type="text" class="form-control" name="project" value='wikipedia'></div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="depth"></label>
+<div class="col-sm-2"><input type="number" class="form-control" name="depth" value='0'></div>
+<div class='col-sm-8 smaller' tt='depth_explanation'></div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="categories"></label>
+<div class="col-sm-10"><textarea class="form-control" name='categories' rows=3 style='width:100%'></textarea></div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="combination"></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type="radio" name="combination" value="subset"> <span tt='comb_subset'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="combination" value="union"> <span tt='comb_union'></span></label></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="negative_categories"></label>
+<div class="col-sm-10"><textarea class="form-control" name='negcats' rows=3 style='width:100%'></textarea></div>
+</div>
+
+
+</div> <!--tab panel-->
+<div class="tab-pane" id="tab_pageprops" role="tabpanel">
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"><span tt='namespaces'></span><br/><span class='smaller current_wiki'></span></label>
+<div class="col-sm-10" id='namespaces'></div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"><span tt='size'></span></label>
+<div class="col-sm-5">
+<div class="input-group"><div class="input-group-addon" tt="larger"></div><input class="form-control" tt_placeholder="size_explanation" name="larger" value="" type="text"></div>
+</div><div class="col-sm-5">
+<div class="input-group"><div class="input-group-addon" tt="smaller"></div><input class="form-control" tt_placeholder="size_explanation" name="smaller" value="" type="text"></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"><span tt='link_number'></span></label>
+<div class="col-sm-5">
+<div class="input-group"><div class="input-group-addon" tt="minlinks"></div><input class="form-control" name="minlinks" placeholder="#" value="" type="text"></div>
+</div><div class="col-sm-5">
+<div class="input-group"><div class="input-group-addon" tt="maxlinks"></div><input class="form-control" name="maxlinks" placeholder="#" value="" type="text"></div>
+</div>
+</div>
+
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"><span tt='edits'></span></label>
+<div class="col-sm-5">
+<div class="input-group"><div class="input-group-addon" tt="before"></div><input class="form-control" tt_placeholder="date_format" name="before" value="" type="text"></div>
+</div><div class="col-sm-5">
+<div class="input-group"><div class="input-group-addon" tt="after"></div><input class="form-control" tt_placeholder="date_format" name="after" value="" type="text"></div>
+</div></div>
+<div class="form-group row">
+<div class="col-sm-2">
+</div><div class="col-sm-5">
+<div class="input-group"><div class="input-group-addon" tt="max_age"></div><input class="form-control" tt_placeholder="max_age_format" name="max_age" value="" type="text"></div>
+</div><div class="col-sm-5">
+<label><input type='checkbox' name='only_new' /> <span tt='only_new'></span></label>
+</div>
+</div>
+
+
+
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="show_redirects"></label>
+<div class="col-sm-4">
+<div class="radio-inline"><label><input type="radio" name="show_redirects" value="both"> <span tt='edits_both'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="show_redirects" value="yes"> <span tt='edits_yes'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="show_redirects" value="no"> <span tt='edits_no'></span></label></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"><span tt='edits'></span>: <span tt='edit_bots'></span></label>
+<div class="col-sm-4">
+<div class="radio-inline"><label><input type="radio" name="edits[bots]" value="both"> <span tt='edits_both'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="edits[bots]" value="yes"> <span tt='edits_yes'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="edits[bots]" value="no"> <span tt='edits_no'></span></label></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"><span tt='edits'></span>: <span tt='edit_anons'></span></label>
+<div class="col-sm-4">
+<div class="radio-inline"><label><input type="radio" name="edits[anons]" value="both"> <span tt='edits_both'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="edits[anons]" value="yes"> <span tt='edits_yes'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="edits[anons]" value="no"> <span tt='edits_no'></span></label></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"><span tt='edits'></span>: <span tt='edit_flagged'></span></label>
+<div class="col-sm-4">
+<div class="radio-inline"><label><input type="radio" name="edits[flagged]" value="both"> <span tt='edits_both'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="edits[flagged]" value="yes"> <span tt='edits_yes'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="edits[flagged]" value="no"> <span tt='edits_no'></span></label></div>
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"><span tt='page_image'></span></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type="radio" name="page_image" value="any"> <span tt='page_image_any'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="page_image" value="yes"> <span tt='page_image_yes'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="page_image" value="free"> <span tt='page_image_free'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="page_image" value="nonfree"> <span tt='page_image_nonfree'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="page_image" value="no"> <span tt='page_image_no'></span></label></div>
+</div>
+</div>
+
+
+<div class="form-group row" id='ores_options'>
+<label class="col-sm-2 form-control-label"><span tt='ores'></span></label>
+<div class="col-sm-2" tt_title='ores_caution'>
+	<select name="ores_type" id='ores_model_select'>
+		<option value='any' tt='ores_any'></option>
+		<option value='damaging'>damaging</option>
+		<option value='goodfaith'>goodfaith</option>
+		<option value='reverted'>reverted</option>
+		<option value='draftquality'>draftquality</option>
+		<option value='wp10'>wp10</option>
+	</select>
+</div>
+<div class="col-sm-5">
+	<span tt='ores_probability'></span>
+	<input type='text' name='ores_prob_from' style='width:100px' placeholder='0.00' /> &mdash; <input type='text' name='ores_prob_to' style='width:100px' placeholder='1.00' />
+</div>
+<div class="col-sm-3">
+	<span tt='ores_prediction'></span>
+	<div class="radio-inline"><label><input type="radio" name="ores_prediction" value="any"> <span tt='ores_prediction_any'></span></label></div>
+	<div class="radio-inline"><label><input type="radio" name="ores_prediction" value="yes"> <span tt='ores_yes'></span></label></div>
+	<div class="radio-inline"><label><input type="radio" name="ores_prediction" value="no"> <span tt='ores_no'></span></label></div>
+</div>
+</div>
+
+</div> <!--tab panel-->
+
+<div class="tab-pane" id="tab_templates_n_links" role="tabpanel">
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="templates"></label>
+<div class="col-sm-3"><div tt='templates_yes'></div><textarea class="form-control" name='templates_yes' rows=4 style="width:100%"></textarea><div><label><input type='checkbox' name='templates_use_talk_yes' /> <span tt='templates_use_talk_instead'></span></label></div></div>
+<div class="col-sm-3"><div tt='templates_any'></div><textarea class="form-control" name='templates_any' rows=4 style="width:100%"></textarea><div><label><input type='checkbox' name='templates_use_talk_any' /> <span tt='templates_use_talk_instead'></span></label></div></div>
+<div class="col-sm-3"><div tt='templates_no' ></div><textarea class="form-control" name='templates_no'  rows=4 style="width:100%"></textarea><div><label><input type='checkbox' name='templates_use_talk_no'  /> <span tt='templates_use_talk_instead'></span></label></div></div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="outlinks"></label>
+<div class="col-sm-3"><div tt='outlinks_yes'></div><textarea class="form-control" name='outlinks_yes' rows=4 style="width:100%"></textarea></div>
+<div class="col-sm-3"><div tt='outlinks_any'></div><textarea class="form-control" name='outlinks_any' rows=4 style="width:100%"></textarea></div>
+<div class="col-sm-3"><div tt='outlinks_no' ></div><textarea class="form-control" name='outlinks_no'  rows=4 style="width:100%"></textarea></div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="links_to"></label>
+<div class="col-sm-3"><div tt='outlinks_yes'></div><textarea class="form-control" name='links_to_all' rows=4 style="width:100%"></textarea></div>
+<div class="col-sm-3"><div tt='outlinks_any'></div><textarea class="form-control" name='links_to_any' rows=4 style="width:100%"></textarea></div>
+<div class="col-sm-3"><div tt='outlinks_no' ></div><textarea class="form-control" name='links_to_no'  rows=4 style="width:100%"></textarea></div>
+</div>
+
+
+</div> <!--tab panel-->
+<div class="tab-pane" id="tab_other_sources" role="tabpanel">
+
+<!--
+<div class="row">
+<div class='col-sm-1'></div>
+<div class='col-sm-11' tt='multi_result_note'></div>
+</div>
+-->
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="sparql"></label>
+<div class="col-sm-10">
+<textarea class="form-control" tt_placeholder="sparql_note" name='sparql' rows=4 style="width:100%"></textarea>
+<!--<div><a href='https://tools.wmflabs.org/wdq2sparql/' tt='wdq2sparql' target='_blank'></a></div>-->
+<div><a href='#' id='wdq2sparql' tt='wdq2sparql'></a></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="manual_list"></label>
+<div class="col-sm-10">
+<textarea class="form-control" tt_placeholder="manual_list_note" name='manual_list' rows=4 style="width:100%"></textarea>
+</div>
+</div>
+<div class="form-group row">
+<div class="col-sm-2"></div>
+<div class="col-sm-4">
+<div class="input-group"><div class="input-group-addon" tt="manual_list_wiki"></div><input class="form-control" tt_placeholder="manual_list_wiki_note" name="manual_list_wiki" value="" type="text"></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="pagepile"></label>
+<div class="col-sm-4">
+<input type="text" class="form-control" tt_placeholder="pagepile_note" name='pagepile' />
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="search"></label>
+<div class="col-sm-4">
+<input type="text" class="form-control" tt_placeholder="search_note" name='search_query' />
+</div>
+<div class="col-sm-2">
+<input type="text" class="form-control" tt_placeholder="search_wiki_note" name='search_wiki' />
+</div>
+<div class="col-sm-2">
+<span tt='max_results'></span>
+</div>
+<div class="col-sm-2">
+<input type="number" class="form-control" name='search_max_results' value='500' />
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="wikidata"></label>
+<div class="col-sm-5"><input type="text" class="form-control col-sm-4" tt_placeholder="wikidata_source_ph" name='wikidata_source_sites' /></div>
+<div class="col-sm-5"><span tt='wikidata_source'></span></div>
+</div>
+<div class="form-group row">
+<div class="col-sm-2"></div>
+<div class="col-sm-10"><span class='smaller' tt='wikidata_source_note'></span></div>
+</div>
+
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="subpages"></label>
+<div class="col-sm-3"><div class="radio-inline"><label><input type="checkbox" name="add_subpages" value="1"> <span tt='add_subpages'></span></label></div></div>
+<div class="col-sm-7">
+<span tt='subpage_filter' style='vertical-align:top'></span>&nbsp;
+<div class="radio-inline"><label><input type="radio" name="subpage_filter" value="either"> <span tt='subpages_either'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="subpage_filter" value="subpages"> <span tt='subpages_only'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="subpage_filter" value="no_subpages"> <span tt='subpages_no'></span></label></div>
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="common_wiki"></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type="radio" name="common_wiki" value="auto"> <span tt='common_wiki_auto'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="common_wiki" value="cats"> <span tt='common_wiki_cats'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="common_wiki" value="pagepile"> <span tt='common_wiki_pagepile'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="common_wiki" value="manual"> <span tt='common_wiki_manual'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="common_wiki" value="wikidata"> <span tt='common_wiki_wikidata'></span></label></div>
+</div>
+</div>
+
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="source_combination"></label>
+<div class="col-sm-10">
+<div class="input-group" style="width:100%">
+<input type='text' class="form-control" tt_placeholder="source_combination_hint" name='source_combination' />
+</div>
+<div tt='source_combination_description' class='smaller'></div>
+</div>
+</div>
+
+
+</div> <!--tab panel-->
+<div class="tab-pane" id="tab_wikidata" role="tabpanel">
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="pages_with_items"></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type="radio" name="wikidata_item" value="no"><span tt='wikidata_no'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="wikidata_item" value="any"><span tt='wikidata_any'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="wikidata_item" value="with"><span tt='wikidata_with'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="wikidata_item" value="without"><span tt='wikidata_without'></span></label></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="wikidata_label_language"></label>
+<div class="col-sm-4">
+<input type='text' name='wikidata_label_language' class='form-control' tt_placeholder='wikidata_label_language_ph' />
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="wikidata_prop_item_use"></label>
+<div class="col-sm-4">
+<input type='text' name='wikidata_prop_item_use' class='form-control' tt_placeholder='wikidata_prop_item_use_ph' style='margin-right:20px;' />
+</div>
+<div class="col-sm-6">
+<div class="radio-inline"><label><input type="radio" name="wpiu" value="any"><span tt='wpiu_uses_any'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="wpiu" value="all"><span tt='wpiu_uses_all'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="wpiu" value="none"><span tt='wpiu_uses_none'></span></label></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type="checkbox" name="wpiu_no_statements" value="1"> <span tt='wpiu_no_statements'></span></label></div>
+<div class="radio-inline"><label><input type="checkbox" name="wpiu_no_sitelinks" value="1"> <span tt='wpiu_no_sitelinks'></span></label></div>
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="sitelinks"></label>
+<div class="col-sm-10">
+<span tt='sitelink_note'></span>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"></label>
+<div class="col-sm-10">
+<div class="row">
+<div class="col-sm-3"><div tt='sitelinks_yes'></div><textarea class="form-control" name='sitelinks_yes' tt_placeholder='ph_sites' rows=4 style="width:100%"></textarea></div>
+<div class="col-sm-3"><div tt='sitelinks_any'></div><textarea class="form-control" name='sitelinks_any' tt_placeholder='ph_sites' rows=4 style="width:100%"></textarea></div>
+<div class="col-sm-3"><div tt='sitelinks_no' ></div><textarea class="form-control" name='sitelinks_no'  tt_placeholder='ph_sites' rows=4 style="width:100%"></textarea></div>
+</div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"></label>
+<div class="col-sm-4">
+<div class="input-group"><div class="input-group-addon" tt="min_sitelink_count"></div><input class="form-control" name="min_sitelink_count" value="" type="number"></div>
+</div>
+<div class="col-sm-1"></div>
+<div class="col-sm-4">
+<div class="input-group"><div class="input-group-addon" tt="max_sitelink_count"></div><input class="form-control" name="max_sitelink_count" value="" type="number"></div>
+</div>
+</div>
+
+
+
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="labels_etc"></label>
+<div class="col-sm-10"><span tt='labels_note'></span></div>
+</div>
+<div class="form-group row">
+<div class="col-sm-2"></div>
+<div class="col-sm-3">
+<div tt='labels_yes'></div>
+<textarea class="form-control" name='labels_yes' tt_placeholder='ph_labels' rows=4 style="width:100%"></textarea>
+<div>
+<label><input type='checkbox' name='cb_labels_yes_l' value='1' /> <span tt='labels'></span></label>
+<label><input type='checkbox' name='cb_labels_yes_a' value='1' /> <span tt='aliases'></span></label>
+<label><input type='checkbox' name='cb_labels_yes_d' value='1' /> <span tt='descriptions'></span></label>
+</div>
+<div><input class="form-control" type='text' name='langs_labels_yes' tt_placeholder='ph_langs_labels' /></div>
+</div>
+<div class="col-sm-3">
+<div tt='labels_any'></div>
+<textarea class="form-control" name='labels_any' tt_placeholder='ph_labels' rows=4 style="width:100%"></textarea>
+<div>
+<label><input type='checkbox' name='cb_labels_any_l' value='1' /> <span tt='labels'></span></label>
+<label><input type='checkbox' name='cb_labels_any_a' value='1' /> <span tt='aliases'></span></label>
+<label><input type='checkbox' name='cb_labels_any_d' value='1' /> <span tt='descriptions'></span></label>
+</div>
+<div><input class="form-control" type='text' name='langs_labels_any' tt_placeholder='ph_langs_labels' /></div>
+</div>
+<div class="col-sm-3">
+<div tt='labels_no' ></div>
+<textarea class="form-control" name='labels_no'  tt_placeholder='ph_labels' rows=4 style="width:100%"></textarea>
+<div>
+<label><input type='checkbox' name='cb_labels_no_l' value='1' /> <span tt='labels'></span></label>
+<label><input type='checkbox' name='cb_labels_no_a' value='1' /> <span tt='aliases'></span></label>
+<label><input type='checkbox' name='cb_labels_no_d' value='1' /> <span tt='descriptions'></span></label>
+</div>
+<div><input class="form-control" type='text' name='langs_labels_no' tt_placeholder='ph_langs_labels' /></div>
+</div>
+<div class="col-sm-2"></div>
+</div>
+
+</div> <!--tab panel-->
+
+
+
+<!--
+<div class="tab-pane" id="tab_wdfist" role="tabpanel">
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label"></label>
+<div class="col-sm-10">
+<div>
+	THIS WILL RUN WDFIST AFTER NOTMAL OPERATIONS AND RETURN DIFFERENT OUTPUT
+</div>
+<label><input type='checkbox' name='wdf_main' /> <span>USE WDFIST</span></label>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label">FOLLOW</label>
+<div class="col-sm-10">
+<label><input type='checkbox' name='wdf_langlinks' /> <span>LANGLINKS</span></label>
+<label><input type='checkbox' name='wdf_coords' /> <span>COORDINATES</span></label>
+<label><input type='checkbox' name='wdf_search_commons' /> <span>SEARCH COMMONS</span></label>
+<label><input type='checkbox' name='wdf_commons_cats' /> <span>COMMONS CATEGORIES</span></label>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label">OPTIONS</label>
+<div class="col-sm-10">
+<label><input type='checkbox' name='wdf_only_items_without_p18' /> <span>ONLY WITHOUT P18</span></label>
+<label><input type='checkbox' name='wdf_only_files_not_on_wd' /> <span>ONLY FILES NOT USED ON WIKIDATA</span></label>
+<label><input type='checkbox' name='wdf_only_jpeg' /> <span>ONLY JPEG</span></label>
+<label><input type='checkbox' name='wdf_max_five_results' /> <span>MAX 5 RESULTS</span></label>
+<label><input type='checkbox' name='wdf_only_page_images' /> <span>PAGE IMAGES ONLY</span></label>
+<label><input type='checkbox' name='wdf_allow_svg' /> <span>SHOW SVG</span></label>
+</div>
+</div>
+
+</div>-->
+<!--tab panel-->
+
+
+
+
+<div class="tab-pane" id="tab_output" role="tabpanel">
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="format"></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type="radio" name="format" value="html"> HTML</label></div>
+<div class="radio-inline"><label><input type="radio" name="format" value="csv"> CSV</label></div>
+<div class="radio-inline"><label><input type="radio" name="format" value="tsv"> TSV</label></div>
+<div class="radio-inline"><label><input type="radio" name="format" value="wiki"> Wiki</label></div>
+<div class="radio-inline"><label><input type="radio" name="format" value="json"> JSON</label></div>
+<div class="radio-inline"><label><input type="radio" name="format" value="pagepile"> PagePile</label></div>
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="output_compatability"></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type="radio" name="output_compatability" value="catscan"> <span tt='catscan'></span></label></div>
+<div class="radio-inline"><label><input type="radio" name="output_compatability" value="quick-intersection"> <span tt='quick_intersection'></span></label></div>
+<div class="radio-inline"><label><input type='checkbox' name='sparse' /> <span tt='sparse'></span></label></div>
+<div class="radio-inline"><label><input type='checkbox' name='json-pretty' /> <span tt='pretty_json'></span></label></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="sort"></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type="radio" name="sortby" value="none"> <span tt='sort_by_none'></label></div>
+<div class="radio-inline"><label><input type="radio" name="sortby" value="title"> <span tt='sort_by_title'></label></div>
+<div class="radio-inline"><label><input type="radio" name="sortby" value="ns_title"> <span tt='sort_by_ns_title'></label></div><br/>
+<div class="radio-inline"><label><input type="radio" name="sortby" value="size"> <span tt='sort_by_size'></label></div>
+<div class="radio-inline"><label><input type="radio" name="sortby" value="date"> <span tt='sort_by_date'></label></div>
+<div class="radio-inline"><label><input type="radio" name="sortby" value="incoming_links"> <span tt='sort_by_incoming_links'></label></div>
+<div class="radio-inline"><label><input type="radio" name="sortby" value="filesize"> <span tt='sort_by_filesize'></label></div>
+<div class="radio-inline"><label><input type="radio" name="sortby" value="uploaddate"> <span tt='sort_by_uploaddate'></label></div>
+<div class="radio-inline"><label><input type="radio" name="sortby" value="random"> <span tt='sort_by_random'></label></div>
+</div>
+</div>
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="sort_order"></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type="radio" name="sortorder" value="ascending"><span tt='sort_ascending'></label></div>
+<div class="radio-inline"><label><input type="radio" name="sortorder" value="descending"><span tt='sort_descending'></label></div>
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="files"></label>
+<div class="col-sm-10">
+<label><input type='checkbox' name='ext_image_data' /> <span tt='ext_image_data'></span></label>
+<label><input type='checkbox' name='file_usage_data' /> <span tt='file_usage_data'></span></label>
+<label><input type='checkbox' name='file_usage_data_ns0' /> <span tt='file_usage_data_ns0'></span></label>
+<label><input type='checkbox' name='thumbnails_in_wiki_output' /> <span tt='thumbnails_in_wiki_output'></span></label>
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="add_metadata"></label>
+<div class="col-sm-10">
+<label style='margin-right:20px;'><input type='checkbox' name='add_image' /> <span tt='add_image'></span></label>
+<label style='margin-right:20px;'><input type='checkbox' name='add_coordinates' /> <span tt='add_coordinates'></span></label>
+<label style='margin-right:20px;'><input type='checkbox' name='add_defaultsort' /> <span tt='add_defaultsort'></span></label>
+<label style='margin-right:20px;'><input type='checkbox' name='add_disambiguation' /> <span tt='add_disambiguation'></span></label>
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="regexp_filter"></label>
+<div class="col-sm-4">
+<input type='text' name='regexp_filter' class='form-control' tt_placeholder='regexp_filter_rules' />
+</div>
+<div class="col-sm-6">
+<span tt='regexp_filter_note'></span>
+</div>
+</div>
+
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="redlinks"></label>
+<div class="col-sm-10">
+<div class="radio-inline"><label><input type='checkbox' name='show_redlinks' /> <span tt='show_redlinks'></span></label></div>
+<div class="radio-inline"><label><input type='checkbox' name='remove_template_redlinks' /> <span tt='remove_template_redlinks'></span></label></div>
+<div class="radio-inline"><label><input type='checkbox' name='article_redlinks_only' /> <span tt='article_redlinks_only'></span></label></div>
+</div>
+<div class="col-sm-2"></div>
+<div class="col-sm-4">
+<div class="input-group"><div class="input-group-addon" tt="min_redlink_count"></div><input class="form-control" name="min_redlink_count" value="" type="number"></div>
+</div>
+</div>
+
+
+<div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="limit"></label>
+<div class="col-sm-4">
+<input type='number' name='output_limit' class='form-control' tt_placeholder='ph_limit' />
+</div>
+</div>
+
+
+
+</div> <!--tab panel-->
+
+<div class='row' style='padding-top:10px;margin-top:20px;'>
+<div class="col-sm-2">
+<input type='submit' id='doit' name='doit' name='doit' class='btn btn-lg btn-primary-outline' tt_value='doit' accesskey='s' />
+</div>
+<div class="col-sm-10">
+<span id='permalink'></span>
+</div>
+</div>
+
+
+</div>
+
+
+<input type='hidden' name='interface_language' value='en' />
+<input type='hidden' name='active_tab' value='' />
+<span id='querystring' style='display:none'><!--querystring--></span>
+<!--psid-->
+</form>
+
+
+</div>
+
+
+</div><!--row-->
+
+<div class="row"><div class="col-md-12"><!--output--></div></div>
+
+</div><!--container-->
+
+<div class="modal fade" id="example_dialog" tabindex="-1" role="dialog" style='display:none'>
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+          <span aria-hidden="true">&times;</span>
+        </button>
+        <h4 class="modal-title" tt="example_title"></h4>
+      </div>
+      <div class="modal-body">
+      	<div><input type='text' value='' id='example_search' class='form-control' tt_placeholder='search_examples' /></div>
+      	<div>
+      		<div id='example_list'>
+      		</select>
+      	</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" tt="close" data-dismiss="modal"></button>
+        <a type="button" id='edit_examples' class="btn btn-secondary" tt="edit_examples" href='https://meta.wikimedia.org/w/index.php?title=PetScan/Examples&action=edit' target='_blank'></a>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
