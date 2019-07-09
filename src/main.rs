@@ -34,7 +34,8 @@ fn process_form(form_parameters: FormParameters, state: State<AppState>) -> Stri
             .unwrap_or(&"ANON".to_string())
             .as_str()
     );
-    let platform = Platform::new_from_parameters(&form_parameters, state);
+    let mut platform = Platform::new_from_parameters(&form_parameters, state);
+    platform.run();
     platform.state.modify_threads_running(-1);
     ret
 }
