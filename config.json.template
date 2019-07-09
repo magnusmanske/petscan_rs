@@ -1,9 +1,10 @@
 {
-"host":"",
-"schema":"",
-"user":"",
+"host":"127.0.0.1",
+"user":"s51156",
 "password":"",
-"port":"80",
-"timeout":"60000",
+"schema":"s51156__petscan",
+"db_port":3307,
+"http_port":3000,
+"timeout":60000,
 "restart-code":""
 }
