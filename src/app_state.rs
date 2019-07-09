@@ -3,10 +3,13 @@ extern crate rocket;
 use mysql as my;
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 pub struct AppState {
     pub db: Arc<my::Pool>,
     pub config: Value,
+    threads_running: Mutex<i64>,
+    shutting_down: bool,
 }
 
 impl AppState {
@@ -14,6 +17,8 @@ impl AppState {
         Self {
             db: Arc::new(AppState::db_pool_from_config(config)),
             config: config.to_owned(),
+            threads_running: Mutex::new(0),
+            shutting_down: false,
         }
     }
 
@@ -32,5 +37,13 @@ impl AppState {
             Ok(pool) => pool,
             Err(e) => panic!("Could not initialize DB connection pool: {}", &e),
         }
+    }
+
+    pub fn modify_threads_running(&self, diff: i64) {
+        *self.threads_running.lock().unwrap() += diff;
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutting_down
     }
 }

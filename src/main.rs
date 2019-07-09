@@ -18,15 +18,21 @@ use std::env;
 use std::fs::File;
 //use std::sync::Arc;
 
-fn process_form(form_parameters: LenientForm<FormParameters>, _state: State<AppState>) -> String {
-    format!(
+fn process_form(form_parameters: LenientForm<FormParameters>, state: State<AppState>) -> String {
+    if state.is_shutting_down() {
+        return "Temporary maintenance".to_string();
+    }
+    state.modify_threads_running(1);
+    let ret = format!(
         "Hello, {}!",
         form_parameters
             .name
             .as_ref()
             .unwrap_or(&"ANON".to_string())
             .as_str()
-    )
+    );
+    state.modify_threads_running(-1);
+    ret
 }
 
 #[get("/?<form_parameters..>")]
