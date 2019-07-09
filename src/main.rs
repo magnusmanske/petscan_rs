@@ -1,26 +1,44 @@
-extern crate hyper;
+#![feature(proc_macro_hygiene, decl_macro)]
 
-use hyper::rt::Future;
-use hyper::service::service_fn_ok;
-use hyper::{Body, Request, Response, Server};
+#[macro_use]
+extern crate rocket;
 
-//const PHRASE: &str = "Hello, World!";
+use rocket::config::{Config, Environment};
+use rocket::request::LenientForm;
+use rocket_contrib::serve::StaticFiles;
 
-fn hello_world(req: Request<Body>) -> Response<Body> {
-    let (parts, body) = req.into_parts();
-    let body = format!("{:#?}\n\n{:?}", &parts, &body);
-    Response::new(Body::from(body))
+#[derive(FromForm)]
+struct User {
+    name: Option<String>,
+    //account: Option<usize>,
+}
+
+fn process_form(user: LenientForm<User>) -> String {
+    format!(
+        "Hello, {}!",
+        user.name.as_ref().unwrap_or(&"ANON".to_string()).as_str()
+    )
+}
+
+#[get("/?<user..>")]
+fn process_form_get(user: LenientForm<User>) -> String {
+    process_form(user)
+}
+
+#[post("/", data = "<user>")]
+fn process_form_post(user: LenientForm<User>) -> String {
+    process_form(user)
 }
 
 fn main() {
-    //let addr = ([127, 0, 0, 1], 3000).into();
-    let addr = "127.0.0.1:3000".parse().unwrap();
-    let new_svc = || service_fn_ok(hello_world);
+    let config = Config::build(Environment::Staging)
+        .address("127.0.0.1")
+        .port(3000)
+        .finalize()
+        .unwrap();
 
-    let server = Server::bind(&addr)
-        .serve(new_svc)
-        .map_err(|e| eprintln!("server error: {}", e));
-
-    // Run this server for... forever!
-    hyper::rt::run(server);
+    rocket::custom(config)
+        .mount("/", StaticFiles::from("/Users/mm6/rust/petscan_rs/html"))
+        .mount("/", routes![process_form_get, process_form_post])
+        .launch();
 }
