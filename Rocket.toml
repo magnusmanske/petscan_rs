@@ -1,2 +1,2 @@
 [global.limits]
-#forms = 524288
+#forms = 524288 # max form size 32kb => 512kb
