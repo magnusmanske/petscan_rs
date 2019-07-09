@@ -9,7 +9,7 @@ pub struct AppState {
     pub db: Arc<my::Pool>,
     pub config: Value,
     threads_running: Mutex<i64>,
-    shutting_down: bool,
+    shutting_down: Mutex<bool>,
 }
 
 impl AppState {
@@ -18,7 +18,7 @@ impl AppState {
             db: Arc::new(AppState::db_pool_from_config(config)),
             config: config.to_owned(),
             threads_running: Mutex::new(0),
-            shutting_down: false,
+            shutting_down: Mutex::new(false),
         }
     }
 
@@ -44,6 +44,6 @@ impl AppState {
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        self.shutting_down
+        *self.shutting_down.lock().unwrap()
     }
 }
