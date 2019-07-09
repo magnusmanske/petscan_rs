@@ -5,9 +5,11 @@ extern crate rocket;
 
 pub mod app_state;
 pub mod form_parameters;
+pub mod platform;
 
 use app_state::AppState;
 use form_parameters::FormParameters;
+use platform::Platform;
 //use mysql as my;
 use rocket::config::{Config, Environment};
 use rocket::request::LenientForm;
@@ -18,7 +20,8 @@ use std::env;
 use std::fs::File;
 //use std::sync::Arc;
 
-fn process_form(form_parameters: LenientForm<FormParameters>, state: State<AppState>) -> String {
+fn process_form(form_parameters: FormParameters, state: State<AppState>) -> String {
+    // TODO check restart-code
     if state.is_shutting_down() {
         return "Temporary maintenance".to_string();
     }
@@ -31,7 +34,8 @@ fn process_form(form_parameters: LenientForm<FormParameters>, state: State<AppSt
             .unwrap_or(&"ANON".to_string())
             .as_str()
     );
-    state.modify_threads_running(-1);
+    let platform = Platform::new_from_parameters(&form_parameters, state);
+    platform.state.modify_threads_running(-1);
     ret
 }
 
@@ -40,7 +44,7 @@ fn process_form_get(
     form_parameters: LenientForm<FormParameters>,
     state: State<AppState>,
 ) -> String {
-    process_form(form_parameters, state)
+    process_form(form_parameters.into_inner(), state)
 }
 
 #[post("/", data = "<form_parameters>")]
@@ -48,7 +52,7 @@ fn process_form_post(
     form_parameters: LenientForm<FormParameters>,
     state: State<AppState>,
 ) -> String {
-    process_form(form_parameters, state)
+    process_form(form_parameters.into_inner(), state)
 }
 
 fn main() {

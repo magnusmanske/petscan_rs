@@ -1,4 +1,4 @@
-#[derive(FromForm)]
+#[derive(FromForm, Clone)]
 pub struct FormParameters {
     pub name: Option<String>,
 

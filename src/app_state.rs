@@ -5,11 +5,12 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+#[derive(Clone)]
 pub struct AppState {
     pub db: Arc<my::Pool>,
     pub config: Value,
-    threads_running: Mutex<i64>,
-    shutting_down: Mutex<bool>,
+    threads_running: Arc<Mutex<i64>>,
+    shutting_down: Arc<Mutex<bool>>,
 }
 
 impl AppState {
@@ -17,8 +18,8 @@ impl AppState {
         Self {
             db: Arc::new(AppState::db_pool_from_config(config)),
             config: config.to_owned(),
-            threads_running: Mutex::new(0),
-            shutting_down: Mutex::new(false),
+            threads_running: Arc::new(Mutex::new(0)),
+            shutting_down: Arc::new(Mutex::new(false)),
         }
     }
 
