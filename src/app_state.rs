@@ -40,7 +40,11 @@ impl AppState {
     }
 
     pub fn modify_threads_running(&self, diff: i64) {
-        *self.threads_running.lock().unwrap() += diff;
+        let mut threads_running = self.threads_running.lock().unwrap();
+        *threads_running += diff;
+        if self.is_shutting_down() && *threads_running == 0 {
+            panic!("Planned shutdown")
+        }
     }
 
     pub fn is_shutting_down(&self) -> bool {
