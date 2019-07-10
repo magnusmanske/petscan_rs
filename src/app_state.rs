@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AppState {
     pub db: Arc<my::Pool>,
     pub config: Value,

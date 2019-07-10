@@ -4,13 +4,14 @@
 extern crate rocket;
 
 pub mod app_state;
+pub mod datasource;
 pub mod form_parameters;
+pub mod pagelist;
 pub mod platform;
 
 use app_state::AppState;
 use form_parameters::FormParameters;
 use platform::Platform;
-//use mysql as my;
 use rocket::config::{Config, Environment};
 use rocket::request::LenientForm;
 use rocket::State;
@@ -18,6 +19,7 @@ use rocket_contrib::serve::StaticFiles;
 use serde_json::Value;
 use std::env;
 use std::fs::File;
+//use mysql as my;
 //use std::sync::Arc;
 
 fn process_form(form_parameters: FormParameters, state: State<AppState>) -> String {
@@ -26,6 +28,7 @@ fn process_form(form_parameters: FormParameters, state: State<AppState>) -> Stri
         return "Temporary maintenance".to_string();
     }
     state.modify_threads_running(1);
+    /*
     let ret = format!(
         "Hello, {}!",
         form_parameters
@@ -34,9 +37,11 @@ fn process_form(form_parameters: FormParameters, state: State<AppState>) -> Stri
             .unwrap_or(&"ANON".to_string())
             .as_str()
     );
+    */
     let mut platform = Platform::new_from_parameters(&form_parameters, state);
     platform.run();
     platform.state.modify_threads_running(-1);
+    let ret = format!("{:#?}", platform.result());
     ret
 }
 
