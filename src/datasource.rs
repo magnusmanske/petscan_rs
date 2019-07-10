@@ -37,6 +37,7 @@ impl DataSource for SourceManual {
 
     fn run(&self, platform: &Platform) -> Option<PageList> {
         let wiki = platform.form_parameters().manual_list_wiki.as_ref()?;
+        println!("{}", &wiki);
         let _api = platform.state.get_api_for_wiki(wiki.to_string());
         None
     }
