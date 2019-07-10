@@ -6,6 +6,15 @@ use rocket::request::State;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, PartialEq)]
+enum Combination {
+    None,
+    Source(String),
+    Intersection((Box<Combination>, Box<Combination>)),
+    Union((Box<Combination>, Box<Combination>)),
+    Not((Box<Combination>, Box<Combination>)),
+}
+
 #[derive(Debug, Clone)]
 pub struct Platform {
     form_parameters: Arc<FormParameters>,
@@ -28,9 +37,15 @@ impl Platform {
         let mut candidate_sources: Vec<Box<dyn DataSource>> = vec![];
         candidate_sources.push(Box::new(SourceDatabase::new()));
         candidate_sources.push(Box::new(SourceSparql::new()));
+        candidate_sources.push(Box::new(SourceManual::new()));
+        //candidate_sources.push(Box::new(SourceLabels::new()));
+        //candidate_sources.push(Box::new(SourcePagePile::new()));
+        //candidate_sources.push(Box::new(SourceSearch::new()));
+        //candidate_sources.push(Box::new(SourceWikidata::new()));
 
         if !candidate_sources.iter().any(|source| source.can_run(&self)) {
             //self.result.wiki = Some("NO CANDIDATES".to_string());
+            // TODO alternative sources
             return;
         }
 
@@ -43,18 +58,84 @@ impl Platform {
                 results.insert(source.name(), source.run(&self));
             });
 
-        self.combine_results(&mut results);
+        let available_sources = candidate_sources
+            .iter()
+            .filter(|s| s.can_run(&self))
+            .map(|s| s.name())
+            .collect();
+        let combination = self.get_combination(available_sources);
+
+        println!("{:#?}", &combination);
+
+        self.result = self.combine_results(&mut results, &combination);
     }
 
-    fn combine_results(&mut self, results: &mut HashMap<String, Option<PageList>>) {
+    fn parse_combination_string(&self, _s: &String) -> Combination {
         // TODO
-        for (name, result) in results {
-            println!("{}/{:?}", &name, &result);
-            if self.result.is_none() {
-                self.result = result.clone();
-            } else if result.is_some() {
-                self.result.as_mut().unwrap().union(result.clone()).unwrap();
+        Combination::Source("".to_string())
+    }
+
+    fn get_combination(&self, available_sources: Vec<String>) -> Combination {
+        match &self.form_parameters.source_combination {
+            Some(combination_string) => self.parse_combination_string(&combination_string),
+            None => {
+                let mut comb = Combination::None;
+                for source in &available_sources {
+                    if comb == Combination::None {
+                        comb = Combination::Source(source.to_string());
+                    } else {
+                        comb = Combination::Union((
+                            Box::new(Combination::Source(source.to_string())),
+                            Box::new(comb),
+                        ));
+                    }
+                }
+                comb
             }
+        }
+    }
+
+    fn combine_results(
+        &self,
+        results: &mut HashMap<String, Option<PageList>>,
+        combination: &Combination,
+    ) -> Option<PageList> {
+        match combination {
+            Combination::Source(s) => match results.get(s) {
+                Some(r) => r.to_owned(),
+                None => None,
+            },
+            Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
+                (Combination::None, c) => self.combine_results(results, c),
+                (c, Combination::None) => self.combine_results(results, c),
+                (c, d) => {
+                    let mut r1 = self.combine_results(results, c).unwrap();
+                    let r2 = self.combine_results(results, d);
+                    r1.union(r2).ok()?;
+                    Some(r1)
+                }
+            },
+            Combination::Intersection((a, b)) => match (a.as_ref(), b.as_ref()) {
+                (Combination::None, _c) => None,
+                (_c, Combination::None) => None,
+                (c, d) => {
+                    let mut r1 = self.combine_results(results, c).unwrap();
+                    let r2 = self.combine_results(results, d);
+                    r1.intersection(r2).ok()?;
+                    Some(r1)
+                }
+            },
+            Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
+                (Combination::None, _c) => None,
+                (c, Combination::None) => self.combine_results(results, c),
+                (c, d) => {
+                    let mut r1 = self.combine_results(results, c).unwrap();
+                    let r2 = self.combine_results(results, d);
+                    r1.difference(r2).ok()?;
+                    Some(r1)
+                }
+            },
+            Combination::None => None,
         }
     }
 
