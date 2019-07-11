@@ -10,6 +10,7 @@ pub struct FormParameters {
     pub output_limit: Option<usize>,
     pub psid: Option<usize>,
     pub doit: Option<String>, // ???
+    pub pagepile: Option<usize>,
 
     // From textarea
     pub categories: Option<String>,
@@ -49,7 +50,6 @@ pub struct FormParameters {
     pub langs_labels_yes: Option<String>,
     pub wikidata_source_sites: Option<String>,
     pub project: Option<String>,
-    pub pagepile: Option<String>,
     pub search_query: Option<String>,
     pub search_wiki: Option<String>,
     pub source_combination: Option<String>,

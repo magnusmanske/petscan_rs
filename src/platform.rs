@@ -38,9 +38,9 @@ impl Platform {
         candidate_sources.push(Box::new(SourceDatabase::new()));
         candidate_sources.push(Box::new(SourceSparql::new()));
         candidate_sources.push(Box::new(SourceManual::new()));
+        candidate_sources.push(Box::new(SourcePagePile::new()));
         candidate_sources.push(Box::new(SourceSearch::new()));
         //candidate_sources.push(Box::new(SourceLabels::new()));
-        //candidate_sources.push(Box::new(SourcePagePile::new()));
         //candidate_sources.push(Box::new(SourceWikidata::new()));
 
         if !candidate_sources.iter().any(|source| source.can_run(&self)) {

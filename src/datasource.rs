@@ -3,6 +3,7 @@ use crate::platform::Platform;
 use mediawiki::api::Api;
 use mediawiki::title::Title;
 use rayon::prelude::*;
+use serde_json::value::Value;
 
 pub trait DataSource {
     fn can_run(&self, platform: &Platform) -> bool;
@@ -14,6 +15,54 @@ pub trait DataSource {
 // SourceLabels
 // SourcePagePile = pagepile
 // SourceWikidata = wikidata
+
+//________________________________________________________________________________________________________________________
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourcePagePile {}
+
+impl DataSource for SourcePagePile {
+    fn name(&self) -> String {
+        "pagepile".to_string()
+    }
+
+    fn can_run(&self, platform: &Platform) -> bool {
+        platform.form_parameters().pagepile.is_some()
+    }
+
+    fn run(&self, platform: &Platform) -> Option<PageList> {
+        let pagepile = platform.form_parameters().pagepile?;
+        let api = platform
+            .state
+            .get_api_for_wiki("wikidatawiki".to_string())?; // Just because we need query_raw
+        let params = api.params_into(&vec![
+            ("id", &pagepile.to_string()),
+            ("action", "get_data"),
+            ("format", "json"),
+            ("doit", "1"),
+        ]);
+        let text = api
+            .query_raw("https://tools.wmflabs.org/pagepile/api.php", &params, "GET")
+            .ok()?;
+        let v: Value = serde_json::from_str(&text).ok()?;
+        let wiki = v["wiki"].as_str()?;
+        let api = platform.state.get_api_for_wiki(wiki.to_string())?; // Just because we need query_raw
+        let entries = v["pages"]
+            .as_array()?
+            .iter()
+            .filter_map(|title| title.as_str())
+            .map(|title| PageListEntry::new(Title::new_from_full(&title.to_string(), &api)))
+            .collect();
+        let pagelist = PageList::new_from_vec(wiki, entries);
+        Some(pagelist)
+    }
+}
+
+impl SourcePagePile {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 
 //________________________________________________________________________________________________________________________
 
