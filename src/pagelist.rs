@@ -1,12 +1,18 @@
 use mediawiki::title::Title;
+//use rayon::prelude::*;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
-type NamespaceID = mediawiki::api::NamespaceID;
+//type NamespaceID = mediawiki::api::NamespaceID;
+
+//________________________________________________________________________________________________________________________
 
 #[derive(Debug, Clone)]
 pub struct PageListEntry {
     title: Title,
+    pub does_exist: Option<bool>,
+    pub is_redirect: Option<bool>,
+    pub wikidata_item: Option<String>,
 }
 
 impl Hash for PageListEntry {
@@ -26,15 +32,16 @@ impl Eq for PageListEntry {}
 
 impl PageListEntry {
     pub fn new(title: Title) -> Self {
-        Self { title: title }
-    }
-
-    pub fn new_from_title_ns(title: String, namespace_id: NamespaceID) -> Self {
         Self {
-            title: Title::new(&title, namespace_id),
+            title: title,
+            does_exist: None,
+            is_redirect: None,
+            wikidata_item: None,
         }
     }
 }
+
+//________________________________________________________________________________________________________________________
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageList {
@@ -43,12 +50,14 @@ pub struct PageList {
 }
 
 impl PageList {
+    /*
     pub fn new() -> Self {
         Self {
             wiki: None,
             entries: HashSet::new(),
         }
     }
+    */
 
     pub fn new_from_wiki(wiki: &str) -> Self {
         Self {

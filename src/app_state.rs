@@ -2,6 +2,7 @@ extern crate rocket;
 
 use mediawiki::api::Api;
 use mysql as my;
+use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -83,7 +84,7 @@ impl AppState {
         let api =
             Api::new("https://www.wikidata.org/w/api.php").expect("Can't talk to Wikidata API");
         let params: HashMap<String, String> = vec![("action", "sitematrix")]
-            .iter()
+            .par_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         api.get_query_api_json(&params)

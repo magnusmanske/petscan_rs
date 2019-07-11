@@ -95,17 +95,13 @@ impl DataSource for SourceSparql {
         let ple: Vec<PageListEntry> = entities
             .par_iter()
             .filter_map(|e| match e.chars().next() {
-                Some('Q') => Some(PageListEntry::new_from_title_ns(e.to_string(), 0)),
-                Some('P') => Some(PageListEntry::new_from_title_ns(e.to_string(), 120)),
-                Some('L') => Some(PageListEntry::new_from_title_ns(e.to_string(), 146)),
+                Some('Q') => Some(PageListEntry::new(Title::new(&e.to_string(), 0))),
+                Some('P') => Some(PageListEntry::new(Title::new(&e.to_string(), 120))),
+                Some('L') => Some(PageListEntry::new(Title::new(&e.to_string(), 146))),
                 _ => None,
             })
             .collect();
-
-        let mut ret = PageList::new_from_wiki("wikidatawiki");
-        ret.set_entries_from_vec(ple);
-
-        Some(ret)
+        Some(PageList::new_from_vec("wikidatawiki", ple))
     }
 }
 
