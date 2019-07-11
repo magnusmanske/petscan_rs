@@ -29,47 +29,52 @@ impl AppState {
 
     pub fn get_api_for_wiki(&self, wiki: String) -> Option<Api> {
         // TODO cache?
-        let url = self.get_server_url_for_wiki(wiki)? + "/w/api.php";
+        let url = self.get_server_url_for_wiki(&wiki)? + "/w/api.php";
         Api::new(&url).ok()
     }
 
-    pub fn get_server_url_for_wiki(&self, wiki: String) -> Option<String> {
+    fn get_url_for_wiki_from_site(&self, wiki: &String, site: &Value) -> Option<String> {
+        if site["closed"].as_str().is_some() {
+            return None;
+        }
+        if site["private"].as_str().is_some() {
+            return None;
+        }
+        match site["dbname"].as_str() {
+            Some(dbname) => {
+                if wiki == dbname {
+                    match site["url"].as_str() {
+                        Some(url) => Some(url.to_string()),
+                        None => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+
+    pub fn get_server_url_for_wiki(&self, wiki: &String) -> Option<String> {
         self.site_matrix["sitematrix"]
             .as_object()
-            .unwrap()
+            .expect("sitematrix not an object")
             .iter()
             .filter_map(|(id, data)| match id.as_str() {
                 "count" => None,
                 "specials" => data
                     .as_array()
-                    .unwrap()
+                    .expect("'specials' is not data")
                     .iter()
-                    .filter_map(|site| match site["dbname"].as_str() {
-                        Some(dbname) => {
-                            if wiki == dbname {
-                                Some(data["url"].as_str().unwrap().to_string())
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
-                    })
+                    .filter_map(|site| self.get_url_for_wiki_from_site(wiki, site))
                     .next(),
-                _ => data["site"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter_map(|site| match site["dbname"].as_str() {
-                        Some(dbname) => {
-                            if wiki == dbname {
-                                Some(data["url"].as_str().unwrap().to_string())
-                            } else {
-                                None
-                            }
-                        }
-                        _ => None,
-                    })
-                    .next(),
+                _other => match data["site"].as_array() {
+                    Some(sites) => sites
+                        .iter()
+                        .filter_map(|site| self.get_url_for_wiki_from_site(wiki, site))
+                        .next(),
+                    None => None,
+                },
             })
             .next()
     }
@@ -87,7 +92,6 @@ impl AppState {
 
     fn db_pool_from_config(config: &Value) -> my::Pool {
         let mut builder = my::OptsBuilder::new();
-        //println!("{}", &self.params);
         builder
             .ip_or_hostname(config["host"].as_str())
             .db_name(config["schema"].as_str())

@@ -1,4 +1,4 @@
-//use mediawiki::title::Title;
+use mediawiki::title::Title;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
@@ -6,30 +6,32 @@ type NamespaceID = mediawiki::api::NamespaceID;
 
 #[derive(Debug, Clone)]
 pub struct PageListEntry {
-    title: String,
-    namespace_id: NamespaceID,
+    title: Title,
 }
 
 impl Hash for PageListEntry {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.namespace_id.hash(state);
-        self.title.hash(state);
+        self.title.namespace_id().hash(state);
+        self.title.with_underscores().hash(state);
     }
 }
 
 impl PartialEq for PageListEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.title == other.title && self.namespace_id == other.namespace_id
+        self.title == other.title // && self.namespace_id == other.namespace_id
     }
 }
 
 impl Eq for PageListEntry {}
 
 impl PageListEntry {
-    pub fn new(title: String, namespace_id: NamespaceID) -> Self {
+    pub fn new(title: Title) -> Self {
+        Self { title: title }
+    }
+
+    pub fn new_from_title_ns(title: String, namespace_id: NamespaceID) -> Self {
         Self {
-            title,
-            namespace_id,
+            title: Title::new(&title, namespace_id),
         }
     }
 }
@@ -52,6 +54,17 @@ impl PageList {
         Self {
             wiki: Some(wiki.to_string()),
             entries: HashSet::new(),
+        }
+    }
+
+    pub fn new_from_vec(wiki: &str, entries: Vec<PageListEntry>) -> Self {
+        let mut entries_hashset: HashSet<PageListEntry> = HashSet::new();
+        entries.iter().for_each(|e| {
+            entries_hashset.insert(e.to_owned());
+        });
+        Self {
+            wiki: Some(wiki.to_string()),
+            entries: entries_hashset,
         }
     }
 

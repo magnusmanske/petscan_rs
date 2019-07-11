@@ -1,6 +1,7 @@
 use crate::pagelist::*;
 use crate::platform::Platform;
 use mediawiki::api::Api;
+use mediawiki::title::Title;
 use rayon::prelude::*;
 
 pub trait DataSource {
@@ -37,9 +38,25 @@ impl DataSource for SourceManual {
 
     fn run(&self, platform: &Platform) -> Option<PageList> {
         let wiki = platform.form_parameters().manual_list_wiki.as_ref()?;
-        println!("{}", &wiki);
-        let _api = platform.state.get_api_for_wiki(wiki.to_string());
-        None
+        let api = platform.state.get_api_for_wiki(wiki.to_string())?;
+        let entries: Vec<PageListEntry> = platform
+            .form_parameters()
+            .manual_list
+            .as_ref()?
+            .split("\n")
+            .filter_map(|line| {
+                let line = line.trim().to_string();
+                if !line.is_empty() {
+                    let title = Title::new_from_full(&line, &api);
+                    let entry = PageListEntry::new(title);
+                    Some(entry)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let pagelist = PageList::new_from_vec(wiki, entries);
+        Some(pagelist)
     }
 }
 
@@ -78,9 +95,9 @@ impl DataSource for SourceSparql {
         let ple: Vec<PageListEntry> = entities
             .par_iter()
             .filter_map(|e| match e.chars().next() {
-                Some('Q') => Some(PageListEntry::new(e.to_string(), 0)),
-                Some('P') => Some(PageListEntry::new(e.to_string(), 120)),
-                Some('L') => Some(PageListEntry::new(e.to_string(), 146)),
+                Some('Q') => Some(PageListEntry::new_from_title_ns(e.to_string(), 0)),
+                Some('P') => Some(PageListEntry::new_from_title_ns(e.to_string(), 120)),
+                Some('L') => Some(PageListEntry::new_from_title_ns(e.to_string(), 146)),
                 _ => None,
             })
             .collect();
