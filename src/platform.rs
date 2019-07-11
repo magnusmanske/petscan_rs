@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
+//use rayon::prelude::*;
 use rocket::request::State;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,6 +32,12 @@ impl Platform {
         }
     }
 
+    pub fn just_to_suppress_warnings() {
+        let _x =
+            Combination::Intersection((Box::new(Combination::None), Box::new(Combination::None)));
+        let _y = Combination::Not((Box::new(Combination::None), Box::new(Combination::None)));
+    }
+
     pub fn run(&mut self) {
         // TODO legacy parameters
 
@@ -40,12 +47,12 @@ impl Platform {
         candidate_sources.push(Box::new(SourceManual::new()));
         candidate_sources.push(Box::new(SourcePagePile::new()));
         candidate_sources.push(Box::new(SourceSearch::new()));
-        //candidate_sources.push(Box::new(SourceLabels::new()));
-        //candidate_sources.push(Box::new(SourceWikidata::new()));
+        candidate_sources.push(Box::new(SourceWikidata::new()));
 
         if !candidate_sources.iter().any(|source| source.can_run(&self)) {
             //self.result.wiki = Some("NO CANDIDATES".to_string());
             // TODO alternative sources
+            //candidate_sources.push(Box::new(SourceLabels::new()));
             return;
         }
 

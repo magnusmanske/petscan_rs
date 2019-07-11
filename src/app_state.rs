@@ -10,7 +10,8 @@ use std::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub db: Arc<my::Pool>,
+    //pub db: Arc<my::Pool>,
+    pub db_pool: Vec<Arc<Mutex<u8>>>,
     pub config: Value,
     threads_running: Arc<Mutex<i64>>,
     shutting_down: Arc<Mutex<bool>>,
@@ -19,17 +20,63 @@ pub struct AppState {
 
 impl AppState {
     pub fn new_from_config(config: &Value) -> Self {
-        Self {
-            db: Arc::new(AppState::db_pool_from_config(config)),
+        let mut ret = Self {
+            //db: Arc::new(AppState::db_pool_from_config(config)),
+            db_pool: vec![],
             config: config.to_owned(),
             threads_running: Arc::new(Mutex::new(0)),
             shutting_down: Arc::new(Mutex::new(false)),
             site_matrix: AppState::load_site_matrix(),
+        };
+        for _x in 1..5 {
+            ret.db_pool.push(Arc::new(Mutex::new(0)));
         }
+        ret
     }
 
+    pub fn db_host_and_schema_for_wiki(wiki: &String) -> (String, String) {
+        // TESTING
+        // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.analytics.db.svc.eqiad.wmflabs:3306 -N
+        let host = "127.0.0.1".to_string(); // TESTING wiki.to_owned() + ".analytics.db.svc.eqiad.wmflabs";
+        let schema = wiki.to_owned() + "_p";
+        (host, schema)
+    }
+
+    pub fn get_db_mutex(&self) -> &Arc<Mutex<u8>> {
+        &self.db_pool[0]
+    }
+
+    pub fn get_wiki_db_connection(&self, wiki: &String) -> Option<my::Conn> {
+        let (host, schema) = AppState::db_host_and_schema_for_wiki(wiki);
+        let mut builder = my::OptsBuilder::new();
+        builder
+            .ip_or_hostname(Some(host))
+            .db_name(Some(schema))
+            .user(self.config["user"].as_str())
+            .pass(self.config["password"].as_str());
+        builder.tcp_port(self.config["db_port"].as_u64().unwrap_or(3306) as u16);
+        my::Conn::new(builder).ok()
+    }
+
+    /*
+    pub fn run_sql_on_wiki(&self, wiki: &String, sql: &String) -> Result<QueryResult> {
+        let (host, schema) = self.db_host_and_schema_for_wiki(wiki);
+        let mut builder = my::OptsBuilder::new();
+        builder
+            .ip_or_hostname(Some(host))
+            .db_name(Some(schema))
+            .user(self.config["user"].as_str())
+            .pass(self.config["password"].as_str());
+        builder.tcp_port(self.config["db_port"].as_u64().unwrap_or(3306) as u16);
+
+        let mut connection = my::Conn::new(builder)?;
+        let result = connection.query(sql)?;
+        Ok(result)
+    }
+    */
+
     pub fn get_api_for_wiki(&self, wiki: String) -> Option<Api> {
-        // TODO cache?
+        // TODO cache url and/or api object?
         let url = self.get_server_url_for_wiki(&wiki)? + "/w/api.php";
         Api::new(&url).ok()
     }
@@ -59,13 +106,13 @@ impl AppState {
     pub fn get_server_url_for_wiki(&self, wiki: &String) -> Option<String> {
         self.site_matrix["sitematrix"]
             .as_object()
-            .expect("sitematrix not an object")
+            .expect("AppState::get_server_url_for_wiki: sitematrix not an object")
             .iter()
             .filter_map(|(id, data)| match id.as_str() {
                 "count" => None,
                 "specials" => data
                     .as_array()
-                    .expect("'specials' is not data")
+                    .expect("AppState::get_server_url_for_wiki: 'specials' is not an array")
                     .iter()
                     .filter_map(|site| self.get_url_for_wiki_from_site(wiki, site))
                     .next(),
@@ -91,11 +138,13 @@ impl AppState {
             .expect("Can't run action=sitematrix on Wikidata API")
     }
 
+    /*
     fn db_pool_from_config(config: &Value) -> my::Pool {
+        let (host, schema) = Self::db_host_and_schema_for_wiki(&"wikidatawiki".to_string());
         let mut builder = my::OptsBuilder::new();
         builder
-            .ip_or_hostname(config["host"].as_str())
-            .db_name(config["schema"].as_str())
+            .ip_or_hostname(Some(host))
+            .db_name(Some(schema))
             .user(config["user"].as_str())
             .pass(config["password"].as_str());
         builder.tcp_port(config["db_port"].as_u64().unwrap_or(3306) as u16);
@@ -106,6 +155,7 @@ impl AppState {
             Err(e) => panic!("Could not initialize DB connection pool: {}", &e),
         }
     }
+    */
 
     pub fn modify_threads_running(&self, diff: i64) {
         let mut threads_running = self.threads_running.lock().unwrap();

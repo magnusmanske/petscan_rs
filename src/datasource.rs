@@ -13,8 +13,62 @@ pub trait DataSource {
 
 // TODO
 // SourceLabels
-// SourcePagePile = pagepile
-// SourceWikidata = wikidata
+
+//________________________________________________________________________________________________________________________
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceWikidata {}
+
+impl DataSource for SourceWikidata {
+    fn name(&self) -> String {
+        "wikidata".to_string()
+    }
+
+    fn can_run(&self, _platform: &Platform) -> bool {
+        true
+    }
+
+    fn run(&self, platform: &Platform) -> Option<PageList> {
+        let no_statements = platform.form_parameters().wpiu_no_statements.is_some();
+        let _no_sitelinks = platform.form_parameters().wpiu_no_sitelinks.is_some();
+        let sites = "".to_string();
+        let _label_language = platform
+            .form_parameters()
+            .wikidata_label_language
+            .as_ref()?; // .or(platform.form_parameters().interface_language.as_ref())
+        let _prop_item_use = platform.form_parameters().wikidata_prop_item_use.as_ref()?;
+        let _wpiu = platform
+            .form_parameters()
+            .wpiu
+            .as_ref()
+            .unwrap_or(&"any".to_string());
+        let _lock = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let _conn = platform
+            .state
+            .get_wiki_db_connection(&"wikidatawiki".to_string());
+
+        let mut sql = "SELECT ips_item_id FROM wb_items_per_site".to_string();
+        if no_statements {
+            sql += ",page_props,page";
+        }
+        sql += " WHERE ips_site_id IN (";
+        sql += &sites; // TODO
+        sql += ")";
+        if no_statements {
+            sql += " AND page_namespace=0 AND ips_item_id=substr(page_title,2)*1 AND page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0" ;
+        }
+
+        println!("{}", &sql);
+
+        None
+    }
+}
+
+impl SourceWikidata {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 
 //________________________________________________________________________________________________________________________
 
