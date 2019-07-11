@@ -13,8 +13,54 @@ pub trait DataSource {
 // TODO
 // SourceLabels
 // SourcePagePile = pagepile
-// SourceSearch
 // SourceWikidata = wikidata
+
+//________________________________________________________________________________________________________________________
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceSearch {}
+
+impl DataSource for SourceSearch {
+    fn name(&self) -> String {
+        "search".to_string()
+    }
+
+    fn can_run(&self, platform: &Platform) -> bool {
+        if platform.form_parameters().search_query.is_none()
+            || platform.form_parameters().search_wiki.is_none()
+            || platform.form_parameters().search_max_results.is_none()
+        {
+            return false;
+        }
+        true
+    }
+
+    fn run(&self, platform: &Platform) -> Option<PageList> {
+        let wiki = platform.form_parameters().search_wiki.as_ref()?;
+        let query = platform.form_parameters().search_query.as_ref()?;
+        let max = platform.form_parameters().search_max_results.as_ref()?;
+        let api = platform.state.get_api_for_wiki(wiki.to_string())?;
+        let params = api.params_into(&vec![
+            ("action", "query"),
+            ("list", "search"),
+            ("srsearch", query.as_str()),
+        ]);
+        let result = api.get_query_api_json_limit(&params, Some(*max)).ok()?;
+        let titles = Api::result_array_to_titles(&result);
+        let entries = titles
+            .iter()
+            .map(|title| PageListEntry::new(title.to_owned()))
+            .collect();
+        let pagelist = PageList::new_from_vec(wiki, entries);
+        Some(pagelist)
+    }
+}
+
+impl SourceSearch {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 
 //________________________________________________________________________________________________________________________
 

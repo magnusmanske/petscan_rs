@@ -18,7 +18,7 @@ pub struct PageListEntry {
 impl Hash for PageListEntry {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.title.namespace_id().hash(state);
-        self.title.with_underscores().hash(state);
+        self.title.pretty().hash(state);
     }
 }
 
