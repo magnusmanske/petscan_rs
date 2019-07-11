@@ -6,5 +6,8 @@
 "db_port":3307,
 "http_port":3000,
 "timeout":60000,
-"restart-code":""
+"restart-code":"",
+"mysql":[
+	["user_id","password"],...
+]
 }

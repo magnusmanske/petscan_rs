@@ -2,13 +2,40 @@ use crate::pagelist::*;
 use crate::platform::Platform;
 use mediawiki::api::Api;
 use mediawiki::title::Title;
+use mysql as my;
 use rayon::prelude::*;
 use serde_json::value::Value;
+
+/*
+let _no_sitelinks = platform.form_parameters().wpiu_no_sitelinks.is_some();
+let _label_language = platform
+    .form_parameters()
+    .wikidata_label_language
+    .as_ref()?; // .or(platform.form_parameters().interface_language.as_ref())
+let _prop_item_use = platform.form_parameters().wikidata_prop_item_use.as_ref()?;
+let _wpiu = platform
+    .form_parameters()
+    .wpiu
+    .as_ref()
+    .unwrap_or(&"any".to_string());
+*/
 
 pub trait DataSource {
     fn can_run(&self, platform: &Platform) -> bool;
     fn run(&self, platform: &Platform) -> Option<PageList>;
     fn name(&self) -> String;
+    fn prep_quote(&self, strings: &Vec<String>) -> (String, Vec<String>) {
+        let escaped: Vec<String> = strings
+            .iter()
+            .filter_map(|s| match s.trim() {
+                "" => None,
+                other => Some(other.to_string()),
+            })
+            .collect();
+        let mut questionmarks: Vec<String> = Vec::new();
+        questionmarks.resize(escaped.len(), "?".to_string());
+        (questionmarks.join(","), escaped)
+    }
 }
 
 // TODO
@@ -24,43 +51,59 @@ impl DataSource for SourceWikidata {
         "wikidata".to_string()
     }
 
-    fn can_run(&self, _platform: &Platform) -> bool {
-        true
+    fn can_run(&self, platform: &Platform) -> bool {
+        platform.form_parameters().wpiu_no_statements.is_some()
+            && platform.form_parameters().wikidata_source_sites.is_some()
     }
 
     fn run(&self, platform: &Platform) -> Option<PageList> {
         let no_statements = platform.form_parameters().wpiu_no_statements.is_some();
-        let _no_sitelinks = platform.form_parameters().wpiu_no_sitelinks.is_some();
-        let sites = "".to_string();
-        let _label_language = platform
+        let sites = platform
             .form_parameters()
-            .wikidata_label_language
-            .as_ref()?; // .or(platform.form_parameters().interface_language.as_ref())
-        let _prop_item_use = platform.form_parameters().wikidata_prop_item_use.as_ref()?;
-        let _wpiu = platform
-            .form_parameters()
-            .wpiu
-            .as_ref()
-            .unwrap_or(&"any".to_string());
-        let _lock = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-        let _conn = platform
+            .wikidata_source_sites
+            .as_ref()?
+            .to_string(); // TODO
+
+        let sites: Vec<String> = sites.split(",").map(|s| s.to_string()).collect();
+        if sites.is_empty() {
+            return None;
+        }
+
+        let _mutex = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let mut conn = platform
             .state
-            .get_wiki_db_connection(&"wikidatawiki".to_string());
+            .get_wiki_db_connection(&"wikidatawiki".to_string())?;
+        let sites = self.prep_quote(&sites);
 
         let mut sql = "SELECT ips_item_id FROM wb_items_per_site".to_string();
         if no_statements {
             sql += ",page_props,page";
         }
         sql += " WHERE ips_site_id IN (";
-        sql += &sites; // TODO
+        sql += &sites.0;
         sql += ")";
         if no_statements {
             sql += " AND page_namespace=0 AND ips_item_id=substr(page_title,2)*1 AND page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0" ;
         }
+        sql += " LIMIT 1"; // TESTING
 
-        println!("{}", &sql);
+        let mut ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
+        //let mut statement = conn.prepare(sql).ok()?;
+        //let result = match statement.execute(sites.1) {
+        let result = match conn.prep_exec(sql, sites.1) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("ERROR: {:?}", e);
+                return None;
+            }
+        };
+        for row in result {
+            let ips_item_id: usize = my::from_row(row.unwrap());
+            let entry = PageListEntry::new(Title::new(format!("Q{}", ips_item_id).as_str(), 0));
+            ret.add_entry(entry);
+        }
 
-        None
+        Some(ret)
     }
 }
 

@@ -121,4 +121,6 @@ pub struct FormParameters {
     pub subpage_filter: Option<String>,
     pub wikidata_item: Option<String>,
     pub wpiu: Option<String>,
+    //#[form(nested)]
+    //ns: Vec<String>,
 }
