@@ -5,6 +5,7 @@ extern crate rocket;
 
 pub mod app_state;
 pub mod datasource;
+pub mod datasource_database;
 pub mod form_parameters;
 pub mod pagelist;
 pub mod platform;

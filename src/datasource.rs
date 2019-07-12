@@ -85,11 +85,8 @@ impl DataSource for SourceWikidata {
         if no_statements {
             sql += " AND page_namespace=0 AND ips_item_id=substr(page_title,2)*1 AND page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0" ;
         }
-        sql += " LIMIT 1"; // TESTING
 
         let mut ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
-        //let mut statement = conn.prepare(sql).ok()?;
-        //let result = match statement.execute(sites.1) {
         let result = match conn.prep_exec(sql, sites.1) {
             Ok(r) => r,
             Err(e) => {
@@ -298,31 +295,6 @@ impl DataSource for SourceSparql {
 }
 
 impl SourceSparql {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-//________________________________________________________________________________________________________________________
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SourceDatabase {}
-
-impl DataSource for SourceDatabase {
-    fn name(&self) -> String {
-        "categories".to_string()
-    }
-
-    fn can_run(&self, _platform: &Platform) -> bool {
-        false
-    }
-
-    fn run(&self, _platform: &Platform) -> Option<PageList> {
-        None // TODO
-    }
-}
-
-impl SourceDatabase {
     pub fn new() -> Self {
         Self {}
     }
