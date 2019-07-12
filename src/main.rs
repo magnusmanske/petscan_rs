@@ -56,7 +56,7 @@ fn process_form_post(
 }
 */
 
-#[get("/")]
+#[get("/?")]
 fn process_form_get(params: FormParameters, state: State<AppState>) -> String {
     process_form(params, state)
 }
