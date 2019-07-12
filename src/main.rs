@@ -15,7 +15,7 @@ pub mod platform;
 
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
-//use platform::Platform;
+use platform::Platform;
 use rocket::config::{Config, Environment};
 use rocket::State;
 use rocket_contrib::serve::StaticFiles;
@@ -25,7 +25,6 @@ use std::fs::File;
 //use mysql as my;
 //use std::sync::Arc;
 
-/*
 fn process_form(form_parameters: FormParameters, state: State<AppState>) -> String {
     // TODO check restart-code
     if state.is_shutting_down() {
@@ -39,6 +38,7 @@ fn process_form(form_parameters: FormParameters, state: State<AppState>) -> Stri
     ret
 }
 
+/*
 #[get("/?<form_parameters..>")]
 fn process_form_get(
     form_parameters: LenientForm<FormParameters>,
@@ -57,8 +57,8 @@ fn process_form_post(
 */
 
 #[get("/")]
-fn process_form_get(_state: State<AppState>, _params: FormParameters) -> String {
-    "OK".to_string()
+fn process_form_get(params: FormParameters, state: State<AppState>) -> String {
+    process_form(params, state)
 }
 
 fn main() {
