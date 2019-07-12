@@ -56,7 +56,12 @@ fn process_form_post(
 }
 */
 
-#[get("/?")]
+#[post("/", data = "<params>")]
+fn process_form_post(params: FormParameters, state: State<AppState>) -> String {
+    process_form(params, state)
+}
+
+#[get("/")]
 fn process_form_get(params: FormParameters, state: State<AppState>) -> String {
     process_form(params, state)
 }
@@ -81,7 +86,7 @@ fn main() {
     rocket::custom(rocket_config)
         .manage(AppState::new_from_config(&petscan_config))
         .mount("/", StaticFiles::from(basedir + "/html"))
-        .mount("/", routes![process_form_get]) // process_form_post
+        .mount("/", routes![process_form_get, process_form_post])
         //.attach(DbConn::fairing())
         .launch();
 }
