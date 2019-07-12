@@ -15,8 +15,9 @@ pub mod platform;
 
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
-use platform::Platform;
+use platform::{MyResponse, Platform};
 use rocket::config::{Config, Environment};
+use rocket::http::ContentType;
 use rocket::State;
 use rocket_contrib::serve::StaticFiles;
 use serde_json::Value;
@@ -25,44 +26,34 @@ use std::fs::File;
 //use mysql as my;
 //use std::sync::Arc;
 
-fn process_form(form_parameters: FormParameters, state: State<AppState>) -> String {
+fn process_form(form_parameters: FormParameters, state: State<AppState>) -> MyResponse {
     // TODO check restart-code
     if state.is_shutting_down() {
-        return "Temporary maintenance".to_string();
+        return MyResponse {
+            s: "Temporary maintenance".to_string(),
+            content_type: ContentType::Plain,
+        };
+    }
+    if form_parameters.params.contains_key("show_main_page") {
+        return MyResponse {
+            s: state.get_main_page().to_owned(),
+            content_type: ContentType::HTML,
+        };
     }
     state.modify_threads_running(1);
     let mut platform = Platform::new_from_parameters(&form_parameters, state);
     platform.run();
     platform.state.modify_threads_running(-1);
-    let ret = format!("{:#?}", platform.result());
-    ret
+    platform.get_response()
 }
-
-/*
-#[get("/?<form_parameters..>")]
-fn process_form_get(
-    form_parameters: LenientForm<FormParameters>,
-    state: State<AppState>,
-) -> String {
-    process_form(form_parameters.into_inner(), state)
-}
-
-#[post("/", data = "<form_parameters>")]
-fn process_form_post(
-    form_parameters: LenientForm<FormParameters>,
-    state: State<AppState>,
-) -> String {
-    process_form(form_parameters.into_inner(), state)
-}
-*/
 
 #[post("/", data = "<params>")]
-fn process_form_post(params: FormParameters, state: State<AppState>) -> String {
+fn process_form_post(params: FormParameters, state: State<AppState>) -> MyResponse {
     process_form(params, state)
 }
 
 #[get("/")]
-fn process_form_get(params: FormParameters, state: State<AppState>) -> String {
+fn process_form_get(params: FormParameters, state: State<AppState>) -> MyResponse {
     process_form(params, state)
 }
 

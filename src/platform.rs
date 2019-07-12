@@ -4,9 +4,29 @@ use crate::datasource_database::SourceDatabase;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 //use rayon::prelude::*;
+use rocket::http::ContentType;
+use rocket::http::Status;
 use rocket::request::State;
+use rocket::response::Responder;
+use rocket::Request;
+use rocket::Response;
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::Arc;
+
+pub struct MyResponse {
+    pub s: String,
+    pub content_type: ContentType,
+}
+
+impl Responder<'static> for MyResponse {
+    fn respond_to(self, _: &Request) -> Result<Response<'static>, Status> {
+        Response::build()
+            .header(self.content_type)
+            .sized_body(Cursor::new(self.s))
+            .ok()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum Combination {
@@ -70,6 +90,13 @@ impl Platform {
         println!("{:#?}", &combination);
 
         self.result = self.combine_results(&mut results, &combination);
+    }
+
+    pub fn get_response(&self) -> MyResponse {
+        MyResponse {
+            s: format!("{:#?}", self.result()),
+            content_type: ContentType::Plain,
+        }
     }
 
     pub fn get_label_sql(&self) -> SQLtuple {

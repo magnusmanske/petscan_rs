@@ -6,6 +6,7 @@ use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::{thread, time};
@@ -23,16 +24,21 @@ pub struct AppState {
     threads_running: Arc<Mutex<i64>>,
     shutting_down: Arc<Mutex<bool>>,
     site_matrix: Value,
+    main_page: String,
 }
 
 impl AppState {
     pub fn new_from_config(config: &Value) -> Self {
+        let main_page_path = "./html/index.html";
         let mut ret = Self {
             db_pool: vec![],
             config: config.to_owned(),
             threads_running: Arc::new(Mutex::new(0)),
             shutting_down: Arc::new(Mutex::new(false)),
             site_matrix: AppState::load_site_matrix(),
+            main_page: String::from_utf8_lossy(&fs::read(main_page_path).unwrap())
+                .parse()
+                .unwrap(),
         };
 
         match config["mysql"].as_array() {
@@ -59,6 +65,10 @@ impl AppState {
             }
         }
         ret
+    }
+
+    pub fn get_main_page(&self) -> &String {
+        &self.main_page
     }
 
     /// Returns the server and database name for the wiki, as a tuple

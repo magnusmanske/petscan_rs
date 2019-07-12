@@ -65,7 +65,8 @@ impl<'a, 'r> FromRequest<'a, 'r> for FormParameters {
                             params: HashMap::new(),
                             ns: HashSet::new(),
                         };
-                        ret.params.insert("main_page".to_string(), "1".to_string());
+                        ret.params
+                            .insert("show_main_page".to_string(), "1".to_string());
                         Outcome::Success(ret)
                         //Outcome::Failure((Status::BadRequest, "No query found".to_string()))
                     }
