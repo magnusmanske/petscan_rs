@@ -1,7 +1,10 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 
 #[macro_use]
+extern crate lazy_static;
+#[macro_use]
 extern crate rocket;
+extern crate regex;
 
 pub mod app_state;
 pub mod datasource;
@@ -10,11 +13,10 @@ pub mod form_parameters;
 pub mod pagelist;
 pub mod platform;
 
+use crate::form_parameters::FormParameters;
 use app_state::AppState;
-use form_parameters::FormParameters;
-use platform::Platform;
+//use platform::Platform;
 use rocket::config::{Config, Environment};
-use rocket::request::LenientForm;
 use rocket::State;
 use rocket_contrib::serve::StaticFiles;
 use serde_json::Value;
@@ -23,22 +25,13 @@ use std::fs::File;
 //use mysql as my;
 //use std::sync::Arc;
 
+/*
 fn process_form(form_parameters: FormParameters, state: State<AppState>) -> String {
     // TODO check restart-code
     if state.is_shutting_down() {
         return "Temporary maintenance".to_string();
     }
     state.modify_threads_running(1);
-    /*
-    let ret = format!(
-        "Hello, {}!",
-        form_parameters
-            .name
-            .as_ref()
-            .unwrap_or(&"ANON".to_string())
-            .as_str()
-    );
-    */
     let mut platform = Platform::new_from_parameters(&form_parameters, state);
     platform.run();
     platform.state.modify_threads_running(-1);
@@ -61,6 +54,12 @@ fn process_form_post(
 ) -> String {
     process_form(form_parameters.into_inner(), state)
 }
+*/
+
+#[get("/")]
+fn process_form_get(_state: State<AppState>, _params: FormParameters) -> String {
+    "OK".to_string()
+}
 
 fn main() {
     let basedir = env::current_dir()
@@ -82,7 +81,7 @@ fn main() {
     rocket::custom(rocket_config)
         .manage(AppState::new_from_config(&petscan_config))
         .mount("/", StaticFiles::from(basedir + "/html"))
-        .mount("/", routes![process_form_get, process_form_post])
+        .mount("/", routes![process_form_get]) // process_form_post
         //.attach(DbConn::fairing())
         .launch();
 }

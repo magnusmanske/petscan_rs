@@ -20,6 +20,8 @@ let _wpiu = platform
     .unwrap_or(&"any".to_string());
 */
 
+pub type SQLtuple = (String, Vec<String>);
+
 pub trait DataSource {
     fn can_run(&self, platform: &Platform) -> bool;
     fn run(&self, platform: &Platform) -> Option<PageList>;
@@ -52,18 +54,12 @@ impl DataSource for SourceWikidata {
     }
 
     fn can_run(&self, platform: &Platform) -> bool {
-        platform.form_parameters().wpiu_no_statements.is_some()
-            && platform.form_parameters().wikidata_source_sites.is_some()
+        platform.has_param("wpiu_no_statements") && platform.has_param("wikidata_source_sites")
     }
 
     fn run(&self, platform: &Platform) -> Option<PageList> {
-        let no_statements = platform.form_parameters().wpiu_no_statements.is_some();
-        let sites = platform
-            .form_parameters()
-            .wikidata_source_sites
-            .as_ref()?
-            .to_string(); // TODO
-
+        let no_statements = platform.has_param("wpiu_no_statements");
+        let sites = platform.get_param("wikidata_source_sites")?;
         let sites: Vec<String> = sites.split(",").map(|s| s.to_string()).collect();
         if sites.is_empty() {
             return None;
@@ -121,11 +117,11 @@ impl DataSource for SourcePagePile {
     }
 
     fn can_run(&self, platform: &Platform) -> bool {
-        platform.form_parameters().pagepile.is_some()
+        platform.has_param("pagepile")
     }
 
     fn run(&self, platform: &Platform) -> Option<PageList> {
-        let pagepile = platform.form_parameters().pagepile?;
+        let pagepile = platform.get_param("pagepile")?;
         let api = platform
             .state
             .get_api_for_wiki("wikidatawiki".to_string())?; // Just because we need query_raw
@@ -169,32 +165,31 @@ impl DataSource for SourceSearch {
     }
 
     fn can_run(&self, platform: &Platform) -> bool {
-        if platform.form_parameters().search_query.is_none()
-            || platform.form_parameters().search_wiki.is_none()
-            || platform.form_parameters().search_max_results.is_none()
-        {
-            return false;
-        }
-        true
+        platform.has_param("search_query")
+            && platform.has_param("search_wiki")
+            && platform.has_param("search_max_results")
     }
 
     fn run(&self, platform: &Platform) -> Option<PageList> {
-        let wiki = platform.form_parameters().search_wiki.as_ref()?;
-        let query = platform.form_parameters().search_query.as_ref()?;
-        let max = platform.form_parameters().search_max_results.as_ref()?;
+        let wiki = platform.get_param("search_wiki")?;
+        let query = platform.get_param("search_query")?;
+        let max = platform
+            .get_param("search_max_results")?
+            .parse::<usize>()
+            .ok()?;
         let api = platform.state.get_api_for_wiki(wiki.to_string())?;
         let params = api.params_into(&vec![
             ("action", "query"),
             ("list", "search"),
             ("srsearch", query.as_str()),
         ]);
-        let result = api.get_query_api_json_limit(&params, Some(*max)).ok()?;
+        let result = api.get_query_api_json_limit(&params, Some(max)).ok()?;
         let titles = Api::result_array_to_titles(&result);
         let entries = titles
             .iter()
             .map(|title| PageListEntry::new(title.to_owned()))
             .collect();
-        let pagelist = PageList::new_from_vec(wiki, entries);
+        let pagelist = PageList::new_from_vec(&wiki, entries);
         Some(pagelist)
     }
 }
@@ -216,22 +211,14 @@ impl DataSource for SourceManual {
     }
 
     fn can_run(&self, platform: &Platform) -> bool {
-        match &platform.form_parameters().manual_list {
-            Some(_) => match &platform.form_parameters().manual_list_wiki {
-                Some(wiki) => !wiki.is_empty(),
-                None => false,
-            },
-            None => false,
-        }
+        platform.has_param("manual_list") && platform.has_param("manual_list_wiki")
     }
 
     fn run(&self, platform: &Platform) -> Option<PageList> {
-        let wiki = platform.form_parameters().manual_list_wiki.as_ref()?;
+        let wiki = platform.get_param("manual_list_wiki")?;
         let api = platform.state.get_api_for_wiki(wiki.to_string())?;
         let entries: Vec<PageListEntry> = platform
-            .form_parameters()
-            .manual_list
-            .as_ref()?
+            .get_param("manual_list")?
             .split("\n")
             .filter_map(|line| {
                 let line = line.trim().to_string();
@@ -244,7 +231,7 @@ impl DataSource for SourceManual {
                 }
             })
             .collect();
-        let pagelist = PageList::new_from_vec(wiki, entries);
+        let pagelist = PageList::new_from_vec(&wiki, entries);
         Some(pagelist)
     }
 }
@@ -266,14 +253,11 @@ impl DataSource for SourceSparql {
     }
 
     fn can_run(&self, platform: &Platform) -> bool {
-        match &platform.form_parameters().sparql {
-            Some(sparql) => !sparql.is_empty(),
-            None => false,
-        }
+        platform.has_param("sparql")
     }
 
     fn run(&self, platform: &Platform) -> Option<PageList> {
-        let sparql = platform.form_parameters().sparql.as_ref()?;
+        let sparql = platform.get_param("sparql")?;
         let api = Api::new("https://www.wikidata.org/w/api.php").ok()?;
         let result = api.sparql_query(sparql.as_str()).ok()?;
         let first_var = result["head"]["vars"][0].as_str()?;

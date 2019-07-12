@@ -1,126 +1,68 @@
-#[derive(FromForm, Debug, Clone, PartialEq)]
+use regex::Regex;
+use rocket::http::Status;
+use rocket::request::{self, FromRequest, Request};
+use rocket::Outcome;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use url::*;
+
+#[derive(Debug, Clone)]
 pub struct FormParameters {
-    pub name: Option<String>,
+    pub params: HashMap<String, String>,
+    pub ns: HashSet<usize>,
+}
 
-    // Misc
-    pub active_tab: Option<String>,
-    pub interface_language: Option<String>,
-    pub depth: Option<usize>,
-    pub search_max_results: Option<usize>,
-    pub output_limit: Option<usize>,
-    pub psid: Option<usize>,
-    pub doit: Option<String>, // ???
-    pub pagepile: Option<usize>,
+impl<'a, 'r> FromRequest<'a, 'r> for FormParameters {
+    type Error = String;
 
-    // From textarea
-    pub categories: Option<String>,
-    pub labels_any: Option<String>,
-    pub labels_no: Option<String>,
-    pub labels_yes: Option<String>,
-    pub links_to_all: Option<String>,
-    pub links_to_any: Option<String>,
-    pub links_to_no: Option<String>,
-    pub negcats: Option<String>,
-    pub outlinks_any: Option<String>,
-    pub outlinks_no: Option<String>,
-    pub outlinks_yes: Option<String>,
-    pub sitelinks_any: Option<String>,
-    pub sitelinks_no: Option<String>,
-    pub sitelinks_yes: Option<String>,
-    pub templates_any: Option<String>,
-    pub templates_no: Option<String>,
-    pub templates_yes: Option<String>,
-    pub manual_list: Option<String>,
-    pub sparql: Option<String>,
+    fn from_request(request: &'a Request<'r>) -> request::Outcome<Self, Self::Error> {
+        lazy_static! {
+            static ref RE: Regex = Regex::new(r#"^ns\[(\d+)\]$"#).unwrap();
+        }
+        // TODO IMPORTANT for parsing see https://api.rocket.rs/v0.4/rocket/request/struct.Request.html#method.uri
+        match request.uri().query() {
+            Some(query) => {
+                /*
+                let params = json!({});
+                query.split("&").for_each(|s|{
+                    let parts : Vec<&str> = s.split("=").collect();
 
-    // From input.text
-    pub max_sitelink_count: Option<String>,
-    pub maxlinks: Option<String>,
-    pub min_redlink_count: Option<String>,
-    pub min_sitelink_count: Option<String>,
-    pub minlinks: Option<String>,
-    pub after: Option<String>,
-    pub before: Option<String>,
-    pub manual_list_wiki: Option<String>,
-    pub max_age: Option<String>,
-    pub larger: Option<String>,
-    pub smaller: Option<String>,
-    pub langs_labels_any: Option<String>,
-    pub langs_labels_no: Option<String>,
-    pub langs_labels_yes: Option<String>,
-    pub wikidata_source_sites: Option<String>,
-    pub project: Option<String>,
-    pub search_query: Option<String>,
-    pub search_wiki: Option<String>,
-    pub source_combination: Option<String>,
-    pub ores_prob_from: Option<String>,
-    pub ores_prob_to: Option<String>,
-    pub regexp_filter: Option<String>,
-    pub wikidata_label_language: Option<String>,
-    pub wikidata_prop_item_use: Option<String>,
-
-    // From input.checkbox
-    pub add_coordinates: Option<u8>,
-    pub add_defaultsort: Option<u8>,
-    pub add_disambiguation: Option<u8>,
-    pub add_image: Option<u8>,
-    pub add_subpages: Option<u8>,
-    pub article_redlinks_only: Option<u8>,
-    pub cb_labels_any_a: Option<u8>,
-    pub cb_labels_any_d: Option<u8>,
-    pub cb_labels_any_l: Option<u8>,
-    pub cb_labels_no_a: Option<u8>,
-    pub cb_labels_no_d: Option<u8>,
-    pub cb_labels_no_l: Option<u8>,
-    pub cb_labels_yes_a: Option<u8>,
-    pub cb_labels_yes_d: Option<u8>,
-    pub cb_labels_yes_l: Option<u8>,
-    pub ext_image_data: Option<u8>,
-    pub file_usage_data: Option<u8>,
-    pub file_usage_data_ns0: Option<u8>,
-    #[form(field = "json-pretty")]
-    pub json_pretty: Option<u8>,
-    pub only_new: Option<u8>,
-    pub remove_template_redlinks: Option<u8>,
-    pub show_redlinks: Option<u8>,
-    pub sparse: Option<u8>,
-    pub templates_use_talk_any: Option<u8>,
-    pub templates_use_talk_no: Option<u8>,
-    pub templates_use_talk_yes: Option<u8>,
-    pub thumbnails_in_wiki_output: Option<u8>,
-    pub wdf_allow_svg: Option<u8>,
-    pub wdf_commons_cats: Option<u8>,
-    pub wdf_coords: Option<u8>,
-    pub wdf_langlinks: Option<u8>,
-    pub wdf_main: Option<u8>,
-    pub wdf_max_five_results: Option<u8>,
-    pub wdf_only_files_not_on_wd: Option<u8>,
-    pub wdf_only_items_without_p18: Option<u8>,
-    pub wdf_only_jpeg: Option<u8>,
-    pub wdf_only_page_images: Option<u8>,
-    pub wdf_search_commons: Option<u8>,
-    pub wpiu_no_sitelinks: Option<u8>,
-    pub wpiu_no_statements: Option<u8>,
-
-    // From input.radio
-    pub combination: Option<String>,
-    pub common_wiki: Option<String>,
-    #[form(field = "edits[anons]")]
-    pub edits_anons: Option<String>,
-    #[form(field = "edits[bots]")]
-    pub edits_bots: Option<String>,
-    #[form(field = "edits[flagged]")]
-    pub edits_flagged: Option<String>,
-    pub format: Option<String>,
-    pub ores_prediction: Option<String>,
-    pub output_compatability: Option<String>,
-    pub page_image: Option<String>,
-    pub show_redirects: Option<String>,
-    pub sortby: Option<String>,
-    pub sortorder: Option<String>,
-    pub subpage_filter: Option<String>,
-    pub wikidata_item: Option<String>,
-    pub wpiu: Option<String>,
-    //#[form(nested)]
-    //ns: Vec<String>,
+                });
+                */
+                let parsed_url = Url::parse(&("https://127.0.0.1/?".to_string() + query)).unwrap();
+                println!("{:?}", &parsed_url);
+                let params: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+                println!("{:?}", &params);
+                let mut ns: HashSet<usize> = HashSet::new();
+                params
+                    .iter()
+                    .filter(|(_k, v)| *v == "1")
+                    .for_each(|(k, _v)| {
+                        for cap in RE.captures_iter(k) {
+                            match cap[1].parse::<usize>() {
+                                Ok(ns_num) => {
+                                    ns.insert(ns_num);
+                                }
+                                _ => {}
+                            }
+                        }
+                    });
+                println!("{:?}", &ns);
+                Outcome::Success(FormParameters {
+                    params: params,
+                    ns: ns,
+                })
+            }
+            None => Outcome::Failure((Status::BadRequest, "No query found".to_string())),
+        }
+        /*
+        let keys: Vec<_> = request.headers().get("x-api-key").collect();
+        match keys.len() {
+            0 => Outcome::Failure((Status::BadRequest, ApiKeyError::Missing)),
+            1 if is_valid(keys[0]) => Outcome::Success(ApiKey(keys[0].to_string())),
+            1 => Outcome::Failure((Status::BadRequest, ApiKeyError::Invalid)),
+            _ => Outcome::Failure((Status::BadRequest, ApiKeyError::BadCount)),
+        }
+        */
+    }
 }

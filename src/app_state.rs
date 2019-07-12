@@ -14,7 +14,7 @@ static MAX_CONCURRENT_DB_CONNECTIONS: u64 = 10;
 static MYSQL_MAX_CONNECTION_ATTEMPTS: u64 = 15;
 static MYSQL_CONNECTION_INITIAL_DELAY_MS: u64 = 100;
 
-type DbUserPass = (String, String);
+pub type DbUserPass = (String, String);
 
 #[derive(Debug, Clone)]
 pub struct AppState {

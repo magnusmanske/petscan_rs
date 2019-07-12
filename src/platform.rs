@@ -33,12 +33,6 @@ impl Platform {
         }
     }
 
-    pub fn just_to_suppress_warnings() {
-        let _x =
-            Combination::Intersection((Box::new(Combination::None), Box::new(Combination::None)));
-        let _y = Combination::Not((Box::new(Combination::None), Box::new(Combination::None)));
-    }
-
     pub fn run(&mut self) {
         // TODO legacy parameters
 
@@ -78,13 +72,44 @@ impl Platform {
         self.result = self.combine_results(&mut results, &combination);
     }
 
+    pub fn get_label_sql(&self) -> SQLtuple {
+        let ret: SQLtuple = ("".to_string(), vec![]);
+        // TODO
+        ret
+    }
+
+    pub fn just_to_suppress_warnings() {
+        let _x =
+            Combination::Intersection((Box::new(Combination::None), Box::new(Combination::None)));
+        let _y = Combination::Not((Box::new(Combination::None), Box::new(Combination::None)));
+    }
+
     fn parse_combination_string(&self, _s: &String) -> Combination {
         // TODO
         Combination::Source("".to_string())
     }
 
+    /// Checks is the parameter is set, and non-blank
+    pub fn has_param(&self, param: &str) -> bool {
+        match self.form_parameters().params.get(&param.to_string()) {
+            Some(s) => s != "",
+            None => false,
+        }
+    }
+
+    pub fn get_param(&self, param: &str) -> Option<String> {
+        if self.has_param(param) {
+            self.form_parameters()
+                .params
+                .get(&param.to_string())
+                .map(|s| s.to_string())
+        } else {
+            None
+        }
+    }
+
     fn get_combination(&self, available_sources: Vec<String>) -> Combination {
-        match &self.form_parameters.source_combination {
+        match self.get_param("source_combination") {
             Some(combination_string) => self.parse_combination_string(&combination_string),
             None => {
                 let mut comb = Combination::None;
