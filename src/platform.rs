@@ -117,6 +117,11 @@ impl Platform {
         self.get_param(param).unwrap_or("".to_string())
     }
 
+    pub fn append_sql(sql: &mut SQLtuple, sub: &mut SQLtuple) {
+        sql.0 += &sub.0;
+        sql.1.append(&mut sub.1);
+    }
+
     /// Returns a tuple with a string containing comma-separated question marks, and the (non-empty) Vec elements
     pub fn prep_quote(strings: &Vec<String>) -> SQLtuple {
         let escaped: Vec<String> = strings
