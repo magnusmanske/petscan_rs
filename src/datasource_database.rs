@@ -12,6 +12,9 @@ use std::collections::HashSet;
 use serde_json::value::Value;
 */
 
+static MAX_CATEGORY_BATCH_SIZE: usize = 5000;
+//static USE_NEW_CATEGORY_MODE: bool = true;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
     pub name: String,
@@ -186,8 +189,31 @@ impl SourceDatabase {
         sql
     }
 
+    pub fn iterate_category_batches(
+        &self,
+        categories: &Vec<Vec<String>>,
+        start: usize,
+    ) -> Vec<Vec<Vec<String>>> {
+        let mut ret: Vec<Vec<Vec<String>>> = vec![];
+        categories[start]
+            .chunks(MAX_CATEGORY_BATCH_SIZE)
+            .for_each(|c| {
+                if start + 1 >= categories.len() {
+                    let to_add = vec![c.to_vec()];
+                    ret.push(to_add);
+                    return;
+                }
+                let tmp = self.iterate_category_batches(categories, start + 1);
+                tmp.iter().for_each(|t| {
+                    let mut to_add = vec![c.to_vec()];
+                    to_add.append(&mut t.to_owned());
+                    ret.push(to_add);
+                });
+            });
+        ret
+    }
+
     /*
-    void TSourceDatabase::iterateCategoryBatches ( vector <vvs> &ret , vvs &categories , uint32_t start ) {
     bool TSourceDatabase::getPages () {
     bool TSourceDatabase::getPagesforPrimary ( TWikidataDB &db , string primary , string sql , string sql_before_after , vector <TPage> &pages_sublist , bool is_before_after_done ) {
 
