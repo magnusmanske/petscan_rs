@@ -26,18 +26,6 @@ pub trait DataSource {
     fn can_run(&self, platform: &Platform) -> bool;
     fn run(&self, platform: &Platform) -> Option<PageList>;
     fn name(&self) -> String;
-    fn prep_quote(&self, strings: &Vec<String>) -> (String, Vec<String>) {
-        let escaped: Vec<String> = strings
-            .iter()
-            .filter_map(|s| match s.trim() {
-                "" => None,
-                other => Some(other.to_string()),
-            })
-            .collect();
-        let mut questionmarks: Vec<String> = Vec::new();
-        questionmarks.resize(escaped.len(), "?".to_string());
-        (questionmarks.join(","), escaped)
-    }
 }
 
 // TODO
@@ -69,7 +57,7 @@ impl DataSource for SourceWikidata {
         let mut conn = platform
             .state
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
-        let sites = self.prep_quote(&sites);
+        let sites = Platform::prep_quote(&sites);
 
         let mut sql = "SELECT ips_item_id FROM wb_items_per_site".to_string();
         if no_statements {
