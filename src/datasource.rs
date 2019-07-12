@@ -26,10 +26,66 @@ pub trait DataSource {
     fn can_run(&self, platform: &Platform) -> bool;
     fn run(&self, platform: &Platform) -> Option<PageList>;
     fn name(&self) -> String;
+
+    fn entry_from_entity(&self, entity: &str) -> Option<PageListEntry> {
+        match entity.chars().next() {
+            Some('Q') => Some(PageListEntry::new(Title::new(&entity.to_string(), 0))),
+            Some('P') => Some(PageListEntry::new(Title::new(&entity.to_string(), 120))),
+            Some('L') => Some(PageListEntry::new(Title::new(&entity.to_string(), 146))),
+            _ => None,
+        }
+    }
 }
 
-// TODO
-// SourceLabels
+//________________________________________________________________________________________________________________________
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceLabels {}
+
+impl DataSource for SourceLabels {
+    fn name(&self) -> String {
+        "labels".to_string()
+    }
+
+    fn can_run(&self, platform: &Platform) -> bool {
+        platform.has_param("labels_yes")
+            || platform.has_param("labels_any")
+            || platform.has_param("labels_no")
+    }
+
+    fn run(&self, platform: &Platform) -> Option<PageList> {
+        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let sql = platform.get_label_sql();
+        let mut ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
+        let mut conn = platform
+            .state
+            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
+        let result = match conn.prep_exec(sql.0, sql.1) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("ERROR: {:?}", e);
+                return None;
+            }
+        };
+        for row in result {
+            let term_full_entity_id: String = my::from_row(row.unwrap());
+            match self.entry_from_entity(&term_full_entity_id) {
+                Some(entry) => {
+                    ret.add_entry(entry);
+                }
+                None => {}
+            }
+        }
+
+        Some(ret)
+    }
+}
+
+impl SourceLabels {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
 
 //________________________________________________________________________________________________________________________
 
@@ -80,8 +136,13 @@ impl DataSource for SourceWikidata {
         };
         for row in result {
             let ips_item_id: usize = my::from_row(row.unwrap());
-            let entry = PageListEntry::new(Title::new(format!("Q{}", ips_item_id).as_str(), 0));
-            ret.add_entry(entry);
+            let term_full_entity_id = format!("Q{}", ips_item_id);
+            match self.entry_from_entity(&term_full_entity_id) {
+                Some(entry) => {
+                    ret.add_entry(entry);
+                }
+                None => {}
+            }
         }
 
         Some(ret)
@@ -255,12 +316,7 @@ impl DataSource for SourceSparql {
         // TODO M for commons?
         let ple: Vec<PageListEntry> = entities
             .par_iter()
-            .filter_map(|e| match e.chars().next() {
-                Some('Q') => Some(PageListEntry::new(Title::new(&e.to_string(), 0))),
-                Some('P') => Some(PageListEntry::new(Title::new(&e.to_string(), 120))),
-                Some('L') => Some(PageListEntry::new(Title::new(&e.to_string(), 146))),
-                _ => None,
-            })
+            .filter_map(|e| self.entry_from_entity(e))
             .collect();
         Some(PageList::new_from_vec("wikidatawiki", ple))
     }

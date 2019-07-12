@@ -95,7 +95,6 @@ impl AppState {
         loop {
             let (host, schema) = AppState::db_host_and_schema_for_wiki(wiki);
             let (user, pass) = db_user_pass;
-            println!("{}:{}", &user, &pass);
             let mut builder = my::OptsBuilder::new();
             builder
                 .ip_or_hostname(Some(host))

@@ -66,10 +66,11 @@ impl Platform {
         candidate_sources.push(Box::new(SourceWikidata::new()));
 
         if !candidate_sources.iter().any(|source| source.can_run(&self)) {
-            //self.result.wiki = Some("NO CANDIDATES".to_string());
-            // TODO alternative sources
-            //candidate_sources.push(Box::new(SourceLabels::new()));
-            return;
+            candidate_sources = vec![];
+            candidate_sources.push(Box::new(SourceLabels::new()));
+            if !candidate_sources.iter().any(|source| source.can_run(&self)) {
+                return;
+            }
         }
 
         let mut results: HashMap<String, Option<PageList>> = HashMap::new();
