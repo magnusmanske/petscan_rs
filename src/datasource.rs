@@ -69,10 +69,10 @@ impl DataSource for SourceWikidata {
             return None;
         }
 
-        let _mutex = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut conn = platform
             .state
-            .get_wiki_db_connection(&"wikidatawiki".to_string())?;
+            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
         let sites = self.prep_quote(&sites);
 
         let mut sql = "SELECT ips_item_id FROM wb_items_per_site".to_string();

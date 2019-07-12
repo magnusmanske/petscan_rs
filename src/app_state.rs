@@ -14,9 +14,11 @@ static MAX_CONCURRENT_DB_CONNECTIONS: u64 = 10;
 static MYSQL_MAX_CONNECTION_ATTEMPTS: u64 = 15;
 static MYSQL_CONNECTION_INITIAL_DELAY_MS: u64 = 100;
 
+type DbUserPass = (String, String);
+
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub db_pool: Vec<Arc<Mutex<u8>>>,
+    pub db_pool: Vec<Arc<Mutex<DbUserPass>>>,
     pub config: Value,
     threads_running: Arc<Mutex<i64>>,
     shutting_down: Arc<Mutex<bool>>,
@@ -26,15 +28,35 @@ pub struct AppState {
 impl AppState {
     pub fn new_from_config(config: &Value) -> Self {
         let mut ret = Self {
-            //db: Arc::new(AppState::db_pool_from_config(config)),
             db_pool: vec![],
             config: config.to_owned(),
             threads_running: Arc::new(Mutex::new(0)),
             shutting_down: Arc::new(Mutex::new(false)),
             site_matrix: AppState::load_site_matrix(),
         };
-        for _x in 1..MAX_CONCURRENT_DB_CONNECTIONS {
-            ret.db_pool.push(Arc::new(Mutex::new(0)));
+
+        match config["mysql"].as_array() {
+            Some(up_list) => {
+                up_list.iter().for_each(|up| {
+                    let user = up[0].as_str().unwrap().to_string();
+                    let pass = up[1].as_str().unwrap().to_string();
+                    let connections = up[2].as_u64().unwrap_or(5);
+                    for _connection_num in 1..connections {
+                        let tuple = (user.to_owned(), pass.to_owned());
+                        ret.db_pool.push(Arc::new(Mutex::new(tuple)));
+                    }
+                    // Ignore toolname up[3]
+                });
+            }
+            None => {
+                for _x in 1..MAX_CONCURRENT_DB_CONNECTIONS {
+                    let tuple = (
+                        config["user"].as_str().unwrap().to_string(),
+                        config["password"].as_str().unwrap().to_string(),
+                    );
+                    ret.db_pool.push(Arc::new(Mutex::new(tuple)));
+                }
+            }
         }
         ret
     }
@@ -49,38 +71,21 @@ impl AppState {
     }
 
     /// Returns a random mutex. The mutex value itself is just a placeholder!
-    pub fn get_db_mutex(&self) -> &Arc<Mutex<u8>> {
+    pub fn get_db_mutex(&self) -> &Arc<Mutex<DbUserPass>> {
         &self.db_pool.choose(&mut rand::thread_rng()).unwrap()
     }
 
-    /// Returns a random user/password tuple for database access, from the array of arrays in config["mysql"].
-    /// Falls back on the default tool user/password.
-    fn get_random_db_user(&self) -> (String, String) {
-        match self.config["mysql"].as_array() {
-            Some(a) => {
-                let up = a
-                    .choose(&mut rand::thread_rng())
-                    .unwrap()
-                    .as_array()
-                    .unwrap();
-                (
-                    up[0].as_str().unwrap().to_string(),
-                    up[1].as_str().unwrap().to_string(),
-                )
-            }
-            None => (
-                self.config["user"].as_str().unwrap().to_string(),
-                self.config["password"].as_str().unwrap().to_string(),
-            ),
-        }
-    }
-
-    pub fn get_wiki_db_connection(&self, wiki: &String) -> Option<my::Conn> {
+    pub fn get_wiki_db_connection(
+        &self,
+        db_user_pass: &DbUserPass,
+        wiki: &String,
+    ) -> Option<my::Conn> {
         let mut loops_left = MYSQL_MAX_CONNECTION_ATTEMPTS;
         let mut milliseconds = MYSQL_CONNECTION_INITIAL_DELAY_MS;
         loop {
             let (host, schema) = AppState::db_host_and_schema_for_wiki(wiki);
-            let (user, pass) = self.get_random_db_user();
+            let (user, pass) = db_user_pass;
+            println!("{}:{}", &user, &pass);
             let mut builder = my::OptsBuilder::new();
             builder
                 .ip_or_hostname(Some(host))
