@@ -2,12 +2,13 @@ use crate::datasource::DataSource;
 use crate::datasource::SQLtuple;
 use crate::pagelist::*;
 use crate::platform::Platform;
+use mediawiki::api::{Api, NamespaceID};
 use mediawiki::title::Title;
 use mysql as my;
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::collections::HashSet;
 /*
-use mediawiki::api::Api;
 use serde_json::value::Value;
 */
 
@@ -133,10 +134,59 @@ impl SourceDatabase {
         sql
     }
 
+    pub fn group_link_list_by_namespace(
+        &self,
+        input: &Vec<String>,
+        api: &Api,
+    ) -> HashMap<NamespaceID, Vec<String>> {
+        let mut ret: HashMap<NamespaceID, Vec<String>> = HashMap::new();
+        input.iter().for_each(|title| {
+            let title = Title::new_from_full(title, &api);
+            if !ret.contains_key(&title.namespace_id()) {
+                ret.insert(title.namespace_id(), vec![]);
+            }
+            ret.get_mut(&title.namespace_id())
+                .unwrap()
+                .push(title.pretty().to_string());
+        });
+        ret
+    }
+
+    pub fn links_from_subquery(&self, input: &Vec<String>, api: &Api) -> SQLtuple {
+        let mut sql: SQLtuple = ("(".to_string(), vec![]);
+        let nslist = self.group_link_list_by_namespace(input, api);
+        nslist.iter().for_each(|nsgroup| {
+            if !sql.1.is_empty() {
+                sql.0 += " ) OR ( ";
+            }
+            sql.0 += "( SELECT p_to.page_id FROM page p_to,page p_from,pagelinks WHERE p_from.page_namespace=";
+            sql.0 += &nsgroup.0.to_string();
+            sql.0 += "  AND p_from.page_id=pl_from AND pl_namespace=p_to.page_namespace AND pl_title=p_to.page_title AND p_from.page_title IN (";
+            Platform::append_sql(&mut sql, &mut Platform::prep_quote(nsgroup.1));
+            sql.0 += ") )";
+        });
+        sql.0 += ")";
+        sql
+    }
+
+    pub fn links_to_subquery(&self, input: &Vec<String>, api: &Api) -> SQLtuple {
+        let mut sql: SQLtuple = ("(".to_string(), vec![]);
+        let nslist = self.group_link_list_by_namespace(input, api);
+        nslist.iter().for_each(|nsgroup| {
+            if !sql.1.is_empty() {
+                sql.0 += " ) OR ( ";
+            }
+            sql.0 += "( SELECT DISTINCT pl_from FROM pagelinks WHERE pl_namespace=";
+            sql.0 += &nsgroup.0.to_string();
+            sql.0 += " AND pl_title IN (";
+            Platform::append_sql(&mut sql, &mut Platform::prep_quote(nsgroup.1));
+            sql.0 += ") )";
+        });
+        sql.0 += ")";
+        sql
+    }
+
     /*
-    void TSourceDatabase::groupLinkListByNamespace ( vector <string> &input , map <int32_t,vector <string> > &nslist ) {
-    string TSourceDatabase::linksFromSubquery ( TWikidataDB &db , vector <string> input ) { // TODO speed up (e.g. IN ()); pages from all namespaces?
-    string TSourceDatabase::linksToSubquery ( TWikidataDB &db , vector <string> input ) { // TODO speed up (e.g. IN ()); pages from all namespaces?
     void TSourceDatabase::iterateCategoryBatches ( vector <vvs> &ret , vvs &categories , uint32_t start ) {
     bool TSourceDatabase::getPages () {
     bool TSourceDatabase::getPagesforPrimary ( TWikidataDB &db , string primary , string sql , string sql_before_after , vector <TPage> &pages_sublist , bool is_before_after_done ) {
