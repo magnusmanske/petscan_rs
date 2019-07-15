@@ -118,7 +118,7 @@ impl Platform {
                         "subset".to_string()
                     }
                 }
-                _ => "subset".to_string(),
+                None => "subset".to_string(),
             },
             only_new_since: self.has_param("only_new_since"),
             max_age: self

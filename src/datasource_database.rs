@@ -67,6 +67,50 @@ pub struct SourceDatabaseParameters {
     pub after: String,
 }
 
+impl SourceDatabaseParameters {
+    pub fn new() -> Self {
+        Self {
+            combine: "subset".to_string(),
+            namespace_ids: vec![],
+            linked_from_all: vec![],
+            linked_from_any: vec![],
+            linked_from_none: vec![],
+            links_to_all: vec![],
+            links_to_any: vec![],
+            links_to_none: vec![],
+            templates_yes: vec![],
+            templates_any: vec![],
+            templates_no: vec![],
+            templates_yes_talk_page: false,
+            templates_any_talk_page: false,
+            templates_no_talk_page: false,
+            page_wikidata_item: "any".to_string(),
+            page_image: "any".to_string(),
+            ores_prediction: "any".to_string(),
+            ores_type: "".to_string(),
+            ores_prob_from: None,
+            ores_prob_to: None,
+            last_edit_bot: "both".to_string(),
+            last_edit_anon: "both".to_string(),
+            last_edit_flagged: "both".to_string(),
+            redirects: "".to_string(),
+            larger: None,
+            smaller: None,
+            minlinks: None,
+            maxlinks: None,
+            wiki: None,
+            gather_link_count: false,
+            cat_pos: vec![],
+            cat_neg: vec![],
+            depth: 0,
+            max_age: None,
+            only_new_since: false,
+            before: "".to_string(),
+            after: "".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabase {
     cat_pos: Vec<Vec<String>>,
@@ -798,5 +842,44 @@ impl SourceDatabase {
         pl1.swap_entries(pages_sublist);
 
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use serde_json::Value;
+    use std::env;
+    use std::fs::File;
+
+    fn get_state() -> Arc<AppState> {
+        let basedir = env::current_dir()
+            .expect("Can't get CWD")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path = basedir.to_owned() + "/config.json";
+        let file = File::open(path).expect("Can not open config file");
+        let petscan_config: Value =
+            serde_json::from_reader(file).expect("Can not parse JSON from config file");
+        Arc::new(AppState::new_from_config(&petscan_config))
+    }
+
+    #[test]
+    fn test_category_subset() {
+        let mut params = SourceDatabaseParameters::new();
+        params.wiki = Some("enwiki".to_string());
+        params.cat_pos = vec!["1974_births".to_string(), "Bioinformaticians".to_string()];
+        let mut dbs = SourceDatabase::new(params);
+        let state = get_state();
+        let result = dbs.get_pages(&state, None).unwrap();
+        //println!("{:?}", &result);
+        assert_eq!(result.wiki, Some("enwiki".to_string()));
+        assert!(result.entries.len() < 5); // This may change as more articles are written/categories added, please adjust!
+        assert!(result
+            .entries
+            .iter()
+            .any(|entry| entry.title().pretty() == "Magnus Manske"));
     }
 }
