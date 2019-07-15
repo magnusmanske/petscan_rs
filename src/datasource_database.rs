@@ -16,12 +16,17 @@ use serde_json::value::Value;
 */
 
 static MAX_CATEGORY_BATCH_SIZE: usize = 5000;
-//static USE_NEW_CATEGORY_MODE: bool = true;
+static USE_NEW_CATEGORY_MODE: bool = false;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
     pub name: String,
     pub depth: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceDatabaseParameters {
+    pub combine: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,6 +37,7 @@ pub struct SourceDatabase {
     has_neg_cats: bool,
     has_pos_templates: bool,
     has_pos_linked_from: bool,
+    params: SourceDatabaseParameters,
 }
 
 impl DataSource for SourceDatabase {
@@ -50,7 +56,7 @@ impl DataSource for SourceDatabase {
 }
 
 impl SourceDatabase {
-    pub fn new() -> Self {
+    pub fn new(params: SourceDatabaseParameters) -> Self {
         Self {
             cat_pos: vec![],
             cat_neg: vec![],
@@ -58,6 +64,7 @@ impl SourceDatabase {
             has_neg_cats: false,
             has_pos_templates: false,
             has_pos_linked_from: false,
+            params,
         }
     }
 
@@ -244,7 +251,7 @@ impl SourceDatabase {
                 };
                 let depth = match parts.next() {
                     Some(depth) => depth.parse::<u16>().ok()?,
-                    None => return None,
+                    None => default_depth,
                 };
                 Some(SourceDatabaseCatDepth {
                     name: name,
@@ -289,7 +296,7 @@ impl SourceDatabase {
 
         let templates_yes = platform.get_param_as_vec("templates_yes", "\n");
         let templates_any = platform.get_param_as_vec("templates_any", "\n");
-        //let templates_no = platform.get_param_as_vec("templates_no", "\n");
+        let _templates_no = platform.get_param_as_vec("templates_no", "\n");
 
         let linked_from_all = platform.get_param_as_vec("outlinks_yes", "\n");
         let linked_from_any = platform.get_param_as_vec("outlinks_any", "\n");
@@ -305,20 +312,19 @@ impl SourceDatabase {
             || !links_to_all.is_empty()
             || !links_to_any.is_empty();
 
-        let mut primary: String;
-        if !self.cat_pos.is_empty() {
-            primary = "categories".to_string();
+        let primary = if !self.cat_pos.is_empty() {
+            "categories"
         } else if self.has_pos_templates {
-            primary = "templates".to_string();
+            "templates"
         } else if self.has_pos_linked_from {
-            primary = "links_from".to_string();
+            "links_from"
         } else if primary_pagelist.is_some() {
-            primary = "pagelist".to_string();
+            "pagelist"
         } else if platform.get_param("page_wikidata_item") == Some("without".to_string()) {
-            primary = "no_wikidata".to_string();
+            "no_wikidata"
         } else {
             return None;
-        }
+        };
         println!("PRIMARY: {}", &primary);
 
         let lc = if platform.has_param("minlinks") || platform.has_param("maxlinks") {
@@ -330,7 +336,6 @@ impl SourceDatabase {
         let mut sql_before_after = Platform::sql_tuple();
         let mut before: String = "".to_string();
         let mut after: String = "".to_string();
-        let mut before_after: String = "".to_string();
         let mut is_before_after_done: bool = false;
         match platform.get_param("max_age") {
             Some(max_age) => {
@@ -362,11 +367,118 @@ impl SourceDatabase {
 
         let mut sql = Platform::sql_tuple();
 
-        match primary.as_str() {
-            "categories" => {}
-            "no_wikidata" => {}
-            "templates" | "links_from" => {}
-            "pagelist" => {}
+        match primary {
+            "categories" => {
+                let category_batches = if USE_NEW_CATEGORY_MODE {
+                    self.iterate_category_batches(&self.cat_pos, 0)
+                } else {
+                    vec![self.cat_pos.to_owned()]
+                };
+
+                for category_batch in category_batches {
+                    match self.params.combine.as_str() {
+                        "subset" => {
+                            sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
+                            sql.0 += lc;
+                            sql.0 += " FROM ( SELECT * from categorylinks where cl_to IN (";
+                            Platform::append_sql(
+                                &mut sql,
+                                &mut Platform::prep_quote(&category_batch[0].to_owned()),
+                            );
+                            sql.0 += ")) cl0";
+                            for a in 1..category_batch.len() - 1 {
+                                sql.0 += format!(" INNER JOIN categorylinks cl{} on cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
+                                Platform::append_sql(
+                                    &mut sql,
+                                    &mut Platform::prep_quote(&category_batch[a].to_owned()),
+                                );
+                                sql.0 += ")";
+                            }
+                        }
+                        "union" => {
+                            let mut tmp: HashSet<String> = HashSet::new();
+                            category_batch.iter().for_each(|group| {
+                                group.iter().for_each(|s| {
+                                    tmp.insert(s.to_string());
+                                });
+                            });
+                            let tmp = tmp.iter().map(|s| s.to_owned()).collect::<Vec<String>>();
+                            sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
+                            sql.0 += lc;
+                            sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
+                            Platform::append_sql(&mut sql, &mut Platform::prep_quote(&tmp));
+                            sql.0 += ")) cl0";
+                        }
+                        other => {
+                            panic!("self.params.combine is '{}'", &other);
+                        }
+                    }
+                    sql.0 += " INNER JOIN (page p";
+                    sql.0 += ") ON p.page_id=cl0.cl_from";
+                    let mut pl2 = PageList::new_from_wiki(&wiki);
+                    if self.get_pages_for_primary(
+                        &mut conn,
+                        &primary.to_string(),
+                        &mut sql,
+                        &sql_before_after,
+                        &pl2,
+                        is_before_after_done,
+                    ) {
+                        if ret.is_empty() {
+                            ret.swap_entries(&mut pl2);
+                        } else {
+                            ret.union(Some(pl2)).unwrap();
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+
+                //data_loaded = true ;
+                return Some(ret);
+            }
+            "no_wikidata" => {
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
+                sql.0 += lc;
+                sql.0 += " FROM page p";
+                if !is_before_after_done {
+                    is_before_after_done = true;
+                    Platform::append_sql(&mut sql, &mut sql_before_after);
+                }
+                sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')" ;
+            }
+            "templates" | "links_from" => {
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len FROM page p".to_string() ;
+                if !is_before_after_done {
+                    is_before_after_done = true;
+                    Platform::append_sql(&mut sql, &mut sql_before_after);
+                }
+                sql.0 += " WHERE 1=1";
+            }
+            "pagelist" => {
+                let primary_pagelist = primary_pagelist.unwrap();
+                ret.wiki = primary_pagelist.wiki.to_owned();
+                if primary_pagelist.is_empty() {
+                    // Nothing to do, but that's OK
+                    return Some(ret);
+                }
+
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len FROM page p".to_string() ;
+                if !is_before_after_done {
+                    is_before_after_done = true;
+                    Platform::append_sql(&mut sql, &mut sql_before_after);
+                }
+                sql.0 += " WHERE (0=1)";
+
+                let nslist = primary_pagelist.group_by_namespace();
+                nslist.iter().for_each(|nsgroup| {
+                    sql.0 += " OR (p.page_namespace=";
+                    sql.0 += &nsgroup.0.to_string();
+                    sql.0 += " AND p.page_title IN (";
+                    Platform::append_sql(&mut sql, &mut Platform::prep_quote(nsgroup.1));
+                    sql.0 += "))";
+                });
+            }
             other => {
                 println!("SourceDatabase::get_pages: other primary '{}'", &other);
                 return None;
@@ -377,7 +489,7 @@ impl SourceDatabase {
 
         if self.get_pages_for_primary(
             &mut conn,
-            &primary,
+            &primary.to_string(),
             &mut sql,
             &sql_before_after,
             &ret,
@@ -392,12 +504,12 @@ impl SourceDatabase {
 
     fn get_pages_for_primary(
         &self,
-        conn: &mut my::Conn,
-        primary: &String,
-        sql: &mut SQLtuple,
-        sql_before_after: &SQLtuple,
-        pages_sublist: &PageList,
-        is_before_after_done: bool,
+        _conn: &mut my::Conn,
+        _primary: &String,
+        _sql: &mut SQLtuple,
+        _sql_before_after: &SQLtuple,
+        _pages_sublist: &PageList,
+        _is_before_after_done: bool,
     ) -> bool {
         false
     }

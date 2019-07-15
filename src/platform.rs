@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::datasource::*;
-use crate::datasource_database::SourceDatabase;
+use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 use regex::Regex;
@@ -58,7 +58,7 @@ impl Platform {
         // TODO legacy parameters
 
         let mut candidate_sources: Vec<Box<dyn DataSource>> = vec![];
-        candidate_sources.push(Box::new(SourceDatabase::new()));
+        candidate_sources.push(Box::new(SourceDatabase::new(self.db_params())));
         candidate_sources.push(Box::new(SourceSparql::new()));
         candidate_sources.push(Box::new(SourceManual::new()));
         candidate_sources.push(Box::new(SourcePagePile::new()));
@@ -92,6 +92,13 @@ impl Platform {
         println!("{:#?}", &combination);
 
         self.result = self.combine_results(&mut results, &combination);
+    }
+
+    pub fn db_params(&self) -> SourceDatabaseParameters {
+        let ret = SourceDatabaseParameters {
+            combine: "subset".to_string(), //TODO
+        };
+        ret
     }
 
     pub fn get_response(&self) -> MyResponse {

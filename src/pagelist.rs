@@ -1,7 +1,9 @@
+use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
-//use rayon::prelude::*;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+//use rayon::prelude::*;
 
 //type NamespaceID = mediawiki::api::NamespaceID;
 
@@ -50,15 +52,6 @@ pub struct PageList {
 }
 
 impl PageList {
-    /*
-    pub fn new() -> Self {
-        Self {
-            wiki: None,
-            entries: HashSet::new(),
-        }
-    }
-    */
-
     pub fn new_from_wiki(wiki: &str) -> Self {
         Self {
             wiki: Some(wiki.to_string()),
@@ -75,6 +68,41 @@ impl PageList {
             wiki: Some(wiki.to_string()),
             entries: entries_hashset,
         }
+    }
+
+    pub fn group_by_namespace(&self) -> HashMap<NamespaceID, Vec<String>> {
+        let mut ret: HashMap<NamespaceID, Vec<String>> = HashMap::new();
+        self.entries.iter().for_each(|entry| {
+            if !ret.contains_key(&entry.title.namespace_id()) {
+                ret.insert(entry.title.namespace_id(), vec![]);
+            }
+            ret.get_mut(&entry.title.namespace_id())
+                .unwrap()
+                .push(entry.title.pretty().to_string());
+        });
+        ret
+    }
+
+    pub fn swap_entries(&mut self, other: &mut PageList) {
+        std::mem::swap(&mut self.entries, &mut other.entries);
+        //let tmp = self.entries;
+        //self.entries = other.entries;
+        //other.entries = tmp;
+        //(self.entries, other.entries) = (other.entries, self.entries);
+    }
+
+    /*
+    pub fn entries_as_vec(&self) -> Vec<PageListEntry> {
+        self.entries.iter().cloned().collect::<Vec<PageListEntry>>()
+    }
+    */
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
     }
 
     pub fn add_entry(&mut self, entry: PageListEntry) {
