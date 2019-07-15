@@ -48,6 +48,10 @@ pub struct SourceDatabaseParameters {
     pub last_edit_bot: String,
     pub last_edit_anon: String,
     pub last_edit_flagged: String,
+    pub redirects: String,
+    pub page_wikidata_item: String,
+    pub larger: Option<usize>,
+    pub smaller: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -517,7 +521,7 @@ impl SourceDatabase {
     fn get_pages_for_primary(
         &self,
         _conn: &mut my::Conn,
-        _primary: &String,
+        primary: &String,
         mut sql: &mut SQLtuple,
         _sql_before_after: &SQLtuple,
         _pages_sublist: &PageList,
@@ -687,6 +691,32 @@ impl SourceDatabase {
                     " AND EXISTS (SELECT * FROM flaggedpage_pending WHERE p.page_id=fpp_page_id)"
             }
             _ => {}
+        }
+
+        // Misc
+        match self.params.redirects.as_str() {
+            "yes" => sql.0 += " AND p.page_is_redirect=1",
+            "no" => sql.0 += " AND p.page_is_redirect=0",
+            _ => {}
+        }
+        match self.params.larger {
+            Some(i) => {
+                sql.0 += " AND p.page_len>=";
+                sql.0 += i.to_string().as_str();
+            }
+            None => {}
+        }
+        match self.params.smaller {
+            Some(i) => {
+                sql.0 += " AND p.page_len<=";
+                sql.0 += i.to_string().as_str();
+            }
+            None => {}
+        }
+
+        // Speed up "Only pages without Wikidata items"
+        if primary != "no_wikidata" && self.params.page_wikidata_item == "without" {
+            sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')" ;
         }
 
         // TODO remove when done

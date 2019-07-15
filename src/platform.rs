@@ -122,6 +122,7 @@ impl Platform {
             last_edit_anon: self.get_param_default("edits[anons]", "both"),
             last_edit_flagged: self.get_param_default("edits[flagged]", "both"),
             page_image: self.get_param_blank("page_image"),
+            page_wikidata_item: self.get_param_blank("wikidata_item"),
             ores_type: self.get_param_blank("ores_type"),
             ores_prediction: self.get_param_blank("ores_prediction"),
             ores_prob_from: self
@@ -132,6 +133,13 @@ impl Platform {
                 .get_param_blank("ores_prob_to")
                 .parse::<f32>()
                 .unwrap_or(1.0),
+            redirects: self.get_param_blank("show_redirects"),
+            larger: self
+                .get_param("larger")
+                .map(|i| i.parse::<usize>().unwrap()),
+            smaller: self
+                .get_param("smaller")
+                .map(|i| i.parse::<usize>().unwrap()),
             namespace_ids: self
                 .form_parameters
                 .ns
