@@ -96,7 +96,48 @@ impl Platform {
 
     pub fn db_params(&self) -> SourceDatabaseParameters {
         let ret = SourceDatabaseParameters {
-            combine: "subset".to_string(), //TODO
+            combine: match self.form_parameters.params.get("combine") {
+                Some(x) => {
+                    if x == "union" {
+                        x.to_string()
+                    } else {
+                        "subset".to_string()
+                    }
+                }
+                _ => "subset".to_string(),
+            },
+            templates_yes: self.get_param_as_vec("templates_yes", "\n"),
+            templates_any: self.get_param_as_vec("templates_any", "\n"),
+            templates_no: self.get_param_as_vec("templates_no", "\n"),
+            templates_yes_talk_page: self.has_param("templates_use_talk_yes"),
+            templates_any_talk_page: self.has_param("templates_use_talk_any"),
+            templates_no_talk_page: self.has_param("templates_use_talk_no"),
+            linked_from_all: self.get_param_as_vec("outlinks_yes", "\n"),
+            linked_from_any: self.get_param_as_vec("outlinks_any", "\n"),
+            linked_from_none: self.get_param_as_vec("outlinks_no", "\n"),
+            links_to_all: self.get_param_as_vec("links_to_all", "\n"),
+            links_to_any: self.get_param_as_vec("links_to_any", "\n"),
+            links_to_none: self.get_param_as_vec("links_to_no", "\n"),
+            last_edit_bot: self.get_param_default("edits[bots]", "both"),
+            last_edit_anon: self.get_param_default("edits[anons]", "both"),
+            last_edit_flagged: self.get_param_default("edits[flagged]", "both"),
+            page_image: self.get_param_blank("page_image"),
+            ores_type: self.get_param_blank("ores_type"),
+            ores_prediction: self.get_param_blank("ores_prediction"),
+            ores_prob_from: self
+                .get_param_blank("ores_prob_from")
+                .parse::<f32>()
+                .unwrap_or(0.0),
+            ores_prob_to: self
+                .get_param_blank("ores_prob_to")
+                .parse::<f32>()
+                .unwrap_or(1.0),
+            namespace_ids: self
+                .form_parameters
+                .ns
+                .iter()
+                .cloned()
+                .collect::<Vec<usize>>(),
         };
         ret
     }
@@ -122,6 +163,10 @@ impl Platform {
 
     pub fn get_param_blank(&self, param: &str) -> String {
         self.get_param(param).unwrap_or("".to_string())
+    }
+
+    pub fn get_param_default(&self, param: &str, default: &str) -> String {
+        self.get_param(param).unwrap_or(default.to_string())
     }
 
     pub fn append_sql(sql: &mut SQLtuple, sub: &mut SQLtuple) {

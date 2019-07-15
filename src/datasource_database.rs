@@ -27,6 +27,27 @@ pub struct SourceDatabaseCatDepth {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseParameters {
     pub combine: String,
+    pub namespace_ids: Vec<usize>,
+    pub linked_from_all: Vec<String>,
+    pub linked_from_any: Vec<String>,
+    pub linked_from_none: Vec<String>,
+    pub links_to_all: Vec<String>,
+    pub links_to_any: Vec<String>,
+    pub links_to_none: Vec<String>,
+    pub templates_yes: Vec<String>,
+    pub templates_any: Vec<String>,
+    pub templates_no: Vec<String>,
+    pub templates_yes_talk_page: bool,
+    pub templates_any_talk_page: bool,
+    pub templates_no_talk_page: bool,
+    pub page_image: String,
+    pub ores_type: String,
+    pub ores_prediction: String,
+    pub ores_prob_from: f32,
+    pub ores_prob_to: f32,
+    pub last_edit_bot: String,
+    pub last_edit_anon: String,
+    pub last_edit_flagged: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,23 +315,12 @@ impl SourceDatabase {
         self.cat_pos = self.parse_category_list(&mut conn, &cat_pos);
         self.cat_neg = self.parse_category_list(&mut conn, &cat_neg);
 
-        let templates_yes = platform.get_param_as_vec("templates_yes", "\n");
-        let templates_any = platform.get_param_as_vec("templates_any", "\n");
-        let _templates_no = platform.get_param_as_vec("templates_no", "\n");
-
-        let linked_from_all = platform.get_param_as_vec("outlinks_yes", "\n");
-        let linked_from_any = platform.get_param_as_vec("outlinks_any", "\n");
-        let _linked_from_none = platform.get_param_as_vec("outlinks_no", "\n");
-
-        let links_to_all = platform.get_param_as_vec("links_to_all", "\n");
-        let links_to_any = platform.get_param_as_vec("links_to_any", "\n");
-        let _links_to_none = platform.get_param_as_vec("links_to_no", "\n");
-
-        self.has_pos_templates = !templates_yes.is_empty() || !templates_any.is_empty();
-        self.has_pos_linked_from = !linked_from_all.is_empty()
-            || !linked_from_any.is_empty()
-            || !links_to_all.is_empty()
-            || !links_to_any.is_empty();
+        self.has_pos_templates =
+            !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
+        self.has_pos_linked_from = !self.params.linked_from_all.is_empty()
+            || !self.params.linked_from_any.is_empty()
+            || !self.params.links_to_all.is_empty()
+            || !self.params.links_to_any.is_empty();
 
         let primary = if !self.cat_pos.is_empty() {
             "categories"
@@ -415,7 +425,7 @@ impl SourceDatabase {
                     }
                     sql.0 += " INNER JOIN (page p";
                     sql.0 += ") ON p.page_id=cl0.cl_from";
-                    let mut pl2 = PageList::new_from_wiki(&wiki);
+                    let mut pl2 = PageList::new_from_wiki(&wiki.clone());
                     if self.get_pages_for_primary(
                         &mut conn,
                         &primary.to_string(),
@@ -423,6 +433,7 @@ impl SourceDatabase {
                         &sql_before_after,
                         &pl2,
                         is_before_after_done,
+                        platform.state.get_api_for_wiki(wiki.clone())?,
                     ) {
                         if ret.is_empty() {
                             ret.swap_entries(&mut pl2);
@@ -494,6 +505,7 @@ impl SourceDatabase {
             &sql_before_after,
             &ret,
             is_before_after_done,
+            platform.state.get_api_for_wiki(wiki.clone())?,
         ) {
             //data_loaded = true ;
             Some(ret)
@@ -506,11 +518,178 @@ impl SourceDatabase {
         &self,
         _conn: &mut my::Conn,
         _primary: &String,
-        _sql: &mut SQLtuple,
+        mut sql: &mut SQLtuple,
         _sql_before_after: &SQLtuple,
         _pages_sublist: &PageList,
         _is_before_after_done: bool,
+        api: Api,
     ) -> bool {
+        // Namespaces
+        if !self.params.namespace_ids.is_empty() {
+            sql.0 += " AND p.page_namespace IN(";
+            sql.0 += &self
+                .params
+                .namespace_ids
+                .iter()
+                .map(|ns| ns.to_string())
+                .collect::<Vec<String>>()
+                .join(",");
+            sql.0 += ")";
+        }
+
+        // Negative categories
+        if !self.cat_neg.is_empty() {
+            self.cat_neg.iter().for_each(|cats|{
+                sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to IN (" ;
+                Platform::append_sql(&mut sql, &mut Platform::prep_quote(cats));
+                sql.0 += "))" ;
+            });
+        }
+
+        // Templates as secondary; template namespace only!
+        // TODO talk page
+        if self.has_pos_templates {
+            // All
+            self.params.templates_yes.iter().for_each(|t| {
+                let mut tmp = self.template_subquery(
+                    &vec![t.to_string()],
+                    self.params.templates_yes_talk_page,
+                    false,
+                );
+                Platform::append_sql(&mut sql, &mut tmp);
+            });
+
+            // Any
+            if !self.params.templates_any.is_empty() {
+                let mut tmp = self.template_subquery(
+                    &self.params.templates_any,
+                    self.params.templates_any_talk_page,
+                    false,
+                );
+                Platform::append_sql(&mut sql, &mut tmp);
+            }
+        }
+
+        // Negative templates
+        if !self.params.templates_no.is_empty() {
+            let mut tmp = self.template_subquery(
+                &self.params.templates_no,
+                self.params.templates_no_talk_page,
+                true,
+            );
+            Platform::append_sql(&mut sql, &mut tmp);
+        }
+
+        // Links from all
+        self.params.linked_from_all.iter().for_each(|l| {
+            sql.0 += " AND p.page_id IN ";
+            Platform::append_sql(
+                &mut sql,
+                &mut self.links_from_subquery(&vec![l.to_owned()], &api),
+            );
+        });
+
+        // Links from any
+        if !self.params.linked_from_any.is_empty() {
+            sql.0 += " AND p.page_id IN ";
+            Platform::append_sql(
+                &mut sql,
+                &mut self.links_from_subquery(&self.params.linked_from_any, &api),
+            );
+        }
+
+        // Links from none
+        if !self.params.linked_from_none.is_empty() {
+            sql.0 += " AND p.page_id NOT IN ";
+            Platform::append_sql(
+                &mut sql,
+                &mut self.links_from_subquery(&self.params.linked_from_none, &api),
+            );
+        }
+
+        // Links to all
+        self.params.links_to_all.iter().for_each(|l| {
+            sql.0 += " AND p.page_id IN ";
+            Platform::append_sql(
+                &mut sql,
+                &mut self.links_to_subquery(&vec![l.to_owned()], &api),
+            );
+        });
+
+        // Links to any
+        if !self.params.links_to_any.is_empty() {
+            sql.0 += " AND p.page_id IN ";
+            Platform::append_sql(
+                &mut sql,
+                &mut self.links_to_subquery(&self.params.links_to_any, &api),
+            );
+        }
+
+        // Links to none
+        if !self.params.links_to_none.is_empty() {
+            sql.0 += " AND p.page_id NOT IN ";
+            Platform::append_sql(
+                &mut sql,
+                &mut self.links_to_subquery(&self.params.links_to_none, &api),
+            );
+        }
+
+        // Lead image
+        match self.params.page_image.as_str() {
+            "yes" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))" ,
+            "free" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free')" ,
+            "nonfree" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image')" ,
+            "no" => sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))" ,
+            _ => {}
+        }
+
+        // ORES
+        // TODO Option<> instead of 0.0?
+        if self.params.ores_type != "any"
+            && (self.params.ores_prediction != "any"
+                || self.params.ores_prob_from != 0.0
+                || self.params.ores_prob_to != 1.0)
+        {
+            sql.0 += " AND EXISTS (SELECT * FROM ores_classification WHERE p.page_latest=oresc_rev AND oresc_model IN (SELECT oresm_id FROM ores_model WHERE oresm_is_current=1 AND oresm_name=?)" ;
+            sql.1.push(self.params.ores_type.to_owned());
+            match self.params.ores_prediction.as_str() {
+                "yes" => sql.0 += " AND oresc_is_predicted=1",
+                "no" => sql.0 += " AND oresc_is_predicted=0",
+                _ => {}
+            }
+            if self.params.ores_prob_from != 0.0 {
+                sql.0 += " AND oresc_probability>=";
+                sql.0 += self.params.ores_prob_from.to_string().as_str();
+            }
+            if self.params.ores_prob_to != 1.0 {
+                sql.0 += " AND oresc_probability<=";
+                sql.0 += self.params.ores_prob_to.to_string().as_str();
+            }
+            sql.0 += ")";
+        }
+
+        // Last edit
+        match self.params.last_edit_anon.as_str() {
+            "yes" => sql.0 +=" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NULL)" ,
+            "no" => sql.0 +=" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NOT NULL)" ,
+            _ => {}
+        }
+        match self.params.last_edit_bot.as_str() {
+            "yes" => sql.0 +=" AND EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')" ,
+            "no" => sql.0 +=" AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')" ,
+            _ => {}
+        }
+        match self.params.last_edit_flagged.as_str() {
+            "yes" => sql.0 +=
+                " AND NOT EXISTS (SELECT * FROM flaggedpage_pending WHERE p.page_id=fpp_page_id)",
+            "no" => {
+                sql.0 +=
+                    " AND EXISTS (SELECT * FROM flaggedpage_pending WHERE p.page_id=fpp_page_id)"
+            }
+            _ => {}
+        }
+
+        // TODO remove when done
         false
     }
 }
