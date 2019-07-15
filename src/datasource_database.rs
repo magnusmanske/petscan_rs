@@ -1,3 +1,4 @@
+use crate::app_state::AppState;
 use crate::datasource::DataSource;
 use crate::datasource::SQLtuple;
 use crate::pagelist::*;
@@ -11,6 +12,7 @@ use mysql as my;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 /*
 use serde_json::value::Value;
 */
@@ -43,8 +45,8 @@ pub struct SourceDatabaseParameters {
     pub page_image: String,
     pub ores_type: String,
     pub ores_prediction: String,
-    pub ores_prob_from: f32,
-    pub ores_prob_to: f32,
+    pub ores_prob_from: Option<f32>,
+    pub ores_prob_to: Option<f32>,
     pub last_edit_bot: String,
     pub last_edit_anon: String,
     pub last_edit_flagged: String,
@@ -54,6 +56,15 @@ pub struct SourceDatabaseParameters {
     pub smaller: Option<usize>,
     pub minlinks: Option<usize>,
     pub maxlinks: Option<usize>,
+    pub wiki: Option<String>,
+    pub gather_link_count: bool,
+    pub cat_pos: Vec<String>,
+    pub cat_neg: Vec<String>,
+    pub depth: u16,
+    pub max_age: Option<i64>,
+    pub only_new_since: bool,
+    pub before: String,
+    pub after: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,7 +76,6 @@ pub struct SourceDatabase {
     has_pos_templates: bool,
     has_pos_linked_from: bool,
     params: SourceDatabaseParameters,
-    wiki: Option<String>,
 }
 
 impl DataSource for SourceDatabase {
@@ -79,7 +89,7 @@ impl DataSource for SourceDatabase {
     }
 
     fn run(&mut self, platform: &Platform) -> Option<PageList> {
-        self.get_pages(platform, None)
+        self.get_pages(&platform.state, None)
     }
 }
 
@@ -93,8 +103,31 @@ impl SourceDatabase {
             has_pos_templates: false,
             has_pos_linked_from: false,
             params,
-            wiki: None,
         }
+    }
+
+    fn parse_category_depth(
+        &self,
+        cats: &Vec<String>,
+        default_depth: u16,
+    ) -> Vec<SourceDatabaseCatDepth> {
+        cats.iter()
+            .filter_map(|c| {
+                let mut parts = c.split("|");
+                let name = match parts.next() {
+                    Some(n) => n.to_string(),
+                    None => return None,
+                };
+                let depth = match parts.next() {
+                    Some(depth) => depth.parse::<u16>().ok()?,
+                    None => default_depth,
+                };
+                Some(SourceDatabaseCatDepth {
+                    name: name,
+                    depth: depth,
+                })
+            })
+            .collect()
     }
 
     fn go_depth(
@@ -266,62 +299,41 @@ impl SourceDatabase {
         ret
     }
 
-    fn parse_category_depth(
-        &self,
-        cats: &Vec<String>,
-        default_depth: u16,
-    ) -> Vec<SourceDatabaseCatDepth> {
-        cats.iter()
-            .filter_map(|c| {
-                let mut parts = c.split("|");
-                let name = match parts.next() {
-                    Some(n) => n.to_string(),
-                    None => return None,
-                };
-                let depth = match parts.next() {
-                    Some(depth) => depth.parse::<u16>().ok()?,
-                    None => default_depth,
-                };
-                Some(SourceDatabaseCatDepth {
-                    name: name,
-                    depth: depth,
-                })
-            })
-            .collect()
-    }
-
     pub fn get_pages(
         &mut self,
-        platform: &Platform,
+        state: &Arc<AppState>,
         primary_pagelist: Option<&PageList>,
     ) -> Option<PageList> {
-        self.wiki = match primary_pagelist {
-            Some(pl) => pl.wiki.clone(),
-            None => platform.get_param("wiki"),
-        };
+        // Take wiki from given pagelist
+        match primary_pagelist {
+            Some(pl) => {
+                if self.params.wiki.is_none() && pl.wiki.is_some() {
+                    self.params.wiki = pl.wiki.to_owned();
+                }
+            }
+            None => {}
+        }
+        println!("{:?}", &self.params);
 
         // Paranoia
-        if self.wiki.is_none() || self.wiki == Some("wiki".to_string()) {
+        if self.params.wiki.is_none() || self.params.wiki == Some("wiki".to_string()) {
             return None;
         }
 
-        let wiki = self.wiki.as_ref()?;
-        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let wiki = self.params.wiki.as_ref()?;
+        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut ret = PageList::new_from_wiki(&wiki);
-        let mut conn = platform
-            .state
-            .get_wiki_db_connection(&db_user_pass, &wiki)?;
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
 
-        let depth = platform
-            .get_param("depth")
-            .unwrap_or("0".to_string())
-            .parse::<u16>()
-            .ok()?;
-        let cat_pos =
-            self.parse_category_depth(&platform.get_param_as_vec("categories", "\n"), depth);
-        let cat_neg = self.parse_category_depth(&platform.get_param_as_vec("negcats", "\n"), depth);
-        self.cat_pos = self.parse_category_list(&mut conn, &cat_pos);
-        self.cat_neg = self.parse_category_list(&mut conn, &cat_neg);
+        self.cat_pos = self.parse_category_list(
+            &mut conn,
+            &self.parse_category_depth(&self.params.cat_pos, self.params.depth),
+        );
+        self.cat_neg = self.parse_category_list(
+            &mut conn,
+            &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
+        );
+        println!("{:?}/{:?}", &self.cat_pos, &self.cat_neg);
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
@@ -338,27 +350,27 @@ impl SourceDatabase {
             "links_from"
         } else if primary_pagelist.is_some() {
             "pagelist"
-        } else if platform.get_param("page_wikidata_item") == Some("without".to_string()) {
+        } else if self.params.page_wikidata_item == "without" {
             "no_wikidata"
         } else {
             return None;
         };
         println!("PRIMARY: {}", &primary);
 
-        let lc = if platform.has_param("minlinks") || platform.has_param("maxlinks") {
+        let link_count_sql = if self.params.gather_link_count {
             ",(SELECT count(*) FROM pagelinks WHERE pl_from=p.page_id) AS link_count"
         } else {
-            ""
+            ",0" // Dummy
         };
 
         let mut sql_before_after = Platform::sql_tuple();
-        let mut before: String = "".to_string();
-        let mut after: String = "".to_string();
+        let mut before: String = self.params.before.clone();
+        let mut after: String = self.params.after.clone();
         let mut is_before_after_done: bool = false;
-        match platform.get_param("max_age") {
+        match self.params.max_age {
             Some(max_age) => {
                 let utc: DateTime<Utc> = Utc::now();
-                let utc = utc.sub(Duration::hours(max_age.parse::<i64>().unwrap_or(0)));
+                let utc = utc.sub(Duration::hours(max_age));
                 before = "".to_string();
                 after = utc.format("%Y%m%d%H%M%S").to_string();
             }
@@ -369,7 +381,7 @@ impl SourceDatabase {
             is_before_after_done = true;
         } else {
             sql_before_after.0 = " INNER JOIN (revision r) on r.rev_page=p.page_id".to_string();
-            if platform.has_param("only_new_since") {
+            if self.params.only_new_since {
                 sql_before_after.0 += " AND r.rev_parent_id=0";
             }
             if !before.is_empty() {
@@ -397,15 +409,15 @@ impl SourceDatabase {
                     match self.params.combine.as_str() {
                         "subset" => {
                             sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
-                            sql.0 += lc;
-                            sql.0 += " FROM ( SELECT * from categorylinks where cl_to IN (";
+                            sql.0 += link_count_sql;
+                            sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
                             Platform::append_sql(
                                 &mut sql,
                                 &mut Platform::prep_quote(&category_batch[0].to_owned()),
                             );
                             sql.0 += ")) cl0";
-                            for a in 1..category_batch.len() - 1 {
-                                sql.0 += format!(" INNER JOIN categorylinks cl{} on cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
+                            for a in 1..category_batch.len() {
+                                sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
                                 Platform::append_sql(
                                     &mut sql,
                                     &mut Platform::prep_quote(&category_batch[a].to_owned()),
@@ -422,7 +434,7 @@ impl SourceDatabase {
                             });
                             let tmp = tmp.iter().map(|s| s.to_owned()).collect::<Vec<String>>();
                             sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
-                            sql.0 += lc;
+                            sql.0 += link_count_sql;
                             sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
                             Platform::append_sql(&mut sql, &mut Platform::prep_quote(&tmp));
                             sql.0 += ")) cl0";
@@ -441,7 +453,7 @@ impl SourceDatabase {
                         &mut sql_before_after,
                         &mut pl2,
                         &mut is_before_after_done,
-                        platform.state.get_api_for_wiki(wiki.clone())?,
+                        state.get_api_for_wiki(wiki.clone())?,
                     ) {
                         if ret.is_empty() {
                             ret.swap_entries(&mut pl2);
@@ -458,7 +470,7 @@ impl SourceDatabase {
             }
             "no_wikidata" => {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
-                sql.0 += lc;
+                sql.0 += link_count_sql;
                 sql.0 += " FROM page p";
                 if !is_before_after_done {
                     is_before_after_done = true;
@@ -506,7 +518,7 @@ impl SourceDatabase {
 
         //if ( !getPagesforPrimary ( db , primary , sql , sql_before_after , pages , is_before_after_done ) ) return false ;
 
-        let wiki = self.wiki.as_ref()?;
+        let wiki = self.params.wiki.as_ref()?;
         if self.get_pages_for_primary(
             &mut conn,
             &primary.to_string(),
@@ -514,7 +526,7 @@ impl SourceDatabase {
             &mut sql_before_after,
             &mut ret,
             &mut is_before_after_done,
-            platform.state.get_api_for_wiki(wiki.clone())?,
+            state.get_api_for_wiki(wiki.clone())?,
         ) {
             //data_loaded = true ;
             Some(ret)
@@ -653,11 +665,10 @@ impl SourceDatabase {
         }
 
         // ORES
-        // TODO Option<> instead of 0.0?
         if self.params.ores_type != "any"
             && (self.params.ores_prediction != "any"
-                || self.params.ores_prob_from != 0.0
-                || self.params.ores_prob_to != 1.0)
+                || self.params.ores_prob_from.is_some()
+                || self.params.ores_prob_to.is_some())
         {
             sql.0 += " AND EXISTS (SELECT * FROM ores_classification WHERE p.page_latest=oresc_rev AND oresc_model IN (SELECT oresm_id FROM ores_model WHERE oresm_is_current=1 AND oresm_name=?)" ;
             sql.1.push(self.params.ores_type.to_owned());
@@ -666,13 +677,19 @@ impl SourceDatabase {
                 "no" => sql.0 += " AND oresc_is_predicted=0",
                 _ => {}
             }
-            if self.params.ores_prob_from != 0.0 {
-                sql.0 += " AND oresc_probability>=";
-                sql.0 += self.params.ores_prob_from.to_string().as_str();
+            match self.params.ores_prob_from {
+                Some(x) => {
+                    sql.0 += " AND oresc_probability>=";
+                    sql.0 += x.to_string().as_str();
+                }
+                None => {}
             }
-            if self.params.ores_prob_to != 1.0 {
-                sql.0 += " AND oresc_probability<=";
-                sql.0 += self.params.ores_prob_to.to_string().as_str();
+            match self.params.ores_prob_to {
+                Some(x) => {
+                    sql.0 += " AND oresc_probability<=";
+                    sql.0 += x.to_string().as_str();
+                }
+                None => {}
             }
             sql.0 += ")";
         }
@@ -750,7 +767,7 @@ impl SourceDatabase {
 
         println!("SQL:{:?}", &sql);
 
-        let mut pl1 = PageList::new_from_wiki(self.wiki.as_ref().unwrap().as_str());
+        let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
 
         let sql = sql.clone(); // TODO don't do that
         let result = match conn.prep_exec(sql.0, sql.1) {
@@ -762,8 +779,8 @@ impl SourceDatabase {
         };
         let mut had_page: HashSet<usize> = HashSet::new();
         for row in result {
-            let (page_id, page_title, page_namespace, page_timestamp, page_bytes) =
-                my::from_row::<(usize, String, NamespaceID, String, usize)>(row.unwrap());
+            let (page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count) =
+                my::from_row::<(usize, String, NamespaceID, String, usize, usize)>(row.unwrap());
             if had_page.contains(&page_id) {
                 continue;
             }
@@ -772,6 +789,9 @@ impl SourceDatabase {
             entry.page_id = Some(page_id);
             entry.page_bytes = Some(page_bytes);
             entry.page_timestamp = Some(page_timestamp);
+            if self.params.gather_link_count {
+                entry.link_count = Some(link_count);
+            }
             pl1.add_entry(entry);
         }
 

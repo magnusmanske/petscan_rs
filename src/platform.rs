@@ -95,8 +95,22 @@ impl Platform {
     }
 
     pub fn db_params(&self) -> SourceDatabaseParameters {
+        /*
+        // TODO Legacy parameters
+        if ( params.find("comb_subset") != params.end() ) params["combination"] = "subset" ;
+        if ( params.find("comb_union") != params.end() ) params["combination"] = "union" ;
+        if ( params.find("get_q") != params.end() ) params["wikidata_item"] = "any" ;
+        if ( params.find("wikidata") != params.end() ) params["wikidata_item"] = "any" ;
+        if ( params.find("wikidata_no_item") != params.end() ) params["wikidata_item"] = "without" ;
+        */
+
+        let depth: u16 = self
+            .get_param("depth")
+            .unwrap_or("0".to_string())
+            .parse::<u16>()
+            .unwrap_or(0);
         let ret = SourceDatabaseParameters {
-            combine: match self.form_parameters.params.get("combine") {
+            combine: match self.form_parameters.params.get("combination") {
                 Some(x) => {
                     if x == "union" {
                         x.to_string()
@@ -106,6 +120,12 @@ impl Platform {
                 }
                 _ => "subset".to_string(),
             },
+            only_new_since: self.has_param("only_new_since"),
+            max_age: self
+                .get_param("max_age")
+                .map(|x| x.parse::<i64>().unwrap_or(0)),
+            before: self.get_param_blank("before"),
+            after: self.get_param_blank("after"),
             templates_yes: self.get_param_as_vec("templates_yes", "\n"),
             templates_any: self.get_param_as_vec("templates_any", "\n"),
             templates_no: self.get_param_as_vec("templates_no", "\n"),
@@ -121,18 +141,20 @@ impl Platform {
             last_edit_bot: self.get_param_default("edits[bots]", "both"),
             last_edit_anon: self.get_param_default("edits[anons]", "both"),
             last_edit_flagged: self.get_param_default("edits[flagged]", "both"),
-            page_image: self.get_param_blank("page_image"),
-            page_wikidata_item: self.get_param_blank("wikidata_item"),
+            gather_link_count: self.has_param("minlinks") || self.has_param("maxlinks"),
+            page_image: self.get_param_default("page_image", "any"),
+            page_wikidata_item: self.get_param_default("wikidata_item", "any"),
             ores_type: self.get_param_blank("ores_type"),
-            ores_prediction: self.get_param_blank("ores_prediction"),
+            ores_prediction: self.get_param_default("ores_prediction", "any"),
+            depth: depth,
+            cat_pos: self.get_param_as_vec("categories", "\n"),
+            cat_neg: self.get_param_as_vec("negcats", "\n"),
             ores_prob_from: self
-                .get_param_blank("ores_prob_from")
-                .parse::<f32>()
-                .unwrap_or(0.0),
+                .get_param("ores_prob_from")
+                .map(|x| x.parse::<f32>().unwrap_or(0.0)),
             ores_prob_to: self
-                .get_param_blank("ores_prob_to")
-                .parse::<f32>()
-                .unwrap_or(1.0),
+                .get_param("ores_prob_to")
+                .map(|x| x.parse::<f32>().unwrap_or(1.0)),
             redirects: self.get_param_blank("show_redirects"),
             minlinks: self
                 .get_param("minlinks")
@@ -146,6 +168,7 @@ impl Platform {
             smaller: self
                 .get_param("smaller")
                 .map(|i| i.parse::<usize>().unwrap()),
+            wiki: self.get_main_wiki(),
             namespace_ids: self
                 .form_parameters
                 .ns
@@ -154,6 +177,17 @@ impl Platform {
                 .collect::<Vec<usize>>(),
         };
         ret
+    }
+
+    pub fn get_main_wiki(&self) -> Option<String> {
+        // TODO
+        let language = self.get_param("language")?;
+        let project = self.get_param("project")?;
+        if project == "wikipedia" {
+            Some(language.to_owned() + "wiki")
+        } else {
+            None
+        }
     }
 
     pub fn get_response(&self) -> MyResponse {
@@ -180,7 +214,12 @@ impl Platform {
     }
 
     pub fn get_param_default(&self, param: &str, default: &str) -> String {
-        self.get_param(param).unwrap_or(default.to_string())
+        let ret = self.get_param(param).unwrap_or(default.to_string());
+        if ret.is_empty() {
+            default.to_string()
+        } else {
+            ret
+        }
     }
 
     pub fn append_sql(sql: &mut SQLtuple, sub: &mut SQLtuple) {

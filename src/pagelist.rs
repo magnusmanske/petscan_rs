@@ -12,12 +12,13 @@ use std::hash::{Hash, Hasher};
 #[derive(Debug, Clone)]
 pub struct PageListEntry {
     title: Title,
-    pub does_exist: Option<bool>,
-    pub is_redirect: Option<bool>,
+    //pub does_exist: Option<bool>,
+    //pub is_redirect: Option<bool>,
     pub wikidata_item: Option<String>,
     pub page_id: Option<usize>,
     pub page_bytes: Option<usize>,
     pub page_timestamp: Option<String>,
+    pub link_count: Option<usize>,
 }
 
 impl Hash for PageListEntry {
@@ -39,12 +40,13 @@ impl PageListEntry {
     pub fn new(title: Title) -> Self {
         Self {
             title: title,
-            does_exist: None,
-            is_redirect: None,
+            //does_exist: None,
+            //is_redirect: None,
             wikidata_item: None,
             page_id: None,
             page_bytes: None,
             page_timestamp: None,
+            link_count: None,
         }
     }
 }
