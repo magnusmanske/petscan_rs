@@ -15,6 +15,9 @@ pub struct PageListEntry {
     pub does_exist: Option<bool>,
     pub is_redirect: Option<bool>,
     pub wikidata_item: Option<String>,
+    pub page_id: Option<usize>,
+    pub page_bytes: Option<usize>,
+    pub page_timestamp: Option<String>,
 }
 
 impl Hash for PageListEntry {
@@ -39,6 +42,9 @@ impl PageListEntry {
             does_exist: None,
             is_redirect: None,
             wikidata_item: None,
+            page_id: None,
+            page_bytes: None,
+            page_timestamp: None,
         }
     }
 }

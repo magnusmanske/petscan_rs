@@ -75,12 +75,12 @@ impl Platform {
 
         let mut results: HashMap<String, Option<PageList>> = HashMap::new();
         // TODO threads
-        candidate_sources
-            .iter()
-            .filter(|source| source.can_run(&self))
-            .for_each(|source| {
+
+        for source in &mut candidate_sources {
+            if source.can_run(&self) {
                 results.insert(source.name(), source.run(&self));
-            });
+            }
+        }
 
         let available_sources = candidate_sources
             .iter()
@@ -134,6 +134,12 @@ impl Platform {
                 .parse::<f32>()
                 .unwrap_or(1.0),
             redirects: self.get_param_blank("show_redirects"),
+            minlinks: self
+                .get_param("minlinks")
+                .map(|i| i.parse::<usize>().unwrap()),
+            maxlinks: self
+                .get_param("maxlinks")
+                .map(|i| i.parse::<usize>().unwrap()),
             larger: self
                 .get_param("larger")
                 .map(|i| i.parse::<usize>().unwrap()),

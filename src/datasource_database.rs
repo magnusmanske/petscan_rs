@@ -52,6 +52,8 @@ pub struct SourceDatabaseParameters {
     pub page_wikidata_item: String,
     pub larger: Option<usize>,
     pub smaller: Option<usize>,
+    pub minlinks: Option<usize>,
+    pub maxlinks: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +65,7 @@ pub struct SourceDatabase {
     has_pos_templates: bool,
     has_pos_linked_from: bool,
     params: SourceDatabaseParameters,
+    wiki: Option<String>,
 }
 
 impl DataSource for SourceDatabase {
@@ -75,8 +78,8 @@ impl DataSource for SourceDatabase {
         platform.has_param("categories")
     }
 
-    fn run(&self, _platform: &Platform) -> Option<PageList> {
-        None // TODO
+    fn run(&mut self, platform: &Platform) -> Option<PageList> {
+        self.get_pages(platform, None)
     }
 }
 
@@ -90,6 +93,7 @@ impl SourceDatabase {
             has_pos_templates: false,
             has_pos_linked_from: false,
             params,
+            wiki: None,
         }
     }
 
@@ -291,17 +295,17 @@ impl SourceDatabase {
         platform: &Platform,
         primary_pagelist: Option<&PageList>,
     ) -> Option<PageList> {
-        let wiki = match primary_pagelist {
+        self.wiki = match primary_pagelist {
             Some(pl) => pl.wiki.clone(),
             None => platform.get_param("wiki"),
         };
 
         // Paranoia
-        if wiki.is_none() || wiki == Some("wiki".to_string()) {
+        if self.wiki.is_none() || self.wiki == Some("wiki".to_string()) {
             return None;
         }
-        let wiki = wiki.unwrap();
 
+        let wiki = self.wiki.as_ref()?;
         let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut ret = PageList::new_from_wiki(&wiki);
         let mut conn = platform
@@ -434,9 +438,9 @@ impl SourceDatabase {
                         &mut conn,
                         &primary.to_string(),
                         &mut sql,
-                        &sql_before_after,
-                        &pl2,
-                        is_before_after_done,
+                        &mut sql_before_after,
+                        &mut pl2,
+                        &mut is_before_after_done,
                         platform.state.get_api_for_wiki(wiki.clone())?,
                     ) {
                         if ret.is_empty() {
@@ -502,13 +506,14 @@ impl SourceDatabase {
 
         //if ( !getPagesforPrimary ( db , primary , sql , sql_before_after , pages , is_before_after_done ) ) return false ;
 
+        let wiki = self.wiki.as_ref()?;
         if self.get_pages_for_primary(
             &mut conn,
             &primary.to_string(),
             &mut sql,
-            &sql_before_after,
-            &ret,
-            is_before_after_done,
+            &mut sql_before_after,
+            &mut ret,
+            &mut is_before_after_done,
             platform.state.get_api_for_wiki(wiki.clone())?,
         ) {
             //data_loaded = true ;
@@ -520,12 +525,12 @@ impl SourceDatabase {
 
     fn get_pages_for_primary(
         &self,
-        _conn: &mut my::Conn,
+        conn: &mut my::Conn,
         primary: &String,
         mut sql: &mut SQLtuple,
-        _sql_before_after: &SQLtuple,
-        _pages_sublist: &PageList,
-        _is_before_after_done: bool,
+        sql_before_after: &mut SQLtuple,
+        pages_sublist: &mut PageList,
+        is_before_after_done: &mut bool,
         api: Api,
     ) -> bool {
         // Namespaces
@@ -719,7 +724,59 @@ impl SourceDatabase {
             sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')" ;
         }
 
-        // TODO remove when done
-        false
+        if !*is_before_after_done {
+            Platform::append_sql(sql, sql_before_after);
+            *is_before_after_done = true;
+        }
+
+        // Link count
+        let mut having: Vec<SQLtuple> = vec![];
+        match self.params.minlinks {
+            Some(l) => having.push(("link_count>=".to_owned() + l.to_string().as_str(), vec![])),
+            None => {}
+        }
+        match self.params.maxlinks {
+            Some(l) => having.push(("link_count<=".to_owned() + l.to_string().as_str(), vec![])),
+            None => {}
+        }
+
+        // HAVING
+        if !having.is_empty() {
+            sql.0 += " HAVING ";
+            for mut h in having {
+                Platform::append_sql(sql, &mut h);
+            }
+        }
+
+        println!("SQL:{:?}", &sql);
+
+        let mut pl1 = PageList::new_from_wiki(self.wiki.as_ref().unwrap().as_str());
+
+        let sql = sql.clone(); // TODO don't do that
+        let result = match conn.prep_exec(sql.0, sql.1) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("ERROR: {:?}", e);
+                return false;
+            }
+        };
+        let mut had_page: HashSet<usize> = HashSet::new();
+        for row in result {
+            let (page_id, page_title, page_namespace, page_timestamp, page_bytes) =
+                my::from_row::<(usize, String, NamespaceID, String, usize)>(row.unwrap());
+            if had_page.contains(&page_id) {
+                continue;
+            }
+            had_page.insert(page_id);
+            let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
+            entry.page_id = Some(page_id);
+            entry.page_bytes = Some(page_bytes);
+            entry.page_timestamp = Some(page_timestamp);
+            pl1.add_entry(entry);
+        }
+
+        pl1.swap_entries(pages_sublist);
+
+        true
     }
 }

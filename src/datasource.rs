@@ -24,7 +24,7 @@ pub type SQLtuple = (String, Vec<String>);
 
 pub trait DataSource {
     fn can_run(&self, platform: &Platform) -> bool;
-    fn run(&self, platform: &Platform) -> Option<PageList>;
+    fn run(&mut self, platform: &Platform) -> Option<PageList>;
     fn name(&self) -> String;
 
     fn entry_from_entity(&self, entity: &str) -> Option<PageListEntry> {
@@ -53,7 +53,7 @@ impl DataSource for SourceLabels {
             || platform.has_param("labels_no")
     }
 
-    fn run(&self, platform: &Platform) -> Option<PageList> {
+    fn run(&mut self, platform: &Platform) -> Option<PageList> {
         let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let sql = platform.get_label_sql();
         let mut ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
@@ -101,7 +101,7 @@ impl DataSource for SourceWikidata {
         platform.has_param("wpiu_no_statements") && platform.has_param("wikidata_source_sites")
     }
 
-    fn run(&self, platform: &Platform) -> Option<PageList> {
+    fn run(&mut self, platform: &Platform) -> Option<PageList> {
         let no_statements = platform.has_param("wpiu_no_statements");
         let sites = platform.get_param("wikidata_source_sites")?;
         let sites: Vec<String> = sites.split(",").map(|s| s.to_string()).collect();
@@ -169,7 +169,7 @@ impl DataSource for SourcePagePile {
         platform.has_param("pagepile")
     }
 
-    fn run(&self, platform: &Platform) -> Option<PageList> {
+    fn run(&mut self, platform: &Platform) -> Option<PageList> {
         let pagepile = platform.get_param("pagepile")?;
         let api = platform
             .state
@@ -219,7 +219,7 @@ impl DataSource for SourceSearch {
             && platform.has_param("search_max_results")
     }
 
-    fn run(&self, platform: &Platform) -> Option<PageList> {
+    fn run(&mut self, platform: &Platform) -> Option<PageList> {
         let wiki = platform.get_param("search_wiki")?;
         let query = platform.get_param("search_query")?;
         let max = platform
@@ -263,7 +263,7 @@ impl DataSource for SourceManual {
         platform.has_param("manual_list") && platform.has_param("manual_list_wiki")
     }
 
-    fn run(&self, platform: &Platform) -> Option<PageList> {
+    fn run(&mut self, platform: &Platform) -> Option<PageList> {
         let wiki = platform.get_param("manual_list_wiki")?;
         let api = platform.state.get_api_for_wiki(wiki.to_string())?;
         let entries: Vec<PageListEntry> = platform
@@ -305,7 +305,7 @@ impl DataSource for SourceSparql {
         platform.has_param("sparql")
     }
 
-    fn run(&self, platform: &Platform) -> Option<PageList> {
+    fn run(&mut self, platform: &Platform) -> Option<PageList> {
         let sparql = platform.get_param("sparql")?;
         let api = Api::new("https://www.wikidata.org/w/api.php").ok()?;
         let result = api.sparql_query(sparql.as_str()).ok()?;
