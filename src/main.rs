@@ -61,12 +61,12 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
         }
     }
     state.modify_threads_running(1);
-    let mut platform = Platform::new_from_parameters(&form_parameters, state);
+    let mut platform = Platform::new_from_parameters(&form_parameters, &state);
     platform.run();
     platform.state.modify_threads_running(-1);
 
-    println!("New query:\n{}\n", form_parameters.to_string());
-    //let psid = state.get_new_psid_for_query(form_parameters.to_string()); // TODO
+    let psid = state.get_new_psid_for_query(&form_parameters.to_string());
+    println!("New PSID: {:?}", psid);
 
     platform.get_response()
 }

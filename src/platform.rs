@@ -46,7 +46,7 @@ pub struct Platform {
 }
 
 impl Platform {
-    pub fn new_from_parameters(form_parameters: &FormParameters, state: State<AppState>) -> Self {
+    pub fn new_from_parameters(form_parameters: &FormParameters, state: &State<AppState>) -> Self {
         Self {
             form_parameters: Arc::new((*form_parameters).clone()),
             state: Arc::new(state.inner().clone()),
