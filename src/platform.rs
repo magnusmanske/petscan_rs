@@ -343,9 +343,67 @@ impl Platform {
         let _y = Combination::Not((Box::new(Combination::None), Box::new(Combination::None)));
     }
 
-    fn parse_combination_string(&self, _s: &String) -> Combination {
-        // TODO
-        Combination::Source("".to_string())
+    fn parse_combination_string(s: &String) -> Combination {
+        lazy_static! {
+            static ref RE: Regex = Regex::new(r"\w+(?:'\w+)?|[^\w\s]").unwrap();
+        }
+        match s.trim().to_lowercase().as_str() {
+            "" => return Combination::None,
+            "categories" | "sparql" | "manual" | "pagepile" | "wikidata" => {
+                return Combination::Source(s.to_string())
+            }
+            _ => {}
+        }
+        let mut parts: Vec<String> = RE
+            .captures_iter(s)
+            .map(|cap| cap.get(0).unwrap().as_str().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        // Problem?
+        if parts.len() < 3 {
+            return Combination::None;
+        }
+
+        let left = if parts.get(0).unwrap() == "(" {
+            let mut cnt = 0;
+            let mut new_left: Vec<String> = vec![];
+            loop {
+                if parts.is_empty() {
+                    return Combination::None; // Failure to parse
+                }
+                let x = parts.remove(0);
+                if x == "(" {
+                    if cnt > 0 {
+                        new_left.push(x.to_string());
+                    }
+                    cnt += 1;
+                } else if x == ")" {
+                    cnt -= 1;
+                    if cnt == 0 {
+                        break;
+                    } else {
+                        new_left.push(x.to_string());
+                    }
+                } else {
+                    new_left.push(x.to_string());
+                }
+            }
+            new_left.join(" ")
+        } else {
+            parts.remove(0)
+        };
+        if parts.is_empty() {
+            return Self::parse_combination_string(&left);
+        }
+        let comb = parts.remove(0);
+        let left = Box::new(Self::parse_combination_string(&left));
+        let rest = Box::new(Self::parse_combination_string(&parts.join(" ")));
+        match comb.trim().to_lowercase().as_str() {
+            "and" => Combination::Intersection((left, rest)),
+            "or" => Combination::Union((left, rest)),
+            "not" => Combination::Not((left, rest)),
+            _ => Combination::None,
+        }
     }
 
     /// Checks is the parameter is set, and non-blank
@@ -369,7 +427,7 @@ impl Platform {
 
     fn get_combination(&self, available_sources: Vec<String>) -> Combination {
         match self.get_param("source_combination") {
-            Some(combination_string) => self.parse_combination_string(&combination_string),
+            Some(combination_string) => Self::parse_combination_string(&combination_string),
             None => {
                 let mut comb = Combination::None;
                 for source in &available_sources {
@@ -437,5 +495,24 @@ impl Platform {
 
     pub fn form_parameters(&self) -> &Arc<FormParameters> {
         &self.form_parameters
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_combination_string() {
+        let res =
+            Platform::parse_combination_string(&"categories NOT (sparql OR pagepile)".to_string());
+        let expected = Combination::Not((
+            Box::new(Combination::Source("categories".to_string())),
+            Box::new(Combination::Union((
+                Box::new(Combination::Source("sparql".to_string())),
+                Box::new(Combination::Source("pagepile".to_string())),
+            ))),
+        ));
+        assert_eq!(res, expected);
     }
 }
