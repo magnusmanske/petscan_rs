@@ -43,6 +43,7 @@ pub struct Platform {
     form_parameters: Arc<FormParameters>,
     pub state: Arc<AppState>,
     result: Option<PageList>,
+    pub psid: Option<u64>,
 }
 
 impl Platform {
@@ -51,6 +52,7 @@ impl Platform {
             form_parameters: Arc::new((*form_parameters).clone()),
             state: Arc::new(state.inner().clone()),
             result: None,
+            psid: None,
         }
     }
 
