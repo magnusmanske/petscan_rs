@@ -26,7 +26,7 @@ use std::fs::File;
 //use mysql as my;
 //use std::sync::Arc;
 
-fn process_form(form_parameters: FormParameters, state: State<AppState>) -> MyResponse {
+fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> MyResponse {
     // TODO check restart-code
     if state.is_shutting_down() {
         return MyResponse {
@@ -40,11 +40,34 @@ fn process_form(form_parameters: FormParameters, state: State<AppState>) -> MyRe
             content_type: ContentType::HTML,
         };
     }
-    if form_parameters.params.contains_key("psid") {}
+    if form_parameters.params.contains_key("psid") {
+        let psid = form_parameters.params.get("psid").unwrap().to_string();
+        if !psid.is_empty() {
+            match state.get_query_from_psid(&psid) {
+                Some(psid_query) => {
+                    let psid_params = FormParameters::outcome_from_query(&psid_query);
+                    form_parameters.rebase(&psid_params);
+                }
+                None => {
+                    return MyResponse {
+                        s: format!(
+                            "ERROR: PSID {} was requested, but not found in database",
+                            psid
+                        ),
+                        content_type: ContentType::Plain,
+                    };
+                }
+            }
+        }
+    }
     state.modify_threads_running(1);
     let mut platform = Platform::new_from_parameters(&form_parameters, state);
     platform.run();
     platform.state.modify_threads_running(-1);
+
+    println!("New query:\n{}\n", form_parameters.to_string());
+    //let psid = state.get_new_psid_for_query(form_parameters.to_string()); // TODO
+
     platform.get_response()
 }
 
@@ -65,7 +88,7 @@ fn main() {
         .unwrap()
         .to_string();
     let path = basedir.to_owned() + "/config.json";
-    let file = File::open(path).expect(format!("Can not open config file at {}", path));
+    let file = File::open(&path).expect(format!("Can not open config file at {}", &path).as_str());
     let petscan_config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 

@@ -1,6 +1,7 @@
 use regex::Regex;
 use rocket::data::Outcome as DataOutcome;
 use rocket::data::{FromData, Transform, Transformed};
+use rocket::http::uri::Uri;
 use rocket::http::{Method, Status};
 use rocket::request::{self, FromRequest};
 use rocket::Outcome;
@@ -19,13 +20,11 @@ pub struct FormParameters {
 }
 
 impl FormParameters {
-    pub fn outcome_from_query(query: &str) -> Self {
-        // TODO PSID IMPORTANT for parsing see https://api.rocket.rs/v0.4/rocket/request/struct.Request.html#method.uri
+    /// Extracts namespaces from parameter list
+    fn ns_from_params(params: &HashMap<String, String>) -> HashSet<usize> {
         lazy_static! {
             static ref RE: Regex = Regex::new(r#"^ns\[(\d+)\]$"#).unwrap();
         }
-        let parsed_url = Url::parse(&("https://127.0.0.1/?".to_string() + query)).unwrap();
-        let params: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
         let mut ns: HashSet<usize> = HashSet::new();
         params
             .iter()
@@ -40,10 +39,43 @@ impl FormParameters {
                     }
                 }
             });
+        ns
+    }
+
+    /// Parses a query string into a new object
+    pub fn outcome_from_query(query: &str) -> Self {
+        // TODO PSID IMPORTANT for parsing see https://api.rocket.rs/v0.4/rocket/request/struct.Request.html#method.uri
+        let parsed_url = Url::parse(&("https://127.0.0.1/?".to_string() + query)).unwrap();
+        let params: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
+        let ns = Self::ns_from_params(&params);
         FormParameters {
             params: params,
             ns: ns,
         }
+    }
+
+    /// Amends a an object based on a previous one (used for PSID in main.rs)
+    pub fn rebase(&mut self, base: &FormParameters) {
+        base.params.iter().for_each(|(k, v)| {
+            if self.params.contains_key(k) {
+                if self.params.get(k).unwrap().is_empty() {
+                    self.params.insert(k.to_string(), v.to_string());
+                }
+            } else {
+                self.params.insert(k.to_string(), v.to_string());
+            }
+        });
+        self.ns = Self::ns_from_params(&self.params);
+    }
+
+    pub fn to_string(&self) -> String {
+        self.params
+            .iter()
+            .map(|(k, v)| {
+                Uri::percent_encode(k).to_string() + "=" + &Uri::percent_encode(v).to_string()
+            })
+            .collect::<Vec<String>>()
+            .join("&")
     }
 }
 

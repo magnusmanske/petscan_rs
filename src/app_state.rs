@@ -1,5 +1,6 @@
 extern crate rocket;
 
+use chrono::prelude::*;
 use mediawiki::api::Api;
 use mysql as my;
 use rand::seq::SliceRandom;
@@ -21,6 +22,7 @@ pub type DbUserPass = (String, String);
 pub struct AppState {
     pub db_pool: Vec<Arc<Mutex<DbUserPass>>>,
     pub config: Value,
+    tool_db_mutex: Arc<Mutex<DbUserPass>>,
     threads_running: Arc<Mutex<i64>>,
     shutting_down: Arc<Mutex<bool>>,
     site_matrix: Value,
@@ -30,12 +32,17 @@ pub struct AppState {
 impl AppState {
     pub fn new_from_config(config: &Value) -> Self {
         let main_page_path = "./html/index.html";
+        let tool_db_access_tuple = (
+            config["user"].as_str().unwrap().to_string(),
+            config["password"].as_str().unwrap().to_string(),
+        );
         let mut ret = Self {
             db_pool: vec![],
             config: config.to_owned(),
             threads_running: Arc::new(Mutex::new(0)),
             shutting_down: Arc::new(Mutex::new(false)),
             site_matrix: AppState::load_site_matrix(),
+            tool_db_mutex: Arc::new(Mutex::new(tool_db_access_tuple)),
             main_page: String::from_utf8_lossy(&fs::read(main_page_path).unwrap())
                 .parse()
                 .unwrap(),
@@ -80,7 +87,16 @@ impl AppState {
         (host, schema)
     }
 
-    /// Returns a random mutex. The mutex value itself is just a placeholder!
+    /// Returns the server and database name for the tool db, as a tuple
+    pub fn db_host_and_schema_for_tool_db(&self) -> (String, String) {
+        // TESTING
+        // ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N
+        let host = self.config["host"].as_str().unwrap().to_string();
+        let schema = self.config["schema"].as_str().unwrap().to_string();
+        (host, schema)
+    }
+
+    /// Returns a random mutex. The mutex value itself contains a user name and password for DB login!
     pub fn get_db_mutex(&self) -> &Arc<Mutex<DbUserPass>> {
         &self.db_pool.choose(&mut rand::thread_rng()).unwrap()
     }
@@ -170,6 +186,73 @@ impl AppState {
                 },
             })
             .next()
+    }
+
+    pub fn get_tool_db_connection(&self, tool_db_user_pass: DbUserPass) -> Option<my::Conn> {
+        let (host, schema) = self.db_host_and_schema_for_tool_db();
+        let (user, pass) = tool_db_user_pass.clone();
+        let mut builder = my::OptsBuilder::new();
+        builder
+            .ip_or_hostname(Some(host.to_owned()))
+            .db_name(Some(schema))
+            .user(Some(user))
+            .pass(Some(pass));
+        //let port = self.config["db_port"].as_u64().unwrap_or(3306) as u16; // TODO testing locally
+        let port: u16 = 3308;
+        builder.tcp_port(port);
+
+        match my::Conn::new(builder) {
+            Ok(conn) => Some(conn),
+            Err(e) => {
+                println!(
+                    "AppState::get_query_from_psid can't get DB connection to {}:{} : '{}'",
+                    &host, port, &e
+                );
+                None
+            }
+        }
+    }
+
+    pub fn get_query_from_psid(&self, psid: &String) -> Option<String> {
+        let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder
+        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
+
+        let sql = format!(
+            "SELECT querystring FROM query WHERE id={}",
+            psid.parse::<usize>().unwrap()
+        );
+        let result = match conn.prep_exec(sql, ()) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("AppState::get_query_from_psid query error: {:?}", e);
+                return None;
+            }
+        };
+        for row in result {
+            let query: String = my::from_row(row.unwrap());
+            return Some(query);
+        }
+
+        None
+    }
+
+    pub fn get_new_psid_for_query(&self, query_string: &String) -> Option<u64> {
+        let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder
+        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
+        let utc: DateTime<Utc> = Utc::now();
+        let now = utc.format("%Y-%m-%d- %H:%M:%S").to_string();
+        let sql = (
+            "INSERT IGNORE INTO `query` (querystring,created) VALUES (?,?)".to_string(),
+            vec![query_string.to_owned(), now],
+        );
+        let ret = match conn.prep_exec(sql.0, sql.1) {
+            Ok(r) => Some(r.last_insert_id()),
+            Err(e) => {
+                println!("AppState::get_new_psid_for_query query error: {:?}", e);
+                None
+            }
+        };
+        ret
     }
 
     fn load_site_matrix() -> Value {

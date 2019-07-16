@@ -18,7 +18,6 @@ use serde_json::value::Value;
 */
 
 static MAX_CATEGORY_BATCH_SIZE: usize = 5000;
-static USE_NEW_CATEGORY_MODE: bool = false;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
@@ -65,6 +64,7 @@ pub struct SourceDatabaseParameters {
     pub only_new_since: bool,
     pub before: String,
     pub after: String,
+    pub use_new_category_mode: bool,
 }
 
 impl SourceDatabaseParameters {
@@ -107,6 +107,7 @@ impl SourceDatabaseParameters {
             only_new_since: false,
             before: "".to_string(),
             after: "".to_string(),
+            use_new_category_mode: true,
         }
     }
 }
@@ -443,7 +444,7 @@ impl SourceDatabase {
 
         match primary {
             "categories" => {
-                let category_batches = if USE_NEW_CATEGORY_MODE {
+                let category_batches = if self.params.use_new_category_mode {
                     self.iterate_category_batches(&self.cat_pos, 0)
                 } else {
                     vec![self.cat_pos.to_owned()]

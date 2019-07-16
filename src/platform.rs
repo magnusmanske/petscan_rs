@@ -175,6 +175,7 @@ impl Platform {
                 .iter()
                 .cloned()
                 .collect::<Vec<usize>>(),
+            use_new_category_mode: true,
         };
         ret
     }
