@@ -116,8 +116,6 @@ impl SourceDatabaseParameters {
 pub struct SourceDatabase {
     cat_pos: Vec<Vec<String>>,
     cat_neg: Vec<Vec<String>>,
-    has_pos_cats: bool,
-    has_neg_cats: bool,
     has_pos_templates: bool,
     has_pos_linked_from: bool,
     params: SourceDatabaseParameters,
@@ -143,8 +141,6 @@ impl SourceDatabase {
         Self {
             cat_pos: vec![],
             cat_neg: vec![],
-            has_pos_cats: false,
-            has_neg_cats: false,
             has_pos_templates: false,
             has_pos_linked_from: false,
             params,
