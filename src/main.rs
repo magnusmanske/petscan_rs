@@ -40,6 +40,7 @@ fn process_form(form_parameters: FormParameters, state: State<AppState>) -> MyRe
             content_type: ContentType::HTML,
         };
     }
+    if form_parameters.params.contains_key("psid") {}
     state.modify_threads_running(1);
     let mut platform = Platform::new_from_parameters(&form_parameters, state);
     platform.run();
@@ -64,7 +65,7 @@ fn main() {
         .unwrap()
         .to_string();
     let path = basedir.to_owned() + "/config.json";
-    let file = File::open(path).expect("Can not open config file");
+    let file = File::open(path).expect(format!("Can not open config file at {}", path));
     let petscan_config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
