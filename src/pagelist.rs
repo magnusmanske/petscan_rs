@@ -196,14 +196,10 @@ impl PageList {
         &mut self,
         conn: &mut my::Conn,
         batches: Vec<SQLtuple>,
-        pre: &str,
-        post: &str,
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
     ) {
         batches.iter().for_each(|sql| {
-            let sql = (pre.to_string() + &sql.0 + &post.to_string(), sql.1.clone());
-            println!("EXECUTING:\n{:?}", &sql);
-            let result = match conn.prep_exec(sql.0, sql.1) {
+            let result = match conn.prep_exec(&sql.0, &sql.1) {
                 Ok(r) => r,
                 Err(e) => {
                     println!("ERROR: {:?}", e);
@@ -228,30 +224,55 @@ impl PageList {
         }
 
         let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-        println!("Connecting to {}", self.wiki.as_ref().unwrap());
         let mut conn = platform
             .state
             .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
             .unwrap();
 
-        let batches = self.to_sql_batches(20000);
+        let batches: Vec<SQLtuple> = self.to_sql_batches(20000)
+            .iter_mut()
+            .map(|sql|{
+                sql.0 = "SELECT pp_value FROM page_props,page WHERE page_id=pp_page AND pp_propname='wikibase_item' AND ".to_owned()+&sql.0;
+                sql.to_owned()
+            })
+            .collect::<Vec<SQLtuple>>();
         self.wiki = Some("wikidata".to_string());
         self.entries.clear();
-        self.process_batch_results(
-            &mut conn,
-            batches,
-            "SELECT pp_value FROM page_props,page WHERE page_id=pp_page AND pp_propname='wikibase_item' AND ",
-            "",
-            &|row: my::Row| {
-                let pp_value: String = my::from_row(row);
-                Some(PageListEntry::new(Title::new(&pp_value, 0)))
-            },
-        );
+        self.process_batch_results(&mut conn, batches, &|row: my::Row| {
+            let pp_value: String = my::from_row(row);
+            Some(PageListEntry::new(Title::new(&pp_value, 0)))
+        });
     }
 
-    fn convert_from_wikidata(&mut self, _wiki: &str, _platform: &Platform) {
+    fn convert_from_wikidata(&mut self, wiki: &str, platform: &Platform) {
         if self.wiki == None || self.wiki != Some("wikidatatwiki".to_string()) {
             return;
         }
+
+        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let mut conn = platform
+            .state
+            .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
+            .unwrap();
+
+        let batches = self.to_sql_batches(20000)
+            .iter_mut()
+            .map(|sql|{
+                sql.0 = "SELECT ips_site_page FROM wb_items_per_site,page WHERE ips_item_id=substr(page_title,2)*1 AND ".to_owned()+&sql.0+" AND ips_site_id='?'";
+                sql.1.push(wiki.to_string());
+                sql.to_owned()
+            })
+            .collect::<Vec<SQLtuple>>();
+
+        self.wiki = Some(wiki.to_string());
+        self.entries.clear();
+        let api = platform.state.get_api_for_wiki(wiki.to_string()).unwrap();
+        self.process_batch_results(&mut conn, batches, &|row: my::Row| {
+            let ips_site_page: String = my::from_row(row);
+            Some(PageListEntry::new(Title::new_from_full(
+                &ips_site_page,
+                &api,
+            )))
+        });
     }
 }
