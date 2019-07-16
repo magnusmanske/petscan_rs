@@ -1,5 +1,8 @@
+use crate::datasource::SQLtuple;
+use crate::platform::Platform;
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
+use mysql as my;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -90,24 +93,14 @@ impl PageList {
             }
             ret.get_mut(&entry.title.namespace_id())
                 .unwrap()
-                .push(entry.title.pretty().to_string());
+                .push(entry.title.with_underscores().to_string());
         });
         ret
     }
 
     pub fn swap_entries(&mut self, other: &mut PageList) {
         std::mem::swap(&mut self.entries, &mut other.entries);
-        //let tmp = self.entries;
-        //self.entries = other.entries;
-        //other.entries = tmp;
-        //(self.entries, other.entries) = (other.entries, self.entries);
     }
-
-    /*
-    pub fn entries_as_vec(&self) -> Vec<PageListEntry> {
-        self.entries.iter().cloned().collect::<Vec<PageListEntry>>()
-    }
-    */
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
@@ -170,5 +163,95 @@ impl PageList {
         let other_entries = self.check_before_merging(pagelist)?;
         self.entries = self.entries.difference(&other_entries).cloned().collect();
         Ok(())
+    }
+
+    pub fn to_sql_batches(&self, chunk_size: usize) -> Vec<SQLtuple> {
+        let mut ret: Vec<SQLtuple> = vec![];
+        if self.is_empty() {
+            return ret;
+        }
+        let by_ns = self.group_by_namespace();
+        for (nsid, titles) in by_ns {
+            titles.chunks(chunk_size).for_each(|chunk| {
+                let mut sql = Platform::prep_quote(&chunk.to_vec());
+                sql.0 = format!("(page_namespace={} AND page_title IN({}))", nsid, &sql.0);
+                ret.push(sql);
+            });
+        }
+        ret
+    }
+
+    pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) {
+        // Already that wiki?
+        if self.wiki == None || self.wiki == Some(wiki.to_string()) {
+            return;
+        }
+        self.convert_to_wikidata(platform);
+        if wiki != "wikidatawiki" {
+            self.convert_from_wikidata(wiki, platform);
+        }
+    }
+
+    fn process_batch_results(
+        &mut self,
+        conn: &mut my::Conn,
+        batches: Vec<SQLtuple>,
+        pre: &str,
+        post: &str,
+        f: &dyn Fn(my::Row) -> Option<PageListEntry>,
+    ) {
+        batches.iter().for_each(|sql| {
+            let sql = (pre.to_string() + &sql.0 + &post.to_string(), sql.1.clone());
+            println!("EXECUTING:\n{:?}", &sql);
+            let result = match conn.prep_exec(sql.0, sql.1) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("ERROR: {:?}", e);
+                    return;
+                }
+            };
+            for row in result {
+                match row {
+                    Ok(row) => match f(row) {
+                        Some(entry) => self.add_entry(entry),
+                        None => {}
+                    },
+                    _ => {} // Ignore error
+                }
+            }
+        });
+    }
+
+    fn convert_to_wikidata(&mut self, platform: &Platform) {
+        if self.wiki == None || self.wiki == Some("wikidatatwiki".to_string()) {
+            return;
+        }
+
+        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        println!("Connecting to {}", self.wiki.as_ref().unwrap());
+        let mut conn = platform
+            .state
+            .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
+            .unwrap();
+
+        let batches = self.to_sql_batches(20000);
+        self.wiki = Some("wikidata".to_string());
+        self.entries.clear();
+        self.process_batch_results(
+            &mut conn,
+            batches,
+            "SELECT pp_value FROM page_props,page WHERE page_id=pp_page AND pp_propname='wikibase_item' AND ",
+            "",
+            &|row: my::Row| {
+                let pp_value: String = my::from_row(row);
+                Some(PageListEntry::new(Title::new(&pp_value, 0)))
+            },
+        );
+    }
+
+    fn convert_from_wikidata(&mut self, _wiki: &str, _platform: &Platform) {
+        if self.wiki == None || self.wiki != Some("wikidatatwiki".to_string()) {
+            return;
+        }
     }
 }

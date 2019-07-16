@@ -94,6 +94,70 @@ impl Platform {
         println!("{:#?}", &combination);
 
         self.result = self.combine_results(&mut results, &combination);
+        self.post_process_result();
+    }
+
+    fn post_process_result(&mut self) {
+        if self.result.is_none() {
+            return;
+        }
+
+        let mut result = self.result.as_ref().unwrap().to_owned();
+
+        // Filter and post-process
+        self.filter_wikidata(&mut result);
+
+        self.result = Some(result);
+
+        /*
+        // TODO
+        filterWikidata ( pagelist ) ;
+        processSitelinks ( pagelist ) ;
+        processLabels ( pagelist ) ;
+        if ( !common_wiki.empty() && pagelist.wiki != common_wiki ) pagelist.convertToWiki ( common_wiki ) ;
+        if ( sources.find("categories") == sources.end() ) processMissingDatabaseFilters ( pagelist ) ;
+        processWikidata ( pagelist ) ;
+        processFiles ( pagelist ) ;
+        processPages ( pagelist ) ;
+        processSubpages ( pagelist ) ;
+
+        gettimeofday(&after , NULL);
+        querytime = time_diff(before , after)/1000000 ;
+
+        string wikidata_label_language = getParam ( "wikidata_label_language" , "" ) ;
+        if ( wikidata_label_language.empty() ) wikidata_label_language = getParam("interface_language","en") ;
+        pagelist.loadMissingMetadata ( wikidata_label_language , this ) ;
+
+        pagelist.regexpFilter ( getParam("regexp_filter","") ) ;
+
+        sortResults ( pagelist ) ;
+        processRedlinks ( pagelist ) ; // Supersedes sort
+        params["format"] = getParam ( "format" , "html" , true ) ;
+
+        processCreator ( pagelist ) ;
+        applyResultsLimit ( pagelist ) ;
+
+        string wdf_main = getParam ( "wdf_main" , "" ) ;
+        if ( !wdf_main.empty() ) {
+            TWDFIST wdfist ( &pagelist , this ) ;
+            return wdfist.run() ;
+        }
+        */
+    }
+
+    fn filter_wikidata(&mut self, result: &mut PageList) {
+        if result.is_empty() {
+            return;
+        }
+        let no_statements = self.has_param("wpiu_no_statements");
+        let no_sitelinks = self.has_param("wpiu_no_sitelinks");
+        let _wpiu = self.get_param_default("wpiu", "any");
+        let list = self.get_param_blank("wikidata_prop_item_use");
+        let list = list.trim();
+        if list.is_empty() && !no_statements && !no_sitelinks {
+            return;
+        }
+        result.convert_to_wiki("wikidatawiki", &self);
     }
 
     pub fn db_params(&self) -> SourceDatabaseParameters {
@@ -335,12 +399,6 @@ impl Platform {
             ret.0 += ")";
         });
         ret
-    }
-
-    pub fn just_to_suppress_warnings() {
-        let _x =
-            Combination::Intersection((Box::new(Combination::None), Box::new(Combination::None)));
-        let _y = Combination::Not((Box::new(Combination::None), Box::new(Combination::None)));
     }
 
     fn parse_combination_string(s: &String) -> Combination {
