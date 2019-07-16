@@ -2,7 +2,9 @@ use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
-use crate::pagelist::PageList;
+use crate::pagelist::{PageList, PageListEntry};
+use mediawiki::title::Title;
+use mysql as my;
 use regex::Regex;
 //use rayon::prelude::*;
 use rocket::http::ContentType;
@@ -151,13 +153,83 @@ impl Platform {
         }
         let no_statements = self.has_param("wpiu_no_statements");
         let no_sitelinks = self.has_param("wpiu_no_sitelinks");
-        let _wpiu = self.get_param_default("wpiu", "any");
+        let wpiu = self.get_param_default("wpiu", "any");
         let list = self.get_param_blank("wikidata_prop_item_use");
         let list = list.trim();
         if list.is_empty() && !no_statements && !no_sitelinks {
             return;
         }
         result.convert_to_wiki("wikidatawiki", &self);
+        if result.is_empty() {
+            return;
+        }
+
+        // For all/any/none
+        let parts = list
+            .split_terminator(',')
+            .filter_map(|s| match s.chars().nth(0) {
+                Some('Q') => Some((
+                    "(SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=0 AND pl_title=?)".to_string(),
+                    vec![s.to_string()],
+                )),
+                Some('P') => Some((
+                    "(SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=120 AND pl_title=?)".to_string(),
+                    vec![s.to_string()],
+                )),
+                _ => None,
+            })
+            .collect::<Vec<SQLtuple>>();
+
+        let mut sql_post: SQLtuple = ("".to_string(), vec![]);
+        if no_statements {
+            sql_post.0 += " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0)" ;
+        }
+        if no_sitelinks {
+            sql_post.0 += " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-sitelinks' AND pp_sortkey=0)" ;
+        }
+        if !parts.is_empty() {
+            match wpiu.as_str() {
+                "all" => {
+                    parts.iter().for_each(|sql| {
+                        sql_post.0 += &(" AND EXISTS ".to_owned() + &sql.0);
+                        sql_post.1.append(&mut sql.1.to_owned());
+                    });
+                }
+                "any" => {
+                    sql_post.0 += " AND (0";
+                    parts.iter().for_each(|sql| {
+                        sql_post.0 += &(" OR EXISTS ".to_owned() + &sql.0);
+                        sql_post.1.append(&mut sql.1.to_owned());
+                    });
+                    sql_post.0 += ")";
+                }
+                "none" => {
+                    parts.iter().for_each(|sql| {
+                        sql_post.0 += &(" AND NOT EXISTS ".to_owned() + &sql.0);
+                        sql_post.1.append(&mut sql.1.to_owned());
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        let batches: Vec<SQLtuple> = result
+            .to_sql_batches(20000)
+            .iter_mut()
+            .map(|sql| {
+                sql.0 = "SELECT DISTINCT page_title FROM page WHERE ".to_owned()
+                    + &sql.0
+                    + &sql_post.0.to_owned();
+                sql.1.append(&mut sql_post.1.to_owned());
+                sql.to_owned()
+            })
+            .collect::<Vec<SQLtuple>>();
+
+        result.clear_entries();
+        result.process_batch_results(self, batches, &|row: my::Row| {
+            let pp_value: String = my::from_row(row);
+            Some(PageListEntry::new(Title::new(&pp_value, 0)))
+        });
     }
 
     pub fn db_params(&self) -> SourceDatabaseParameters {

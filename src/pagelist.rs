@@ -192,12 +192,22 @@ impl PageList {
         }
     }
 
-    fn process_batch_results(
+    pub fn clear_entries(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn process_batch_results(
         &mut self,
-        conn: &mut my::Conn,
+        platform: &Platform,
         batches: Vec<SQLtuple>,
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
     ) {
+        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let mut conn = platform
+            .state
+            .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
+            .unwrap();
+
         batches.iter().for_each(|sql| {
             let result = match conn.prep_exec(&sql.0, &sql.1) {
                 Ok(r) => r,
@@ -223,12 +233,6 @@ impl PageList {
             return;
         }
 
-        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-        let mut conn = platform
-            .state
-            .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
-            .unwrap();
-
         let batches: Vec<SQLtuple> = self.to_sql_batches(20000)
             .iter_mut()
             .map(|sql|{
@@ -236,9 +240,9 @@ impl PageList {
                 sql.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
-        self.wiki = Some("wikidata".to_string());
+        self.wiki = Some("wikidatawiki".to_string());
         self.entries.clear();
-        self.process_batch_results(&mut conn, batches, &|row: my::Row| {
+        self.process_batch_results(platform, batches, &|row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
         });
@@ -248,12 +252,6 @@ impl PageList {
         if self.wiki == None || self.wiki != Some("wikidatatwiki".to_string()) {
             return;
         }
-
-        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-        let mut conn = platform
-            .state
-            .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
-            .unwrap();
 
         let batches = self.to_sql_batches(20000)
             .iter_mut()
@@ -267,7 +265,7 @@ impl PageList {
         self.wiki = Some(wiki.to_string());
         self.entries.clear();
         let api = platform.state.get_api_for_wiki(wiki.to_string()).unwrap();
-        self.process_batch_results(&mut conn, batches, &|row: my::Row| {
+        self.process_batch_results(platform, batches, &|row: my::Row| {
             let ips_site_page: String = my::from_row(row);
             Some(PageListEntry::new(Title::new_from_full(
                 &ips_site_page,
