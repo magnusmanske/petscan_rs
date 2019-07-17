@@ -8,7 +8,71 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 //use rayon::prelude::*;
 
-//type NamespaceID = mediawiki::api::NamespaceID;
+//________________________________________________________________________________________________________________________
+
+#[derive(Debug, Clone)]
+pub struct FileUsage {
+    title: Title,
+    wiki: String,
+    namespace_name: String,
+}
+
+impl FileUsage {
+    pub fn new_from_part(part: &String) -> Self {
+        let mut parts: Vec<&str> = part.split(":").collect();
+        let wiki = parts.remove(0);
+        let namespace_id = parts.remove(0).parse::<NamespaceID>().unwrap();
+        let namespace_name = parts.remove(0);
+        let page = parts.join(":");
+        Self {
+            title: Title::new(&page, namespace_id),
+            namespace_name: namespace_name.to_string(),
+            wiki: wiki.to_string(),
+        }
+    }
+}
+
+//________________________________________________________________________________________________________________________
+
+#[derive(Debug, Clone)]
+pub struct FileInfo {
+    pub file_usage: Vec<FileUsage>,
+    pub img_size: Option<usize>,
+    pub img_width: Option<usize>,
+    pub img_height: Option<usize>,
+    pub img_media_type: Option<String>,
+    pub img_major_mime: Option<String>,
+    pub img_minor_mime: Option<String>,
+    pub img_user_text: Option<String>,
+    pub img_timestamp: Option<String>,
+    pub img_sha1: Option<String>,
+}
+
+impl FileInfo {
+    pub fn new_from_gil_group(gil_group: &String) -> Self {
+        let mut ret = FileInfo::new();
+        ret.file_usage = gil_group
+            .split("|")
+            .map(|part| FileUsage::new_from_part(&part.to_string()))
+            .collect();
+        ret
+    }
+
+    pub fn new() -> Self {
+        Self {
+            file_usage: vec![],
+            img_size: None,
+            img_width: None,
+            img_height: None,
+            img_media_type: None,
+            img_major_mime: None,
+            img_minor_mime: None,
+            img_user_text: None,
+            img_timestamp: None,
+            img_sha1: None,
+        }
+    }
+}
 
 //________________________________________________________________________________________________________________________
 
@@ -22,6 +86,7 @@ pub struct PageListEntry {
     pub page_bytes: Option<usize>,
     pub page_timestamp: Option<String>,
     pub link_count: Option<usize>,
+    pub file_info: Option<FileInfo>,
 }
 
 impl Hash for PageListEntry {
@@ -50,6 +115,7 @@ impl PageListEntry {
             page_bytes: None,
             page_timestamp: None,
             link_count: None,
+            file_info: None,
         }
     }
 
@@ -194,6 +260,12 @@ impl PageList {
 
     pub fn clear_entries(&mut self) {
         self.entries.clear();
+    }
+
+    pub fn replace_entries(&mut self, other: &PageList) {
+        other.entries.iter().for_each(|entry| {
+            self.entries.replace(entry.to_owned());
+        });
     }
 
     pub fn process_batch_results(

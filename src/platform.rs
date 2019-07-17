@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
-use crate::pagelist::{PageList, PageListEntry};
+use crate::pagelist::{FileInfo, PageList, PageListEntry};
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
@@ -119,17 +119,14 @@ impl Platform {
             self.process_missing_database_filters(&mut result);
         }
         self.process_by_wikidata_item(&mut result);
+        self.process_files(&mut result);
 
         self.result = Some(result);
 
         /*
         // TODO
-        processFiles ( pagelist ) ;
         processPages ( pagelist ) ;
         processSubpages ( pagelist ) ;
-
-        gettimeofday(&after , NULL);
-        querytime = time_diff(before , after)/1000000 ;
 
         string wikidata_label_language = getParam ( "wikidata_label_language" , "" ) ;
         if ( wikidata_label_language.empty() ) wikidata_label_language = getParam("interface_language","en") ;
@@ -150,6 +147,152 @@ impl Platform {
             return wdfist.run() ;
         }
         */
+    }
+
+    fn process_files(&self, result: &mut PageList) {
+        let giu = self.has_param("giu");
+        let file_data = self.has_param("ext_image_data")
+            || self.get_param("sortby") == Some("filesize".to_string())
+            || self.get_param("sortby") == Some("uploaddate".to_string());
+        let file_usage = giu || self.has_param("file_usage_data");
+        let file_usage_data_ns0 = self.has_param("file_usage_data_ns0");
+        if !file_data && !file_usage {
+            return;
+        }
+
+        let mut files_only = PageList::new_from_wiki(&result.wiki.as_ref().unwrap());
+        result
+            .entries
+            .retain(|entry| match entry.title().namespace_id() {
+                6 => {
+                    files_only.entries.insert(entry.to_owned());
+                    false
+                }
+                _ => true,
+            });
+
+        if files_only.is_empty() {
+            return;
+        }
+        self.annotate_files(&mut files_only, file_data, file_usage, file_usage_data_ns0);
+        result.replace_entries(&files_only);
+    }
+
+    /// This assumes all entries in `result` have file namespace
+    fn annotate_files(
+        &self,
+        result: &mut PageList,
+        file_data: bool,
+        file_usage: bool,
+        file_usage_data_ns0: bool,
+    ) {
+        if file_usage {
+            let batches: Vec<SQLtuple> = result
+                .to_sql_batches(PAGE_BATCH_SIZE)
+                .iter_mut()
+                .map(|mut sql_batch| {
+                    let tmp = Platform::prep_quote(&sql_batch.1);
+                    sql_batch.0 = "SELECT gil_to,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
+                    sql_batch.0 += &tmp.0 ;
+                    sql_batch.0 += ")";
+                    if file_usage_data_ns0  {sql_batch.0 += " AND gil_page_namespace_id=0" ;}
+                    sql_batch.0 += " GROUP BY gil_to" ;
+                    sql_batch.to_owned()
+                })
+                .collect::<Vec<SQLtuple>>();
+
+            let mut tmp = PageList::new_from_wiki(&result.wiki.as_ref().unwrap());
+            tmp.process_batch_results(self, batches, &|row: my::Row| {
+                let (gil_to, gil_group) = my::from_row::<(String, String)>(row);
+                match &result
+                    .entries
+                    .get(&PageListEntry::new(Title::new(&gil_to, 6)))
+                {
+                    Some(entry) => {
+                        let mut entry = (*entry).clone();
+                        entry.file_info = Some(FileInfo::new_from_gil_group(&gil_group));
+                        Some(entry)
+                    }
+                    None => {
+                        println!("Not in list: {}", &gil_to);
+                        None
+                    }
+                }
+            });
+            result.replace_entries(&tmp);
+        }
+
+        if file_data {
+            let batches: Vec<SQLtuple> = result
+                .to_sql_batches(PAGE_BATCH_SIZE)
+                .iter_mut()
+                .map(|mut sql_batch| {
+                    let tmp = Platform::prep_quote(&sql_batch.1);
+                    sql_batch.0 = "SELECT img_name,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN (".to_string() ;
+                    sql_batch.0 += &tmp.0 ;
+                    sql_batch.0 += ")";
+                    sql_batch.to_owned()
+                })
+                .collect::<Vec<SQLtuple>>();
+
+            let mut tmp = PageList::new_from_wiki(&result.wiki.as_ref().unwrap());
+            tmp.process_batch_results(self, batches, &|row: my::Row| {
+                let (
+                    img_name,
+                    img_size,
+                    img_width,
+                    img_height,
+                    img_media_type,
+                    img_major_mime,
+                    img_minor_mime,
+                    img_user_text,
+                    img_timestamp,
+                    img_sha1,
+                ) = my::from_row::<(
+                    String,
+                    usize,
+                    usize,
+                    usize,
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                )>(row);
+                match &result
+                    .entries
+                    .get(&PageListEntry::new(Title::new(&img_name, 6)))
+                {
+                    Some(entry) => {
+                        let mut entry = (*entry).clone();
+                        if entry.file_info.is_none() {
+                            entry.file_info = Some(<FileInfo>::new());
+                        }
+                        match entry.file_info.as_mut() {
+                            Some(file_info) => {
+                                (*file_info).img_size = Some(img_size);
+                                (*file_info).img_width = Some(img_width);
+                                (*file_info).img_height = Some(img_height);
+                                (*file_info).img_media_type = Some(img_media_type);
+                                (*file_info).img_major_mime = Some(img_major_mime);
+                                (*file_info).img_minor_mime = Some(img_minor_mime);
+                                (*file_info).img_user_text = Some(img_user_text);
+                                (*file_info).img_timestamp = Some(img_timestamp);
+                                (*file_info).img_sha1 = Some(img_sha1);
+                            }
+                            None => {}
+                        }
+                        Some(entry)
+                    }
+                    None => {
+                        println!("Not in list: {}", &img_name);
+                        None
+                    }
+                }
+            });
+            result.replace_entries(&tmp);
+        }
     }
 
     fn annotate_with_wikidata_item(&self, result: &mut PageList) {
