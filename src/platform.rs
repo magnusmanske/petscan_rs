@@ -92,15 +92,15 @@ impl Platform {
             .filter(|s| s.can_run(&self))
             .map(|s| s.name())
             .collect();
-        let combination = self.get_combination(available_sources);
+        let combination = self.get_combination(&available_sources);
 
         println!("{:#?}", &combination);
 
         self.result = self.combine_results(&mut results, &combination);
-        self.post_process_result();
+        self.post_process_result(&available_sources);
     }
 
-    fn post_process_result(&mut self) {
+    fn post_process_result(&mut self, available_sources: &Vec<String>) {
         if self.result.is_none() {
             return;
         }
@@ -110,14 +110,18 @@ impl Platform {
         // Filter and post-process
         self.filter_wikidata(&mut result);
         self.process_sitelinks(&mut result);
+        if *available_sources != vec!["labels".to_string()] {
+            self.process_labels(&mut result);
+        }
+        //if ( !common_wiki.empty() && pagelist.wiki != common_wiki ) pagelist.convertToWiki ( common_wiki ) ; // TODO
+        if !available_sources.contains(&"categories".to_string()) {
+            self.process_missing_database_filters(&mut result);
+        }
 
         self.result = Some(result);
 
         /*
         // TODO
-        processLabels ( pagelist ) ;
-        if ( !common_wiki.empty() && pagelist.wiki != common_wiki ) pagelist.convertToWiki ( common_wiki ) ;
-        if ( sources.find("categories") == sources.end() ) processMissingDatabaseFilters ( pagelist ) ;
         processWikidata ( pagelist ) ;
         processFiles ( pagelist ) ;
         processPages ( pagelist ) ;
@@ -145,6 +149,50 @@ impl Platform {
             return wdfist.run() ;
         }
         */
+    }
+
+    fn process_missing_database_filters(&mut self, result: &mut PageList) {
+        let mut params = self.db_params();
+        params.wiki = match &result.wiki {
+            Some(wiki) => Some(wiki.to_string()),
+            None => return,
+        };
+        let mut db = SourceDatabase::new(params);
+        match db.get_pages(&self.state, Some(result)) {
+            Some(new_result) => *result = new_result,
+            None => {}
+        }
+    }
+
+    fn process_labels(&mut self, result: &mut PageList) {
+        //println!("{:?}", &self.form_parameters);
+        let mut sql = self.get_label_sql();
+        if sql.1.is_empty() {
+            return;
+        }
+        result.convert_to_wiki("wikidatawiki", &self);
+        if result.is_empty() {
+            return;
+        }
+        sql.0 += " AND term_full_entity_id IN (";
+
+        // Batches
+        let batches: Vec<SQLtuple> = result
+            .to_sql_batches(PAGE_BATCH_SIZE)
+            .iter_mut()
+            .map(|sql_batch| {
+                let tmp = Platform::prep_quote(&sql_batch.1);
+                sql_batch.0 = sql.0.to_owned() + &tmp.0 + ")";
+                sql_batch.1.splice(..0, sql.1.to_owned());
+                sql_batch.to_owned()
+            })
+            .collect::<Vec<SQLtuple>>();
+
+        result.clear_entries();
+        result.process_batch_results(self, batches, &|row: my::Row| {
+            let term_full_entity_id = my::from_row::<String>(row);
+            Platform::entry_from_entity(&term_full_entity_id)
+        });
     }
 
     fn process_sitelinks(&mut self, result: &mut PageList) {
@@ -228,7 +276,7 @@ impl Platform {
                 sql_batch.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
-        println!("{:#?}", &batches);
+
         result.clear_entries();
         result.process_batch_results(self, batches, &|row: my::Row| {
             let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
@@ -319,6 +367,15 @@ impl Platform {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
         });
+    }
+
+    pub fn entry_from_entity(entity: &str) -> Option<PageListEntry> {
+        match entity.chars().next() {
+            Some('Q') => Some(PageListEntry::new(Title::new(&entity.to_string(), 0))),
+            Some('P') => Some(PageListEntry::new(Title::new(&entity.to_string(), 120))),
+            Some('L') => Some(PageListEntry::new(Title::new(&entity.to_string(), 146))),
+            _ => None,
+        }
     }
 
     pub fn db_params(&self) -> SourceDatabaseParameters {
@@ -644,12 +701,12 @@ impl Platform {
         }
     }
 
-    fn get_combination(&self, available_sources: Vec<String>) -> Combination {
+    fn get_combination(&self, available_sources: &Vec<String>) -> Combination {
         match self.get_param("source_combination") {
             Some(combination_string) => Self::parse_combination_string(&combination_string),
             None => {
                 let mut comb = Combination::None;
-                for source in &available_sources {
+                for source in available_sources {
                     if comb == Combination::None {
                         comb = Combination::Source(source.to_string());
                     } else {
@@ -801,6 +858,19 @@ mod tests {
         // [[Count von Count]] vs. [[Magnus Manske]]
         check_results_for_psid(10123897, "wikidatawiki", vec![Title::new("Q13520818", 0)]); // Min 15
         check_results_for_psid(10124667, "wikidatawiki", vec![Title::new("Q12345", 0)]); // Max 15
+    }
+
+    #[test]
+    fn test_manual_list_enwiki_label_filter() {
+        // [[Count von Count]] vs. [[Magnus Manske]]
+        check_results_for_psid(10125089, "wikidatawiki", vec![Title::new("Q12345", 0)]); // Label "Count%" in en
+    }
+
+    #[test]
+    fn test_manual_list_enwiki_neg_cat_filter() {
+        // [[Count von Count]] vs. [[Magnus Manske]]
+        // Manual list on enwiki, minus [[Category:Fictional vampires]]
+        check_results_for_psid(10126217, "enwiki", vec![Title::new("Magnus Manske", 0)]);
     }
 
 }

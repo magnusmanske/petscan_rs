@@ -354,7 +354,7 @@ impl SourceDatabase {
             }
             None => {}
         }
-        println!("{:?}", &self.params);
+        //println!("{:?}", &self.params);
 
         // Paranoia
         if self.params.wiki.is_none() || self.params.wiki == Some("wiki".to_string()) {
@@ -374,7 +374,6 @@ impl SourceDatabase {
             &mut conn,
             &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
         );
-        println!("{:?}/{:?}", &self.cat_pos, &self.cat_neg);
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
@@ -401,7 +400,7 @@ impl SourceDatabase {
         let link_count_sql = if self.params.gather_link_count {
             ",(SELECT count(*) FROM pagelinks WHERE pl_from=p.page_id) AS link_count"
         } else {
-            ",0" // Dummy
+            ",0 AS link_count" // Dummy
         };
 
         let mut sql_before_after = Platform::sql_tuple();
@@ -520,7 +519,9 @@ impl SourceDatabase {
                 sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')" ;
             }
             "templates" | "links_from" => {
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len FROM page p".to_string() ;
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len ".to_string() ;
+                sql.0 += link_count_sql;
+                sql.0 += " FROM page p";
                 if !is_before_after_done {
                     is_before_after_done = true;
                     Platform::append_sql(&mut sql, &mut sql_before_after);
@@ -535,7 +536,9 @@ impl SourceDatabase {
                     return Some(ret);
                 }
 
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len FROM page p".to_string() ;
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len ".to_string() ;
+                sql.0 += link_count_sql;
+                sql.0 += " FROM page p";
                 if !is_before_after_done {
                     is_before_after_done = true;
                     Platform::append_sql(&mut sql, &mut sql_before_after);
@@ -557,8 +560,6 @@ impl SourceDatabase {
             }
         }
 
-        //if ( !getPagesforPrimary ( db , primary , sql , sql_before_after , pages , is_before_after_done ) ) return false ;
-
         let wiki = self.params.wiki.as_ref()?;
         if self.get_pages_for_primary(
             &mut conn,
@@ -569,7 +570,6 @@ impl SourceDatabase {
             &mut is_before_after_done,
             state.get_api_for_wiki(wiki.clone())?,
         ) {
-            //data_loaded = true ;
             Some(ret)
         } else {
             None
@@ -820,6 +820,7 @@ impl SourceDatabase {
         };
         let mut had_page: HashSet<usize> = HashSet::new();
         for row in result {
+            println!("ROW: {:?}", &row);
             let (page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count) =
                 my::from_row::<(usize, String, NamespaceID, String, usize, usize)>(row.unwrap());
             if had_page.contains(&page_id) {
@@ -835,7 +836,7 @@ impl SourceDatabase {
             }
             pl1.add_entry(entry);
         }
-
+        println!("RESULT: {:?}", &pl1);
         pl1.swap_entries(pages_sublist);
 
         true

@@ -26,15 +26,6 @@ pub trait DataSource {
     fn can_run(&self, platform: &Platform) -> bool;
     fn run(&mut self, platform: &Platform) -> Option<PageList>;
     fn name(&self) -> String;
-
-    fn entry_from_entity(&self, entity: &str) -> Option<PageListEntry> {
-        match entity.chars().next() {
-            Some('Q') => Some(PageListEntry::new(Title::new(&entity.to_string(), 0))),
-            Some('P') => Some(PageListEntry::new(Title::new(&entity.to_string(), 120))),
-            Some('L') => Some(PageListEntry::new(Title::new(&entity.to_string(), 146))),
-            _ => None,
-        }
-    }
 }
 
 //________________________________________________________________________________________________________________________
@@ -69,7 +60,7 @@ impl DataSource for SourceLabels {
         };
         for row in result {
             let term_full_entity_id: String = my::from_row(row.unwrap());
-            match self.entry_from_entity(&term_full_entity_id) {
+            match Platform::entry_from_entity(&term_full_entity_id) {
                 Some(entry) => {
                     ret.add_entry(entry);
                 }
@@ -137,7 +128,7 @@ impl DataSource for SourceWikidata {
         for row in result {
             let ips_item_id: usize = my::from_row(row.unwrap());
             let term_full_entity_id = format!("Q{}", ips_item_id);
-            match self.entry_from_entity(&term_full_entity_id) {
+            match Platform::entry_from_entity(&term_full_entity_id) {
                 Some(entry) => {
                     ret.add_entry(entry);
                 }
@@ -316,7 +307,7 @@ impl DataSource for SourceSparql {
         // TODO M for commons?
         let ple: Vec<PageListEntry> = entities
             .par_iter()
-            .filter_map(|e| self.entry_from_entity(e))
+            .filter_map(|e| Platform::entry_from_entity(e))
             .collect();
         Some(PageList::new_from_vec("wikidatawiki", ple))
     }
