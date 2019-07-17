@@ -806,7 +806,7 @@ impl SourceDatabase {
             }
         }
 
-        println!("SQL:{:?}", &sql);
+        //println!("SQL:{:?}", &sql);
 
         let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
 
@@ -820,7 +820,7 @@ impl SourceDatabase {
         };
         let mut had_page: HashSet<usize> = HashSet::new();
         for row in result {
-            println!("ROW: {:?}", &row);
+            //println!("ROW: {:?}", &row);
             let (page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count) =
                 my::from_row::<(usize, String, NamespaceID, String, usize, usize)>(row.unwrap());
             if had_page.contains(&page_id) {
@@ -836,7 +836,7 @@ impl SourceDatabase {
             }
             pl1.add_entry(entry);
         }
-        println!("RESULT: {:?}", &pl1);
+        //println!("RESULT: {:?}", &pl1);
         pl1.swap_entries(pages_sublist);
 
         true
