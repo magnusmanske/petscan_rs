@@ -179,7 +179,7 @@ impl Platform {
         if use_min_max {
             sql.0 += "page_title,(SELECT count(*) FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1) AS sitelink_count" ;
         } else {
-            sql.0 += "DISTINCT page_title";
+            sql.0 += "DISTINCT page_title,0";
         }
         sql.0 += " FROM page WHERE page_namespace=0";
 
@@ -231,8 +231,8 @@ impl Platform {
         println!("{:#?}", &batches);
         result.clear_entries();
         result.process_batch_results(self, batches, &|row: my::Row| {
-            let pp_value: String = my::from_row(row);
-            Some(PageListEntry::new(Title::new(&pp_value, 0)))
+            let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
+            Some(PageListEntry::new(Title::new(&page_title, 0)))
         });
     }
 
@@ -787,13 +787,20 @@ mod tests {
 
     #[test]
     fn test_manual_list_enwiki_use_props() {
-        check_results_for_psid(10087995, "wikidatawiki", vec![Title::new("Q13520818", 0)])
+        check_results_for_psid(10087995, "wikidatawiki", vec![Title::new("Q13520818", 0)]);
     }
 
     #[test]
     fn test_manual_list_enwiki_sitelinks() {
         // This assumes [[en:Count von Count]] has no lvwiki article
-        check_results_for_psid(10123257, "wikidatawiki", vec![Title::new("Q13520818", 0)])
+        check_results_for_psid(10123257, "wikidatawiki", vec![Title::new("Q13520818", 0)]);
+    }
+
+    #[test]
+    fn test_manual_list_enwiki_min_max_sitelinks() {
+        // [[Count von Count]] vs. [[Magnus Manske]]
+        check_results_for_psid(10123897, "wikidatawiki", vec![Title::new("Q13520818", 0)]); // Min 15
+        check_results_for_psid(10124667, "wikidatawiki", vec![Title::new("Q12345", 0)]); // Max 15
     }
 
 }
