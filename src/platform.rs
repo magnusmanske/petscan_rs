@@ -3,6 +3,7 @@ use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
 use crate::pagelist::{PageList, PageListEntry};
+use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
 use regex::Regex;
@@ -16,7 +17,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
 
-static PAGE_BATCH_SIZE: usize = 20000;
+pub static PAGE_BATCH_SIZE: usize = 20000;
 
 pub struct MyResponse {
     pub s: String,
@@ -117,6 +118,7 @@ impl Platform {
         if !available_sources.contains(&"categories".to_string()) {
             self.process_missing_database_filters(&mut result);
         }
+        self.process_by_wikidata_item(&mut result);
 
         self.result = Some(result);
 
@@ -149,6 +151,61 @@ impl Platform {
             return wdfist.run() ;
         }
         */
+    }
+
+    fn annotate_with_wikidata_item(&self, result: &mut PageList) {
+        if result.wiki == Some("wikidatawiki".to_string()) {
+            return;
+        }
+
+        // Batches
+        let batches: Vec<SQLtuple> = result.to_sql_batches(PAGE_BATCH_SIZE)
+            .iter_mut()
+            .map(|sql|{
+                sql.0 = "SELECT pp_value,page_title,page_namespace FROM page_props,page WHERE page_id=pp_page AND pp_propname='wikibase_item' AND ".to_owned()+&sql.0;
+                sql.to_owned()
+            })
+            .collect::<Vec<SQLtuple>>();
+
+        let mut tmp = PageList::new_from_wiki(result.wiki.as_ref().unwrap().as_str());
+        tmp.process_batch_results(self, batches, &|row: my::Row| {
+            let (pp_value, page_title, page_namespace) =
+                my::from_row::<(String, String, NamespaceID)>(row);
+            let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
+            entry.wikidata_item = Some(pp_value);
+            Some(entry)
+        });
+        tmp.entries
+            .iter()
+            .for_each(|new_entry| match result.entries.get(new_entry) {
+                Some(entry) => {
+                    let mut entry = entry.clone();
+                    entry.wikidata_item = new_entry.wikidata_item.clone();
+                    result.entries.replace(entry);
+                }
+                None => println!("Could not find entry {:?}", &new_entry),
+            });
+    }
+
+    fn process_by_wikidata_item(&mut self, result: &mut PageList) {
+        // TEST: http://127.0.0.1:3000/?psid=10126830
+        if result.wiki == Some("wikidatawiki".to_string()) {
+            return;
+        }
+        let wdi = self.get_param_default("wikidata_item", "no");
+        if wdi != "any" && wdi != "with" && wdi != "without" {
+            return;
+        }
+        println!("A: {:?}", &result);
+        self.annotate_with_wikidata_item(result);
+        println!("B: {:?}", &result);
+        if wdi == "with" {
+            result.entries.retain(|entry| entry.wikidata_item.is_some());
+        }
+        if wdi == "without" {
+            result.entries.retain(|entry| entry.wikidata_item.is_none());
+        }
+        println!("C: {:?}", &result);
     }
 
     fn process_missing_database_filters(&mut self, result: &mut PageList) {

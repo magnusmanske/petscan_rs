@@ -1,5 +1,5 @@
 use crate::datasource::SQLtuple;
-use crate::platform::Platform;
+use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
@@ -233,7 +233,7 @@ impl PageList {
             return;
         }
 
-        let batches: Vec<SQLtuple> = self.to_sql_batches(20000)
+        let batches: Vec<SQLtuple> = self.to_sql_batches(PAGE_BATCH_SIZE)
             .iter_mut()
             .map(|sql|{
                 sql.0 = "SELECT pp_value FROM page_props,page WHERE page_id=pp_page AND pp_propname='wikibase_item' AND ".to_owned()+&sql.0;
@@ -253,7 +253,7 @@ impl PageList {
             return;
         }
 
-        let batches = self.to_sql_batches(20000)
+        let batches = self.to_sql_batches(PAGE_BATCH_SIZE)
             .iter_mut()
             .map(|sql|{
                 sql.0 = "SELECT ips_site_page FROM wb_items_per_site,page WHERE ips_item_id=substr(page_title,2)*1 AND ".to_owned()+&sql.0+" AND ips_site_id='?'";
