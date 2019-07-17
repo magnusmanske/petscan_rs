@@ -20,6 +20,15 @@ pub struct FormParameters {
 }
 
 impl FormParameters {
+    /*
+    pub fn new() -> Self {
+        Self {
+            params: HashMap::new(),
+            ns: HashSet::new(),
+        }
+    }
+    */
+
     /// Extracts namespaces from parameter list
     fn ns_from_params(params: &HashMap<String, String>) -> HashSet<usize> {
         lazy_static! {

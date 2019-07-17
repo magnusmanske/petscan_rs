@@ -205,7 +205,7 @@ impl AppState {
             Ok(conn) => Some(conn),
             Err(e) => {
                 println!(
-                    "AppState::get_query_from_psid can't get DB connection to {}:{} : '{}'",
+                    "AppState::get_tool_db_connection can't get DB connection to {}:{} : '{}'",
                     &host, port, &e
                 );
                 None

@@ -9,13 +9,14 @@ use regex::Regex;
 //use rayon::prelude::*;
 use rocket::http::ContentType;
 use rocket::http::Status;
-use rocket::request::State;
 use rocket::response::Responder;
 use rocket::Request;
 use rocket::Response;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::Arc;
+
+static PAGE_BATCH_SIZE: usize = 20000;
 
 pub struct MyResponse {
     pub s: String,
@@ -49,10 +50,10 @@ pub struct Platform {
 }
 
 impl Platform {
-    pub fn new_from_parameters(form_parameters: &FormParameters, state: &State<AppState>) -> Self {
+    pub fn new_from_parameters(form_parameters: &FormParameters, state: &AppState) -> Self {
         Self {
             form_parameters: Arc::new((*form_parameters).clone()),
-            state: Arc::new(state.inner().clone()),
+            state: Arc::new(state.clone()),
             result: None,
             psid: None,
         }
@@ -108,13 +109,12 @@ impl Platform {
 
         // Filter and post-process
         self.filter_wikidata(&mut result);
+        self.process_sitelinks(&mut result);
 
         self.result = Some(result);
 
         /*
         // TODO
-        filterWikidata ( pagelist ) ;
-        processSitelinks ( pagelist ) ;
         processLabels ( pagelist ) ;
         if ( !common_wiki.empty() && pagelist.wiki != common_wiki ) pagelist.convertToWiki ( common_wiki ) ;
         if ( sources.find("categories") == sources.end() ) processMissingDatabaseFilters ( pagelist ) ;
@@ -147,6 +147,95 @@ impl Platform {
         */
     }
 
+    fn process_sitelinks(&mut self, result: &mut PageList) {
+        if result.is_empty() {
+            return;
+        }
+
+        let sitelinks_yes = self.get_param_as_vec("sitelinks_yes", "\n");
+        let sitelinks_any = self.get_param_as_vec("sitelinks_any", "\n");
+        let sitelinks_no = self.get_param_as_vec("sitelinks_no", "\n");
+        let sitelinks_min = self.get_param_blank("min_sitelink_count");
+        let sitelinks_max = self.get_param_blank("max_sitelink_count");
+
+        //if ( trim(sitelinks_min) == "0" ) sitelinks_min.clear() ;
+        if sitelinks_yes.is_empty()
+            && sitelinks_any.is_empty()
+            && sitelinks_no.is_empty()
+            && sitelinks_min.is_empty()
+            && sitelinks_max.is_empty()
+        {
+            return;
+        }
+        result.convert_to_wiki("wikidatawiki", &self);
+        if result.is_empty() {
+            return;
+        }
+
+        let use_min_max = !sitelinks_min.is_empty() || !sitelinks_max.is_empty();
+
+        let mut sql: SQLtuple = ("".to_string(), vec![]);
+        sql.0 += "SELECT ";
+        if use_min_max {
+            sql.0 += "page_title,(SELECT count(*) FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1) AS sitelink_count" ;
+        } else {
+            sql.0 += "DISTINCT page_title";
+        }
+        sql.0 += " FROM page WHERE page_namespace=0";
+
+        sitelinks_yes.iter().for_each(|site|{
+            sql.0 += " AND EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id=? LIMIT 1)" ;
+            sql.1.push(site.to_string());
+        });
+        if !sitelinks_any.is_empty() {
+            sql.0 += " AND EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id IN (" ;
+            let mut tmp = Platform::prep_quote(&sitelinks_any);
+            Platform::append_sql(&mut sql, &mut tmp);
+            sql.0 += ") LIMIT 1)";
+        }
+        sitelinks_no.iter().for_each(|site|{
+            sql.0 += " AND NOT EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id=? LIMIT 1)" ;
+            sql.1.push(site.to_string());
+        });
+        sql.0 += " AND ";
+
+        let mut having: Vec<String> = vec![];
+        match sitelinks_min.parse::<usize>() {
+            Ok(s) => having.push(format!("sitelink_count>={}", s)),
+            _ => {}
+        }
+        match sitelinks_max.parse::<usize>() {
+            Ok(s) => having.push(format!("sitelink_count<={}", s)),
+            _ => {}
+        }
+
+        let mut sql_post = "".to_string();
+        if use_min_max {
+            sql_post += " GROUP BY page_title";
+        }
+        if !having.is_empty() {
+            sql_post += " HAVING ";
+            sql_post += &having.join(" AND ");
+        }
+
+        // Batches
+        let batches: Vec<SQLtuple> = result
+            .to_sql_batches(PAGE_BATCH_SIZE)
+            .iter_mut()
+            .map(|sql_batch| {
+                sql_batch.0 = sql.0.to_owned() + &sql_batch.0 + &sql_post;
+                sql_batch.1.splice(..0, sql.1.to_owned());
+                sql_batch.to_owned()
+            })
+            .collect::<Vec<SQLtuple>>();
+        println!("{:#?}", &batches);
+        result.clear_entries();
+        result.process_batch_results(self, batches, &|row: my::Row| {
+            let pp_value: String = my::from_row(row);
+            Some(PageListEntry::new(Title::new(&pp_value, 0)))
+        });
+    }
+
     fn filter_wikidata(&mut self, result: &mut PageList) {
         if result.is_empty() {
             return;
@@ -163,7 +252,6 @@ impl Platform {
         if result.is_empty() {
             return;
         }
-
         // For all/any/none
         let parts = list
             .split_terminator(',')
@@ -213,8 +301,9 @@ impl Platform {
             }
         }
 
+        // Batches
         let batches: Vec<SQLtuple> = result
-            .to_sql_batches(20000)
+            .to_sql_batches(PAGE_BATCH_SIZE)
             .iter_mut()
             .map(|sql| {
                 sql.0 = "SELECT DISTINCT page_title FROM page WHERE ".to_owned()
@@ -631,6 +720,56 @@ impl Platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_state::AppState;
+    use serde_json::Value;
+    use std::env;
+    use std::fs::File;
+
+    fn get_new_state() -> Arc<AppState> {
+        let basedir = env::current_dir()
+            .expect("Can't get CWD")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path = basedir.to_owned() + "/config.json";
+        let file = File::open(path).expect("Can not open config file");
+        let petscan_config: Value =
+            serde_json::from_reader(file).expect("Can not parse JSON from config file");
+        Arc::new(AppState::new_from_config(&petscan_config))
+    }
+
+    fn get_state() -> Arc<AppState> {
+        lazy_static! {
+            static ref STATE: Arc<AppState> = get_new_state();
+        }
+        STATE.clone()
+    }
+
+    fn run_psid(psid: usize) -> Platform {
+        let state = get_state();
+        let form_parameters = match state.get_query_from_psid(&format!("{}", &psid)) {
+            Some(psid_query) => FormParameters::outcome_from_query(&psid_query),
+            None => panic!("Can't get PSID {}", &psid),
+        };
+        let mut platform = Platform::new_from_parameters(&form_parameters, &state);
+        platform.run();
+        platform
+    }
+
+    fn check_results_for_psid(psid: usize, wiki: &str, expected: Vec<Title>) {
+        let platform = run_psid(psid);
+        assert!(platform.result.is_some());
+        let result = platform.result.unwrap();
+        assert_eq!(result.wiki, Some(wiki.to_string()));
+        let entries = result
+            .entries
+            .iter()
+            .cloned()
+            .collect::<Vec<PageListEntry>>();
+        assert_eq!(entries.len(), 1);
+        let titles: Vec<Title> = entries.iter().map(|e| e.title()).cloned().collect();
+        assert_eq!(titles, expected);
+    }
 
     #[test]
     fn test_parse_combination_string() {
@@ -645,4 +784,16 @@ mod tests {
         ));
         assert_eq!(res, expected);
     }
+
+    #[test]
+    fn test_manual_list_enwiki_use_props() {
+        check_results_for_psid(10087995, "wikidatawiki", vec![Title::new("Q13520818", 0)])
+    }
+
+    #[test]
+    fn test_manual_list_enwiki_sitelinks() {
+        // This assumes [[en:Count von Count]] has no lvwiki article
+        check_results_for_psid(10123257, "wikidatawiki", vec![Title::new("Q13520818", 0)])
+    }
+
 }

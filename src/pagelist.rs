@@ -240,12 +240,12 @@ impl PageList {
                 sql.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
-        self.wiki = Some("wikidatawiki".to_string());
         self.entries.clear();
         self.process_batch_results(platform, batches, &|row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
         });
+        self.wiki = Some("wikidatawiki".to_string());
     }
 
     fn convert_from_wikidata(&mut self, wiki: &str, platform: &Platform) {
@@ -262,7 +262,6 @@ impl PageList {
             })
             .collect::<Vec<SQLtuple>>();
 
-        self.wiki = Some(wiki.to_string());
         self.entries.clear();
         let api = platform.state.get_api_for_wiki(wiki.to_string()).unwrap();
         self.process_batch_results(platform, batches, &|row: my::Row| {
@@ -272,5 +271,6 @@ impl PageList {
                 &api,
             )))
         });
+        self.wiki = Some(wiki.to_string());
     }
 }
