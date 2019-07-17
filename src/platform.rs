@@ -124,7 +124,6 @@ impl Platform {
 
         /*
         // TODO
-        processWikidata ( pagelist ) ;
         processFiles ( pagelist ) ;
         processPages ( pagelist ) ;
         processSubpages ( pagelist ) ;
@@ -196,16 +195,13 @@ impl Platform {
         if wdi != "any" && wdi != "with" && wdi != "without" {
             return;
         }
-        println!("A: {:?}", &result);
         self.annotate_with_wikidata_item(result);
-        println!("B: {:?}", &result);
         if wdi == "with" {
             result.entries.retain(|entry| entry.wikidata_item.is_some());
         }
         if wdi == "without" {
             result.entries.retain(|entry| entry.wikidata_item.is_none());
         }
-        println!("C: {:?}", &result);
     }
 
     fn process_missing_database_filters(&mut self, result: &mut PageList) {

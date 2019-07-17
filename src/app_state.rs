@@ -236,9 +236,26 @@ impl AppState {
         None
     }
 
-    pub fn get_new_psid_for_query(&self, query_string: &String) -> Option<u64> {
+    pub fn get_or_create_psid_for_query(&self, query_string: &String) -> Option<u64> {
         let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
+
+        // Check for existing entry
+        let sql = (
+            "SELECT id FROM query WHERE querystring=? LIMIT 1".to_string(),
+            vec![query_string.to_owned()],
+        );
+        match conn.prep_exec(sql.0, sql.1) {
+            Ok(result) => {
+                for row in result {
+                    let psid: u64 = my::from_row(row.unwrap());
+                    return Some(psid);
+                }
+            }
+            Err(_) => {}
+        }
+
+        // Create new entry
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d- %H:%M:%S").to_string();
         let sql = (
