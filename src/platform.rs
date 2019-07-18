@@ -121,13 +121,12 @@ impl Platform {
         self.process_by_wikidata_item(&mut result);
         self.process_files(&mut result);
         self.process_pages(&mut result);
+        self.process_subpages(&mut result);
 
         self.result = Some(result);
 
         /*
         // TODO
-        processSubpages ( pagelist ) ;
-
         string wikidata_label_language = getParam ( "wikidata_label_language" , "" ) ;
         if ( wikidata_label_language.empty() ) wikidata_label_language = getParam("interface_language","en") ;
         pagelist.loadMissingMetadata ( wikidata_label_language , this ) ;
@@ -147,6 +146,62 @@ impl Platform {
             return wdfist.run() ;
         }
         */
+    }
+
+    fn process_subpages(&self, result: &mut PageList) {
+        let add_subpages = self.has_param("add_subpages");
+        let subpage_filter = self.get_param_default("subpage_filter", "either");
+        if !add_subpages && subpage_filter != "subpages" && subpage_filter != "no_subpages" {
+            return;
+        }
+
+        if add_subpages {
+            let title_ns: Vec<(String, NamespaceID)> = result
+                .entries
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.title().with_underscores().to_owned(),
+                        entry.title().namespace_id(),
+                    )
+                })
+                .collect();
+
+            let db_user_pass = self.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+            let mut conn = self
+                .state
+                .get_wiki_db_connection(&db_user_pass, &result.wiki.as_ref().unwrap())
+                .unwrap();
+
+            title_ns.iter().for_each(|(title, namespace_id)| {
+                let sql: SQLtuple = (
+                    "SELECT page_title,page_namespace FROM page WHERE page_namespace=? AND page_title LIKE ?"
+                        .to_string(),
+                    vec![namespace_id.to_string(), format!("{}/%", &title)],
+                );
+                let db_result = match conn.prep_exec(&sql.0, &sql.1) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("ERROR: {:?}", e);
+                        return;
+                    }
+                };
+                for row in db_result {
+                    let (page_title,page_namespace) = my::from_row::<(String,NamespaceID)>(row.unwrap());
+                    result.entries.insert(PageListEntry::new(Title::new(&page_title,page_namespace)));
+                }
+            });
+        }
+
+        if subpage_filter != "subpages" && subpage_filter != "no_subpages" {
+            return;
+        }
+
+        let keep_subpages = subpage_filter == "subpages";
+        result.entries.retain(|entry| {
+            let has_slash = entry.title().pretty().find('/').is_some();
+            has_slash == keep_subpages
+        });
     }
 
     fn process_pages(&self, result: &mut PageList) {
@@ -1160,6 +1215,23 @@ mod tests {
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id, Some(239794));
         assert_eq!(entry.wikidata_item, Some("Q12345".to_string()));
+    }
+
+    #[test]
+    fn test_manual_list_enwiki_subpages() {
+        // Manual list [[User:Magnus Manske]] on enwiki, subpages, not "root page"
+        let platform = run_psid(10138030);
+        let result = platform.result.unwrap();
+        let entries = result
+            .entries
+            .iter()
+            .cloned()
+            .collect::<Vec<PageListEntry>>();
+        assert!(entries.len() > 100);
+        // Try to find pages with no '/'
+        assert!(!entries
+            .iter()
+            .any(|entry| { entry.title().pretty().find('/').is_none() }));
     }
 
 }
