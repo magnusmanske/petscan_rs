@@ -239,7 +239,7 @@ impl Platform {
                 .iter_mut()
                 .map(|mut sql_batch| {
                     let tmp = Platform::prep_quote(&sql_batch.1);
-                    sql_batch.0 = "SELECT gil_to,6,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
+                    sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
                     sql_batch.0 += &tmp.0 ;
                     sql_batch.0 += ")";
                     if file_usage_data_ns0  {sql_batch.0 += " AND gil_page_namespace_id=0" ;}
@@ -267,70 +267,63 @@ impl Platform {
                 .iter_mut()
                 .map(|mut sql_batch| {
                     let tmp = Platform::prep_quote(&sql_batch.1);
-                    sql_batch.0 = "SELECT img_name,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN (".to_string() ;
+                    sql_batch.0 = "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN (".to_string() ;
                     sql_batch.0 += &tmp.0 ;
                     sql_batch.0 += ")";
                     sql_batch.to_owned()
                 })
                 .collect::<Vec<SQLtuple>>();
 
-            let mut tmp = PageList::new_from_wiki(&result.wiki.as_ref().unwrap());
-            tmp.process_batch_results(self, batches, &|row: my::Row| {
-                let (
-                    img_name,
-                    img_size,
-                    img_width,
-                    img_height,
-                    img_media_type,
-                    img_major_mime,
-                    img_minor_mime,
-                    img_user_text,
-                    img_timestamp,
-                    img_sha1,
-                ) = my::from_row::<(
-                    String,
-                    usize,
-                    usize,
-                    usize,
-                    String,
-                    String,
-                    String,
-                    String,
-                    String,
-                    String,
-                )>(row);
-                match &result
-                    .entries
-                    .get(&PageListEntry::new(Title::new(&img_name, 6)))
-                {
-                    Some(entry) => {
-                        let mut entry = (*entry).clone();
-                        if entry.file_info.is_none() {
-                            entry.file_info = Some(<FileInfo>::new());
-                        }
-                        match entry.file_info.as_mut() {
-                            Some(file_info) => {
-                                (*file_info).img_size = Some(img_size);
-                                (*file_info).img_width = Some(img_width);
-                                (*file_info).img_height = Some(img_height);
-                                (*file_info).img_media_type = Some(img_media_type);
-                                (*file_info).img_major_mime = Some(img_major_mime);
-                                (*file_info).img_minor_mime = Some(img_minor_mime);
-                                (*file_info).img_user_text = Some(img_user_text);
-                                (*file_info).img_timestamp = Some(img_timestamp);
-                                (*file_info).img_sha1 = Some(img_sha1);
-                            }
-                            None => {}
-                        }
-                        Some(entry)
+            result.annotate_batch_results(
+                self,
+                batches,
+                0,
+                1,
+                &|row: my::Row, entry: &mut PageListEntry| {
+                    let (
+                        _img_name,
+                        _namespace_id,
+                        img_size,
+                        img_width,
+                        img_height,
+                        img_media_type,
+                        img_major_mime,
+                        img_minor_mime,
+                        img_user_text,
+                        img_timestamp,
+                        img_sha1,
+                    ) = my::from_row::<(
+                        String,
+                        usize,
+                        usize,
+                        usize,
+                        usize,
+                        String,
+                        String,
+                        String,
+                        String,
+                        String,
+                        String,
+                    )>(row);
+                    if entry.file_info.is_none() {
+                        entry.file_info = Some(<FileInfo>::new());
                     }
-                    None => {
-                        println!("Not in list: {}", &img_name);
-                        None
+                    match entry.file_info.as_mut() {
+                        Some(file_info) => {
+                            (*file_info).img_size = Some(img_size);
+                            (*file_info).img_width = Some(img_width);
+                            (*file_info).img_height = Some(img_height);
+                            (*file_info).img_media_type = Some(img_media_type);
+                            (*file_info).img_major_mime = Some(img_major_mime);
+                            (*file_info).img_minor_mime = Some(img_minor_mime);
+                            (*file_info).img_user_text = Some(img_user_text);
+                            (*file_info).img_timestamp = Some(img_timestamp);
+                            (*file_info).img_sha1 = Some(img_sha1);
+                        }
+                        None => {}
                     }
-                }
-            });
-            result.replace_entries(&tmp);
+                },
+            );
         }
     }
 
