@@ -178,82 +178,51 @@ impl Platform {
                     sql_batch.to_owned()
                 })
                 .collect::<Vec<SQLtuple>>();
-        println!("{:?}", &batches);
 
-        let mut tmp = PageList::new_from_wiki(&result.wiki.as_ref().unwrap());
-        tmp.process_batch_results(self, batches, &|row: my::Row| {
-            let mut parts = row.unwrap();
-            let page_title = match parts.remove(0) {
-                my::Value::Bytes(uv) => String::from_utf8(uv).unwrap(),
-                _ => return None,
-            };
-            let namespace_id = match parts.remove(0) {
-                my::Value::Int(ns) => ns,
-                _ => return None,
-            } as NamespaceID;
-            let mut entry = match &result
-                .entries
-                .get(&PageListEntry::new(Title::new(&page_title, namespace_id)))
-            {
-                Some(entry) => (*entry).clone(),
-                None => return None,
-            };
-            if add_image {
-                entry.page_image = match parts.remove(0) {
-                    my::Value::Bytes(s) => String::from_utf8(s).ok(),
-                    _ => None,
-                };
-            }
-            if add_coordinates {
-                entry.coordinates = match parts.remove(0) {
-                    my::Value::Bytes(s) => match String::from_utf8(s) {
-                        Ok(lat_lon) => PageCoordinates::new_from_lat_lon(&lat_lon),
+        result.annotate_batch_results(
+            self,
+            batches,
+            0,
+            1,
+            &|row: my::Row, entry: &mut PageListEntry| {
+                let mut parts = row.unwrap();
+                parts.remove(0); // page_title
+                parts.remove(0); // page_namespace
+                if add_image {
+                    entry.page_image = match parts.remove(0) {
+                        my::Value::Bytes(s) => String::from_utf8(s).ok(),
                         _ => None,
-                    },
-                    _ => None,
-                };
-            }
-            if add_defaultsort {
-                entry.defaultsort = match parts.remove(0) {
-                    my::Value::Bytes(s) => String::from_utf8(s).ok(),
-                    _ => None,
-                };
-            }
-            if add_disambiguation {
-                entry.disambiguation = match parts.remove(0) {
-                    my::Value::NULL => Some(false),
-                    _ => Some(true),
+                    };
                 }
-            }
-            if add_incoming_links {
-                entry.incoming_links = match parts.remove(0) {
-                    my::Value::Int(i) => Some(i as usize),
-                    other => {
-                        println!("INCOMING: {:?}", &other);
-                        None
+                if add_coordinates {
+                    entry.coordinates = match parts.remove(0) {
+                        my::Value::Bytes(s) => match String::from_utf8(s) {
+                            Ok(lat_lon) => PageCoordinates::new_from_lat_lon(&lat_lon),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                }
+                if add_defaultsort {
+                    entry.defaultsort = match parts.remove(0) {
+                        my::Value::Bytes(s) => String::from_utf8(s).ok(),
+                        _ => None,
+                    };
+                }
+                if add_disambiguation {
+                    entry.disambiguation = match parts.remove(0) {
+                        my::Value::NULL => Some(false),
+                        _ => Some(true),
                     }
-                };
-            }
-            println!("{:?}", &entry);
-            Some(entry)
-        });
-        result.replace_entries(&tmp);
-
-        /*
-
-        uint32_t cnt = 0 ;
-        TWikidataDB db ( pl.wiki , this ) ;
-        map <uint32_t,vector <TPage *> > ns_pages ;
-        for ( auto i = pl.pages.begin() ; i != pl.pages.end() ; i++ ) {
-            ns_pages[i->meta.ns].push_back ( &(*i) )  ;
-            cnt++ ;
-            if ( cnt < DB_PAGE_BATCH_SIZE ) continue ;
-            annotatePage ( db , ns_pages , add_image , add_coordinates , add_defaultsort , add_disambiguation , add_incoming_links ) ;
-            cnt = 0 ;
-            ns_pages.clear() ;
-        }
-        annotatePage ( db , ns_pages , add_image , add_coordinates , add_defaultsort , add_disambiguation , add_incoming_links ) ;
-        */
+                }
+                if add_incoming_links {
+                    entry.incoming_links = match parts.remove(0) {
+                        my::Value::Int(i) => Some(i as usize),
+                        _ => None,
+                    };
+                }
+            },
+        );
     }
 
     fn process_files(&self, result: &mut PageList) {

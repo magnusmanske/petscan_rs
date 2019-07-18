@@ -200,7 +200,7 @@ impl PageList {
     }
 
     pub fn add_entry(&mut self, entry: PageListEntry) {
-        self.entries.insert(entry);
+        self.entries.replace(entry);
     }
 
     pub fn set_entries_from_vec(&mut self, entries: Vec<PageListEntry>) {
@@ -291,6 +291,7 @@ impl PageList {
         });
     }
 
+    /// Adds/replaces entries based on SQL query batch results.
     pub fn process_batch_results(
         &mut self,
         platform: &Platform,
@@ -317,6 +318,62 @@ impl PageList {
                         Some(entry) => self.add_entry(entry),
                         None => {}
                     },
+                    _ => {} // Ignore error
+                }
+            }
+        });
+    }
+
+    /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
+    pub fn annotate_batch_results(
+        &mut self,
+        platform: &Platform,
+        batches: Vec<SQLtuple>,
+        col_title: usize,
+        col_ns: usize,
+        f: &dyn Fn(my::Row, &mut PageListEntry),
+    ) {
+        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let mut conn = platform
+            .state
+            .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
+            .unwrap();
+
+        batches.iter().for_each(|sql| {
+            let result = match conn.prep_exec(&sql.0, &sql.1) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("ERROR: {:?}", e);
+                    return;
+                }
+            };
+            for row in result {
+                match row {
+                    Ok(row) => {
+                        let page_title = match row.get(col_title) {
+                            Some(title) => match title {
+                                my::Value::Bytes(uv) => String::from_utf8(uv).unwrap(),
+                                _ => continue,
+                            },
+                            None => continue,
+                        };
+                        let namespace_id = match row.get(col_ns) {
+                            Some(title) => match title {
+                                my::Value::Int(i) => i,
+                                _ => continue,
+                            },
+                            None => continue,
+                        };
+
+                        let tmp_entry = PageListEntry::new(Title::new(&page_title, namespace_id));
+                        let mut entry = match self.entries.get(&tmp_entry) {
+                            Some(e) => (*e).clone(),
+                            None => continue,
+                        };
+
+                        f(row, &mut entry);
+                        self.add_entry(entry);
+                    }
                     _ => {} // Ignore error
                 }
             }
