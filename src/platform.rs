@@ -232,43 +232,14 @@ impl Platform {
             || self.get_param("sortby") == Some("uploaddate".to_string());
         let file_usage = giu || self.has_param("file_usage_data");
         let file_usage_data_ns0 = self.has_param("file_usage_data_ns0");
-        if !file_data && !file_usage {
-            return;
-        }
 
-        let mut files_only = PageList::new_from_wiki(&result.wiki.as_ref().unwrap());
-        result
-            .entries
-            .retain(|entry| match entry.title().namespace_id() {
-                6 => {
-                    files_only.entries.insert(entry.to_owned());
-                    false
-                }
-                _ => true,
-            });
-
-        if files_only.is_empty() {
-            return;
-        }
-        self.annotate_files(&mut files_only, file_data, file_usage, file_usage_data_ns0);
-        result.replace_entries(&files_only);
-    }
-
-    /// This assumes all entries in `result` have file namespace
-    fn annotate_files(
-        &self,
-        result: &mut PageList,
-        file_data: bool,
-        file_usage: bool,
-        file_usage_data_ns0: bool,
-    ) {
         if file_usage {
             let batches: Vec<SQLtuple> = result
-                .to_sql_batches(PAGE_BATCH_SIZE)
+                .to_sql_batches_namespace(PAGE_BATCH_SIZE,6)
                 .iter_mut()
                 .map(|mut sql_batch| {
                     let tmp = Platform::prep_quote(&sql_batch.1);
-                    sql_batch.0 = "SELECT gil_to,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
+                    sql_batch.0 = "SELECT gil_to,6,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
                     sql_batch.0 += &tmp.0 ;
                     sql_batch.0 += ")";
                     if file_usage_data_ns0  {sql_batch.0 += " AND gil_page_namespace_id=0" ;}
@@ -277,25 +248,17 @@ impl Platform {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-            let mut tmp = PageList::new_from_wiki(&result.wiki.as_ref().unwrap());
-            tmp.process_batch_results(self, batches, &|row: my::Row| {
-                let (gil_to, gil_group) = my::from_row::<(String, String)>(row);
-                match &result
-                    .entries
-                    .get(&PageListEntry::new(Title::new(&gil_to, 6)))
-                {
-                    Some(entry) => {
-                        let mut entry = (*entry).clone();
-                        entry.file_info = Some(FileInfo::new_from_gil_group(&gil_group));
-                        Some(entry)
-                    }
-                    None => {
-                        println!("Not in list: {}", &gil_to);
-                        None
-                    }
-                }
-            });
-            result.replace_entries(&tmp);
+            result.annotate_batch_results(
+                self,
+                batches,
+                0,
+                1,
+                &|row: my::Row, entry: &mut PageListEntry| {
+                    let (_gil_to, _namespace_id, gil_group) =
+                        my::from_row::<(String, usize, String)>(row);
+                    entry.file_info = Some(FileInfo::new_from_gil_group(&gil_group));
+                },
+            );
         }
 
         if file_data {
@@ -1143,6 +1106,32 @@ mod tests {
         // [[Count von Count]] vs. [[Magnus Manske]]
         // Manual list on enwiki, minus [[Category:Fictional vampires]]
         check_results_for_psid(10126217, "enwiki", vec![Title::new("Magnus Manske", 0)]);
+    }
+
+    #[test]
+    fn test_manual_list_commons_file_info() {
+        // Manual list [[File:KingsCollegeChapelWest.jpg]] on commons
+        let platform = run_psid(10137125);
+        let result = platform.result.unwrap();
+        let entries = result
+            .entries
+            .iter()
+            .cloned()
+            .collect::<Vec<PageListEntry>>();
+        assert_eq!(entries.len(), 1);
+        let entry = entries.get(0).unwrap();
+        assert_eq!(entry.page_id, Some(1340715));
+        assert!(entry.file_info.is_some());
+        let fi = entry.file_info.as_ref().unwrap();
+        assert!(fi.file_usage.len() > 10);
+        assert_eq!(fi.img_size, Some(223131));
+        assert_eq!(fi.img_width, Some(1025));
+        assert_eq!(fi.img_height, Some(768));
+        assert_eq!(fi.img_user_text, Some("Solipsist~commonswiki".to_string()));
+        assert_eq!(
+            fi.img_sha1,
+            Some("sypcaey3hmlhjky46x0nhiwhiivx6yj".to_string())
+        );
     }
 
     #[test]

@@ -270,6 +270,28 @@ impl PageList {
         ret
     }
 
+    pub fn to_sql_batches_namespace(
+        &self,
+        chunk_size: usize,
+        namespace_id: NamespaceID,
+    ) -> Vec<SQLtuple> {
+        let mut ret: Vec<SQLtuple> = vec![];
+        if self.is_empty() {
+            return ret;
+        }
+        let by_ns = self.group_by_namespace();
+        for (nsid, titles) in by_ns {
+            if nsid == namespace_id {
+                titles.chunks(chunk_size).for_each(|chunk| {
+                    let mut sql = Platform::prep_quote(&chunk.to_vec());
+                    sql.0 = format!("(page_namespace={} AND page_title IN({}))", nsid, &sql.0);
+                    ret.push(sql);
+                });
+            }
+        }
+        ret
+    }
+
     pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) {
         // Already that wiki?
         if self.wiki == None || self.wiki == Some(wiki.to_string()) {
