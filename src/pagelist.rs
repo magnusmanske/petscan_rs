@@ -77,14 +77,34 @@ impl FileInfo {
 //________________________________________________________________________________________________________________________
 
 #[derive(Debug, Clone)]
+pub struct PageCoordinates {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+impl PageCoordinates {
+    pub fn new_from_lat_lon(s: &String) -> Option<Self> {
+        let parts: Vec<&str> = s.split(',').collect();
+        let lat = parts.get(0)?.parse::<f64>().ok()?;
+        let lon = parts.get(1)?.parse::<f64>().ok()?;
+        Some(Self { lat: lat, lon: lon })
+    }
+}
+
+//________________________________________________________________________________________________________________________
+
+#[derive(Debug, Clone)]
 pub struct PageListEntry {
     title: Title,
-    //pub does_exist: Option<bool>,
-    //pub is_redirect: Option<bool>,
     pub wikidata_item: Option<String>,
     pub page_id: Option<usize>,
     pub page_bytes: Option<usize>,
     pub page_timestamp: Option<String>,
+    pub page_image: Option<String>,
+    pub defaultsort: Option<String>,
+    pub disambiguation: Option<bool>,
+    pub incoming_links: Option<usize>,
+    pub coordinates: Option<PageCoordinates>,
     pub link_count: Option<usize>,
     pub file_info: Option<FileInfo>,
 }
@@ -108,12 +128,15 @@ impl PageListEntry {
     pub fn new(title: Title) -> Self {
         Self {
             title: title,
-            //does_exist: None,
-            //is_redirect: None,
             wikidata_item: None,
             page_id: None,
             page_bytes: None,
             page_timestamp: None,
+            defaultsort: None,
+            disambiguation: None,
+            incoming_links: None,
+            page_image: None,
+            coordinates: None,
             link_count: None,
             file_info: None,
         }

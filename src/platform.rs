@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
-use crate::pagelist::{FileInfo, PageList, PageListEntry};
+use crate::pagelist::{FileInfo, PageCoordinates, PageList, PageListEntry};
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
@@ -120,12 +120,12 @@ impl Platform {
         }
         self.process_by_wikidata_item(&mut result);
         self.process_files(&mut result);
+        self.process_pages(&mut result);
 
         self.result = Some(result);
 
         /*
         // TODO
-        processPages ( pagelist ) ;
         processSubpages ( pagelist ) ;
 
         string wikidata_label_language = getParam ( "wikidata_label_language" , "" ) ;
@@ -146,6 +146,113 @@ impl Platform {
             TWDFIST wdfist ( &pagelist , this ) ;
             return wdfist.run() ;
         }
+        */
+    }
+
+    fn process_pages(&self, result: &mut PageList) {
+        let add_coordinates = self.has_param("add_coordinates");
+        let add_image = self.has_param("add_image");
+        let add_defaultsort = self.has_param("add_defaultsort");
+        let add_disambiguation = self.has_param("add_disambiguation");
+        let add_incoming_links = self.get_param_blank("sortby") == "incoming_links";
+        if !add_coordinates
+            && !add_image
+            && !add_defaultsort
+            && !add_disambiguation & !add_incoming_links
+        {
+            return;
+        }
+
+        let batches: Vec<SQLtuple> = result
+                .to_sql_batches(PAGE_BATCH_SIZE)
+                .iter_mut()
+                .map(|mut sql_batch| {
+                    let mut sql ="SELECT page_title,page_namespace".to_string();
+                    if add_image {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname IN ('page_image','page_image_free') LIMIT 1) AS image" ;}
+                    if add_coordinates {sql += ",(SELECT concat(gt_lat,',',gt_lon) FROM geo_tags WHERE gt_primary=1 AND gt_globe='earth' AND gt_page_id=page_id LIMIT 1) AS coord" ;}
+                    if add_defaultsort {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname='defaultsort' LIMIT 1) AS defaultsort" ;}
+                    if add_disambiguation {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname='disambiguation' LIMIT 1) AS disambiguation" ;}
+                    if add_incoming_links {sql += ",(SELECT count(*) FROM pagelinks WHERE pl_namespace=page_namespace AND pl_title=page_title AND pl_from_namespace=0) AS incoming_links" ;}
+                    sql += " FROM page WHERE " ;
+                    sql_batch.0 = sql + &sql_batch.0 ;
+                    sql_batch.to_owned()
+                })
+                .collect::<Vec<SQLtuple>>();
+        println!("{:?}", &batches);
+
+        let mut tmp = PageList::new_from_wiki(&result.wiki.as_ref().unwrap());
+        tmp.process_batch_results(self, batches, &|row: my::Row| {
+            let mut parts = row.unwrap();
+            let page_title = match parts.remove(0) {
+                my::Value::Bytes(uv) => String::from_utf8(uv).unwrap(),
+                _ => return None,
+            };
+            let namespace_id = match parts.remove(0) {
+                my::Value::Int(ns) => ns,
+                _ => return None,
+            } as NamespaceID;
+            let mut entry = match &result
+                .entries
+                .get(&PageListEntry::new(Title::new(&page_title, namespace_id)))
+            {
+                Some(entry) => (*entry).clone(),
+                None => return None,
+            };
+            if add_image {
+                entry.page_image = match parts.remove(0) {
+                    my::Value::Bytes(s) => String::from_utf8(s).ok(),
+                    _ => None,
+                };
+            }
+            if add_coordinates {
+                entry.coordinates = match parts.remove(0) {
+                    my::Value::Bytes(s) => match String::from_utf8(s) {
+                        Ok(lat_lon) => PageCoordinates::new_from_lat_lon(&lat_lon),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+            }
+            if add_defaultsort {
+                entry.defaultsort = match parts.remove(0) {
+                    my::Value::Bytes(s) => String::from_utf8(s).ok(),
+                    _ => None,
+                };
+            }
+            if add_disambiguation {
+                entry.disambiguation = match parts.remove(0) {
+                    my::Value::NULL => Some(false),
+                    _ => Some(true),
+                }
+            }
+            if add_incoming_links {
+                entry.incoming_links = match parts.remove(0) {
+                    my::Value::Int(i) => Some(i as usize),
+                    other => {
+                        println!("INCOMING: {:?}", &other);
+                        None
+                    }
+                };
+            }
+            println!("{:?}", &entry);
+            Some(entry)
+        });
+        result.replace_entries(&tmp);
+
+        /*
+
+        uint32_t cnt = 0 ;
+        TWikidataDB db ( pl.wiki , this ) ;
+        map <uint32_t,vector <TPage *> > ns_pages ;
+        for ( auto i = pl.pages.begin() ; i != pl.pages.end() ; i++ ) {
+            ns_pages[i->meta.ns].push_back ( &(*i) )  ;
+            cnt++ ;
+            if ( cnt < DB_PAGE_BATCH_SIZE ) continue ;
+            annotatePage ( db , ns_pages , add_image , add_coordinates , add_defaultsort , add_disambiguation , add_incoming_links ) ;
+            cnt = 0 ;
+            ns_pages.clear() ;
+        }
+        annotatePage ( db , ns_pages , add_image , add_coordinates , add_defaultsort , add_disambiguation , add_incoming_links ) ;
         */
     }
 
@@ -1067,6 +1174,31 @@ mod tests {
         // [[Count von Count]] vs. [[Magnus Manske]]
         // Manual list on enwiki, minus [[Category:Fictional vampires]]
         check_results_for_psid(10126217, "enwiki", vec![Title::new("Magnus Manske", 0)]);
+    }
+
+    #[test]
+    fn test_manual_list_enwiki_page_info() {
+        // Manual list [[Cambridge]] on enwiki
+        let platform = run_psid(10136716);
+        let result = platform.result.unwrap();
+        let entries = result
+            .entries
+            .iter()
+            .cloned()
+            .collect::<Vec<PageListEntry>>();
+        assert_eq!(entries.len(), 1);
+        let entry = entries.get(0).unwrap();
+        assert_eq!(entry.page_id, Some(36995));
+        assert!(entry.page_bytes.is_some());
+        assert!(entry.page_timestamp.is_some());
+        assert_eq!(
+            entry.page_image,
+            Some("KingsCollegeChapelWest.jpg".to_string())
+        );
+        assert_eq!(entry.disambiguation, Some(false));
+        assert!(entry.incoming_links.is_some());
+        assert!(entry.incoming_links.unwrap() > 7500);
+        assert!(entry.coordinates.is_some());
     }
 
 }
