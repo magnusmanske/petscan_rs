@@ -336,29 +336,22 @@ impl Platform {
         let batches: Vec<SQLtuple> = result.to_sql_batches(PAGE_BATCH_SIZE)
             .iter_mut()
             .map(|sql|{
-                sql.0 = "SELECT pp_value,page_title,page_namespace FROM page_props,page WHERE page_id=pp_page AND pp_propname='wikibase_item' AND ".to_owned()+&sql.0;
+                sql.0 = "SELECT page_title,page_namespace,pp_value FROM page_props,page WHERE page_id=pp_page AND pp_propname='wikibase_item' AND ".to_owned()+&sql.0;
                 sql.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
 
-        let mut tmp = PageList::new_from_wiki(result.wiki.as_ref().unwrap().as_str());
-        tmp.process_batch_results(self, batches, &|row: my::Row| {
-            let (pp_value, page_title, page_namespace) =
-                my::from_row::<(String, String, NamespaceID)>(row);
-            let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
-            entry.wikidata_item = Some(pp_value);
-            Some(entry)
-        });
-        tmp.entries
-            .iter()
-            .for_each(|new_entry| match result.entries.get(new_entry) {
-                Some(entry) => {
-                    let mut entry = entry.clone();
-                    entry.wikidata_item = new_entry.wikidata_item.clone();
-                    result.entries.replace(entry);
-                }
-                None => println!("Could not find entry {:?}", &new_entry),
-            });
+        result.annotate_batch_results(
+            self,
+            batches,
+            0,
+            1,
+            &|row: my::Row, entry: &mut PageListEntry| {
+                let (_page_title, _page_namespace, pp_value) =
+                    my::from_row::<(String, NamespaceID, String)>(row);
+                entry.wikidata_item = Some(pp_value);
+            },
+        );
     }
 
     fn process_by_wikidata_item(&mut self, result: &mut PageList) {
@@ -1150,6 +1143,22 @@ mod tests {
         assert!(entry.incoming_links.is_some());
         assert!(entry.incoming_links.unwrap() > 7500);
         assert!(entry.coordinates.is_some());
+    }
+
+    #[test]
+    fn test_manual_list_enwiki_annotate_wikidata_item() {
+        // Manual list [[Count von Count]] on enwiki
+        let platform = run_psid(10137767);
+        let result = platform.result.unwrap();
+        let entries = result
+            .entries
+            .iter()
+            .cloned()
+            .collect::<Vec<PageListEntry>>();
+        assert_eq!(entries.len(), 1);
+        let entry = entries.get(0).unwrap();
+        assert_eq!(entry.page_id, Some(239794));
+        assert_eq!(entry.wikidata_item, Some("Q12345".to_string()));
     }
 
 }
