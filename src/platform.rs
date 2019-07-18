@@ -123,14 +123,17 @@ impl Platform {
         self.process_pages(&mut result);
         self.process_subpages(&mut result);
 
+        let wikidata_label_language = self.get_param_default(
+            "wikidata_label_language",
+            &self.get_param_default("interface_language", "en"),
+        );
+        result.load_missing_metadata(Some(wikidata_label_language), &self);
+
+        // DONE
         self.result = Some(result);
 
         /*
         // TODO
-        string wikidata_label_language = getParam ( "wikidata_label_language" , "" ) ;
-        if ( wikidata_label_language.empty() ) wikidata_label_language = getParam("interface_language","en") ;
-        pagelist.loadMissingMetadata ( wikidata_label_language , this ) ;
-
         pagelist.regexpFilter ( getParam("regexp_filter","") ) ;
 
         sortResults ( pagelist ) ;
@@ -191,6 +194,7 @@ impl Platform {
                     result.entries.insert(PageListEntry::new(Title::new(&page_title,page_namespace)));
                 }
             });
+            // TODO if new pages were added, they should get some of the post_process_result treatment as well
         }
 
         if subpage_filter != "subpages" && subpage_filter != "no_subpages" {
@@ -410,7 +414,6 @@ impl Platform {
     }
 
     fn process_by_wikidata_item(&mut self, result: &mut PageList) {
-        // TEST: http://127.0.0.1:3000/?psid=10126830
         if result.wiki == Some("wikidatawiki".to_string()) {
             return;
         }
@@ -441,7 +444,6 @@ impl Platform {
     }
 
     fn process_labels(&mut self, result: &mut PageList) {
-        //println!("{:?}", &self.form_parameters);
         let mut sql = self.get_label_sql();
         if sql.1.is_empty() {
             return;
@@ -1232,6 +1234,26 @@ mod tests {
         assert!(!entries
             .iter()
             .any(|entry| { entry.title().pretty().find('/').is_none() }));
+    }
+
+    #[test]
+    fn test_manual_list_wikidata_labels() {
+        // Manual list [[Q12345]], nl label/desc
+        let platform = run_psid(10138979);
+        let result = platform.result.unwrap();
+        let entries = result
+            .entries
+            .iter()
+            .cloned()
+            .collect::<Vec<PageListEntry>>();
+        assert_eq!(entries.len(), 1);
+        let entry = entries.get(0).unwrap();
+        assert_eq!(entry.page_id, Some(13925));
+        assert_eq!(entry.wikidata_label, Some("Graaf Tel".to_string()));
+        assert_eq!(
+            entry.wikidata_description,
+            Some("figuur van Sesamstraat".to_string())
+        );
     }
 
 }

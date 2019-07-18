@@ -96,7 +96,6 @@ impl PageCoordinates {
 #[derive(Debug, Clone)]
 pub struct PageListEntry {
     title: Title,
-    pub wikidata_item: Option<String>,
     pub page_id: Option<usize>,
     pub page_bytes: Option<usize>,
     pub page_timestamp: Option<String>,
@@ -107,6 +106,9 @@ pub struct PageListEntry {
     pub coordinates: Option<PageCoordinates>,
     pub link_count: Option<usize>,
     pub file_info: Option<FileInfo>,
+    pub wikidata_item: Option<String>,
+    pub wikidata_label: Option<String>,
+    pub wikidata_description: Option<String>,
 }
 
 impl Hash for PageListEntry {
@@ -139,6 +141,8 @@ impl PageListEntry {
             coordinates: None,
             link_count: None,
             file_info: None,
+            wikidata_label: None,
+            wikidata_description: None,
         }
     }
 
@@ -400,6 +404,97 @@ impl PageList {
                 }
             }
         });
+    }
+
+    pub fn load_missing_metadata(
+        &mut self,
+        wikidata_language: Option<String>,
+        platform: &Platform,
+    ) {
+        let batches: Vec<SQLtuple> = self
+            .to_sql_batches(PAGE_BATCH_SIZE)
+            .iter_mut()
+            .map(|mut sql_batch| {
+                sql_batch.0 =
+                    "SELECT page_title,page_namespace,page_id,page_len,page_touched FROM page WHERE"
+                        .to_string() + &sql_batch.0;
+                sql_batch.to_owned()
+            })
+            .collect::<Vec<SQLtuple>>();
+
+        self.annotate_batch_results(
+            platform,
+            batches,
+            0,
+            1,
+            &|row: my::Row, entry: &mut PageListEntry| {
+                let (_page_title, _page_namespace, page_id, page_len, page_touched) =
+                    my::from_row::<(String, NamespaceID, usize, usize, String)>(row);
+                entry.page_id = Some(page_id);
+                entry.page_bytes = Some(page_len);
+                entry.page_timestamp = Some(page_touched);
+            },
+        );
+
+        // All done
+        if self.wiki != Some("wikidatawiki".to_string()) || wikidata_language.is_none() {
+            return;
+        }
+
+        // No need to load labels for WDFIST mode
+        if !platform.has_param("regexp_filter") && platform.has_param("wdf_main") {
+            return;
+        }
+
+        match wikidata_language {
+            Some(wikidata_language) => {
+                self.add_wikidata_labels_for_namespace(0, "item", &wikidata_language, platform);
+                self.add_wikidata_labels_for_namespace(
+                    120,
+                    "property",
+                    &wikidata_language,
+                    platform,
+                );
+            }
+            None => {}
+        }
+    }
+
+    fn add_wikidata_labels_for_namespace(
+        &mut self,
+        namespace_id: NamespaceID,
+        entity_type: &str,
+        wikidata_language: &String,
+        platform: &Platform,
+    ) {
+        let batches: Vec<SQLtuple> = self
+            .to_sql_batches_namespace(PAGE_BATCH_SIZE,namespace_id)
+            .iter_mut()
+            .map(|mut sql_batch| {
+                // entity_type and namespace_id are "database safe"
+                sql_batch.0 = format!("SELECT term_full_entity_id,{} AS dummy_namespace,term_text,term_type FROM wb_terms WHERE term_entity_type='{}' AND term_language=? AND term_full_entity_id IN (",namespace_id,&entity_type);
+                sql_batch.0 += &sql_batch.1.iter().map(|_|"?").collect::<Vec<&str>>().join(",") ;
+                sql_batch.0 += ")" ;
+                sql_batch.1.insert(0,wikidata_language.to_string());
+                sql_batch.to_owned()
+            })
+            .collect::<Vec<SQLtuple>>();
+
+        self.annotate_batch_results(
+            platform,
+            batches,
+            0,
+            1,
+            &|row: my::Row, entry: &mut PageListEntry| {
+                let (_page_title, _page_namespace, term_text, term_type) =
+                    my::from_row::<(String, NamespaceID, String, String)>(row);
+                match term_type.as_str() {
+                    "label" => entry.wikidata_label = Some(term_text),
+                    "description" => entry.wikidata_description = Some(term_text),
+                    _ => {}
+                }
+            },
+        );
     }
 
     fn convert_to_wikidata(&mut self, platform: &Platform) {
