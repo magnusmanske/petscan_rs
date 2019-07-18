@@ -128,14 +128,16 @@ impl Platform {
             &self.get_param_default("interface_language", "en"),
         );
         result.load_missing_metadata(Some(wikidata_label_language), &self);
+        match self.get_param("regexp_filter") {
+            Some(regexp) => result.regexp_filter(&regexp),
+            None => {}
+        }
 
         // DONE
         self.result = Some(result);
 
         /*
         // TODO
-        pagelist.regexpFilter ( getParam("regexp_filter","") ) ;
-
         sortResults ( pagelist ) ;
         processRedlinks ( pagelist ) ; // Supersedes sort
         params["format"] = getParam ( "format" , "html" , true ) ;
@@ -1081,10 +1083,13 @@ mod tests {
         STATE.clone()
     }
 
-    fn run_psid(psid: usize) -> Platform {
+    fn run_psid_ext(psid: usize, addendum: &str) -> Platform {
         let state = get_state();
         let form_parameters = match state.get_query_from_psid(&format!("{}", &psid)) {
-            Some(psid_query) => FormParameters::outcome_from_query(&psid_query),
+            Some(psid_query) => {
+                let query = psid_query + addendum;
+                FormParameters::outcome_from_query(&query)
+            }
             None => panic!("Can't get PSID {}", &psid),
         };
         let mut platform = Platform::new_from_parameters(&form_parameters, &state);
@@ -1092,8 +1097,12 @@ mod tests {
         platform
     }
 
-    fn check_results_for_psid(psid: usize, wiki: &str, expected: Vec<Title>) {
-        let platform = run_psid(psid);
+    fn run_psid(psid: usize) -> Platform {
+        run_psid_ext(psid, "")
+    }
+
+    fn check_results_for_psid_ext(psid: usize, addendum: &str, wiki: &str, expected: Vec<Title>) {
+        let platform = run_psid_ext(psid, addendum);
         assert!(platform.result.is_some());
         let result = platform.result.unwrap();
         assert_eq!(result.wiki, Some(wiki.to_string()));
@@ -1105,6 +1114,10 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let titles: Vec<Title> = entries.iter().map(|e| e.title()).cloned().collect();
         assert_eq!(titles, expected);
+    }
+
+    fn check_results_for_psid(psid: usize, wiki: &str, expected: Vec<Title>) {
+        check_results_for_psid_ext(psid, "", wiki, expected)
     }
 
     #[test]
@@ -1253,6 +1266,34 @@ mod tests {
         assert_eq!(
             entry.wikidata_description,
             Some("figuur van Sesamstraat".to_string())
+        );
+    }
+
+    #[test]
+    fn test_manual_list_wikidata_regexp() {
+        check_results_for_psid_ext(
+            10140344,
+            "&regexp_filter=.*Manske",
+            "wikidatawiki",
+            vec![Title::new("Q13520818", 0)],
+        );
+        check_results_for_psid_ext(
+            10140344,
+            "&regexp_filter=Graaf.*",
+            "wikidatawiki",
+            vec![Title::new("Q12345", 0)],
+        );
+        check_results_for_psid_ext(
+            10140616,
+            "&regexp_filter=&regexp_filter=Jimbo.*",
+            "enwiki",
+            vec![Title::new("Jimbo Wales", 0)],
+        );
+        check_results_for_psid_ext(
+            10140616,
+            "&regexp_filter=&regexp_filter=.*Sanger",
+            "enwiki",
+            vec![Title::new("Larry Sanger", 0)],
         );
     }
 

@@ -3,6 +3,7 @@ use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
+use regex::Regex;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -541,5 +542,20 @@ impl PageList {
             )))
         });
         self.wiki = Some(wiki.to_string());
+    }
+
+    pub fn regexp_filter(&mut self, regexp: &String) {
+        let regexp_all = "^".to_string() + regexp + "$";
+        let is_wikidata = self.wiki == Some("wikidatawiki".to_string());
+        match Regex::new(&regexp_all) {
+            Ok(re) => self.entries.retain(|entry| match is_wikidata {
+                true => match &entry.wikidata_label {
+                    Some(s) => re.is_match(s.as_str()),
+                    None => false,
+                },
+                false => re.is_match(entry.title().pretty().as_str()),
+            }),
+            _ => {}
+        }
     }
 }
