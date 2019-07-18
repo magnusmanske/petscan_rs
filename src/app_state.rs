@@ -71,6 +71,9 @@ impl AppState {
                 }
             }
         }
+        if ret.db_pool.is_empty() {
+            panic!("No database access config available");
+        }
         ret
     }
 

@@ -591,6 +591,7 @@ impl Platform {
     }
 
     pub fn entry_from_entity(entity: &str) -> Option<PageListEntry> {
+        // TODO media-info?
         match entity.chars().next() {
             Some('Q') => Some(PageListEntry::new(Title::new(&entity.to_string(), 0))),
             Some('P') => Some(PageListEntry::new(Title::new(&entity.to_string(), 120))),
