@@ -1,11 +1,16 @@
+use crate::app_state::AppState;
 use crate::pagelist::PageListEntry;
 use crate::platform::*;
 use mediawiki::api::Api;
+use mediawiki::title::Title;
+use rocket::http::uri::Uri;
 use rocket::http::ContentType;
+use std::sync::Arc;
 
 //________________________________________________________________________________________________________________________
 
 pub struct RenderParams {
+    wiki: String,
     file_data: bool,
     file_usage: bool,
     thumbnails_in_wiki_output: bool,
@@ -21,12 +26,14 @@ pub struct RenderParams {
     use_autolist: bool,
     autolist_creator_mode: bool,
     api: Api,
+    state: Arc<AppState>,
     row_number: usize,
 }
 
 impl RenderParams {
     pub fn new(platform: &Platform, wiki: &String) -> Self {
         let mut ret = Self {
+            wiki: wiki.to_owned(),
             file_data: platform.has_param("ext_image_data"),
             file_usage: platform.has_param("file_usage_data"),
             thumbnails_in_wiki_output: platform.has_param("thumbnails_in_wiki_output"),
@@ -42,6 +49,7 @@ impl RenderParams {
             use_autolist: false,          // Possibly set downstream
             autolist_creator_mode: false, // Possibly set downstream
             api: platform.state().get_api_for_wiki(wiki.to_string()).unwrap(),
+            state: platform.state(),
             row_number: 0,
         };
         ret.show_wikidata_item = ret.wdi == "any" || ret.wdi == "with";
@@ -567,26 +575,57 @@ impl Render for RenderHTML {
 
     // ?psid=10155065
 
-    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "TODO".to_string()
+    fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
+        self.render_wikilink(&entry.title(), &params.wiki, &entry.wikidata_label, params)
     }
     fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
         "TODO".to_string()
     }
-    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String {
-        "TODO".to_string()
+    fn render_user_name(&self, user: &String, params: &RenderParams) -> String {
+        let title = Title::new(user, 2);
+        self.render_wikilink(&title, &params.wiki, &None, params)
     }
     fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
         "TODO".to_string()
     }
-    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "TODO".to_string()
+    fn render_cell_namespace(&self, entry: &PageListEntry, params: &RenderParams) -> String {
+        let namespace_name = entry
+            .title()
+            .namespace_name(&params.api)
+            .unwrap_or("UNKNOWN NAMESPACE".to_string());
+        if namespace_name.is_empty() {
+            "<span tt='namespace_0'>Article</span>".to_string()
+        } else {
+            namespace_name
+        }
     }
 }
 
 impl RenderHTML {
     pub fn new() -> Box<Self> {
         Box::new(Self {})
+    }
+
+    fn render_wikilink(
+        &self,
+        title: &Title,
+        wiki: &String,
+        alt_label: &Option<String>,
+        params: &RenderParams,
+    ) -> String {
+        let server = params
+            .state
+            .get_server_url_for_wiki(wiki)
+            .unwrap()
+            .to_string();
+        let url = server
+            + "/wiki/"
+            + &Uri::percent_encode(&title.full_with_underscores(&params.api).unwrap());
+        let label = match alt_label {
+            Some(label) => label.to_string(),
+            None => title.full_pretty(&params.api).unwrap(),
+        };
+        "<a target='_blank' href='".to_string() + &url + "'>" + &label + "</a>"
     }
 
     fn render_html_row(&self, row: &Vec<String>, header: &Vec<(String, String)>) -> String {
@@ -646,7 +685,7 @@ impl RenderHTML {
                     }
 
                     //for ( auto k = file_data_keys.begin() ; k != file_data_keys.end() ; k++ ) {
-                    //	if ( *k == col ) ret += "<th tt='h_"+col+"'></th>" ;
+                    //  if ( *k == col ) ret += "<th tt='h_"+col+"'></th>" ;
                     //}
                 }
             };

@@ -1210,6 +1210,7 @@ impl Platform {
         results: &mut HashMap<String, Option<PageList>>,
         combination: &Combination,
     ) -> Option<PageList> {
+        println!("COMB: {:?}", &combination);
         match combination {
             Combination::Source(s) => match results.get(s) {
                 Some(r) => r.to_owned(),
@@ -1219,7 +1220,7 @@ impl Platform {
                 (Combination::None, c) => self.combine_results(results, c),
                 (c, Combination::None) => self.combine_results(results, c),
                 (c, d) => {
-                    let mut r1 = self.combine_results(results, c).unwrap();
+                    let mut r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d);
                     r1.union(r2).ok()?;
                     Some(r1)
@@ -1229,7 +1230,7 @@ impl Platform {
                 (Combination::None, _c) => None,
                 (_c, Combination::None) => None,
                 (c, d) => {
-                    let mut r1 = self.combine_results(results, c).unwrap();
+                    let mut r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d);
                     r1.intersection(r2).ok()?;
                     Some(r1)
@@ -1239,7 +1240,7 @@ impl Platform {
                 (Combination::None, _c) => None,
                 (c, Combination::None) => self.combine_results(results, c),
                 (c, d) => {
-                    let mut r1 = self.combine_results(results, c).unwrap();
+                    let mut r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d);
                     r1.difference(r2).ok()?;
                     Some(r1)
