@@ -91,7 +91,7 @@ pub trait Render {
             columns.push("linknumber");
         } else {
             columns.push("page_id");
-            columns.push("namespace_id");
+            columns.push("namespace");
             columns.push("size");
             columns.push("timestamp");
         }
@@ -135,6 +135,10 @@ pub trait Render {
         "IMPLEMENT THIS!".to_string()
     }
 
+    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "IMPLEMENT THIS!".to_string()
+    }
+
     fn opt_usize(&self, o: &Option<usize>) -> String {
         o.map(|x| x.to_string()).unwrap_or("".to_string())
     }
@@ -168,7 +172,7 @@ pub trait Render {
             let cell = match k.as_str() {
                 "title" => self.render_cell_title(entry, params),
                 "page_id" => self.opt_usize(&entry.page_id),
-                "namespace_id" => entry.title().namespace_id().to_string(),
+                "namespace" => self.render_cell_namespace(entry, params),
                 "size" => self.opt_usize(&entry.page_bytes),
                 "timestamp" => self.opt_string(&entry.page_timestamp),
                 "wikidata_item" => self.render_cell_wikidata_item(entry, params),
@@ -253,7 +257,7 @@ impl Render for RenderWiki {
         let mut header: Vec<(&str, &str)> = vec![
             ("title", "Title"),
             ("page_id", "Page ID"),
-            ("namespace_id", "Namespace"),
+            ("namespace", "Namespace"),
             ("size", "Size (bytes)"),
             ("timestamp", "Last change"),
         ];
@@ -324,6 +328,10 @@ impl Render for RenderWiki {
             None => "".to_string(),
         }
     }
+
+    fn render_cell_namespace(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
+        entry.title().namespace_id().to_string()
+    }
 }
 
 impl RenderWiki {
@@ -369,7 +377,7 @@ impl Render for RenderTSV {
             ("number", "number"),
             ("title", "title"),
             ("page_id", "pageid"),
-            ("namespace_id", "namespace"),
+            ("namespace", "namespace"),
             ("size", "length"),
             ("timestamp", "touched"),
         ];
@@ -438,6 +446,13 @@ impl Render for RenderTSV {
             Some(img) => img.to_string(),
             None => "".to_string(),
         }
+    }
+
+    fn render_cell_namespace(&self, entry: &PageListEntry, params: &RenderParams) -> String {
+        entry
+            .title()
+            .namespace_name(&params.api)
+            .unwrap_or("UNKNOWN_NAMESPACE".to_string())
     }
 }
 
