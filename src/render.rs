@@ -19,6 +19,7 @@ pub struct RenderParams {
     add_incoming_links: bool,
     do_output_redlinks: bool,
     use_autolist: bool,
+    autolist_creator_mode: bool,
     api: Api,
     row_number: usize,
 }
@@ -38,7 +39,8 @@ impl RenderParams {
             show_wikidata_item: false,
             is_wikidata: wiki == "wikidatawiki",
             do_output_redlinks: platform.do_output_redlinks(),
-            use_autolist: false, // Possibly set downstream
+            use_autolist: false,          // Possibly set downstream
+            autolist_creator_mode: false, // Possibly set downstream
             api: platform.state().get_api_for_wiki(wiki.to_string()).unwrap(),
             row_number: 0,
         };
@@ -55,12 +57,7 @@ pub trait Render {
         _platform: &Platform,
         _wiki: &String,
         _pages: Vec<PageListEntry>,
-    ) -> MyResponse {
-        MyResponse {
-            s: format!("Oh well"),
-            content_type: ContentType::Plain,
-        }
-    }
+    ) -> MyResponse;
 
     fn file_data_keys(&self) -> Vec<&str> {
         vec![
@@ -119,25 +116,11 @@ pub trait Render {
         columns
     }
 
-    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "IMPLEMENT THIS!".to_string()
-    }
-
-    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "IMPLEMENT THIS!".to_string()
-    }
-
-    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String {
-        "IMPLEMENT THIS!".to_string()
-    }
-
-    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
-        "IMPLEMENT THIS!".to_string()
-    }
-
-    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "IMPLEMENT THIS!".to_string()
-    }
+    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
+    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
+    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String;
+    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String;
+    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
 
     fn opt_usize(&self, o: &Option<usize>) -> String {
         o.map(|x| x.to_string()).unwrap_or("".to_string())
@@ -478,10 +461,198 @@ impl RenderTSV {
 /// Renders HTML
 pub struct RenderHTML {}
 
-impl Render for RenderHTML {}
+impl Render for RenderHTML {
+    fn response(
+        &self,
+        platform: &Platform,
+        wiki: &String,
+        entries: Vec<PageListEntry>,
+    ) -> MyResponse {
+        let mut params = RenderParams::new(platform, wiki);
+        let mut rows: Vec<String> = vec![];
+
+        rows.push("<hr/>".to_string());
+        rows.push("<script>var output_wiki='".to_string() + &wiki + "';</script>");
+
+        /*
+        // TODO
+        for ( auto a:platform->errors ) {
+            ret += "<div class='alert alert-danger' role='alert'>" + a + "</div>" ;
+        }
+        */
+
+        // Wikidata edit box?
+        if wiki != "wikidatawiki" && platform.get_param_blank("wikidata_item") == "without" {
+            rows.push("<div id='autolist_box' mode='creator'></div>".to_string());
+            params.use_autolist = true;
+            params.autolist_creator_mode = true;
+        } else if wiki == "wikidatawiki" {
+            rows.push("<div id='autolist_box' mode='autolist'></div>".to_string());
+            params.use_autolist = true;
+        } else if wiki != "wikidatawiki" && params.do_output_redlinks {
+            rows.push("<div id='autolist_box' mode='creator'></div>".to_string());
+            params.use_autolist = true;
+            params.autolist_creator_mode = true;
+        }
+
+        // Gallery?
+        let only_files = entries
+            .iter()
+            .any(|entry| entry.title().namespace_id() == 6);
+        if only_files && !params.use_autolist {
+            rows.push( "<div id='file_results' style='float:right' class='btn-group' data-toggle='buttons'>".to_string());
+            rows.push( "<label class='btn btn-secondary active'><input type='radio' checked name='results_mode' value='titles' autocomplete='off' /><span tt='show_titles'></span></label>".to_string());
+            rows.push( "<label class='btn btn-secondary'><input type='radio' name='results_mode' value='thumbnails' checked autocomplete='off' /><span tt='show_thumbnails'></span></label>".to_string());
+            rows.push("</div>".to_string());
+        }
+
+        // Todo: Coordinates?
+
+        rows.push(format!(
+            "<h2><a name='results'></a><span id='num_results' num='{}'></span></h2>",
+            entries.len()
+        ));
+
+        // No need to render an empty table
+        if entries.is_empty() {
+            return MyResponse {
+                s: rows.join("\n"),
+                content_type: ContentType::HTML,
+            };
+        }
+
+        let header = self.get_initial_columns(&params);
+        rows.push("<div style='clear:both;overflow:auto'>".to_string());
+        rows.push(self.get_table_header(&header, &params));
+        rows.push("<tbody>".to_string());
+
+        let header: Vec<(String, String)> = header
+            .iter()
+            .map(|x| (x.to_string(), x.to_string()))
+            .collect();
+        for entry in entries {
+            params.row_number += 1;
+            let row = self.row_from_entry(&entry, &header, &params);
+            let row = self.render_html_row(&row, &header);
+            rows.push(row);
+        }
+
+        rows.push("</tbody></table></div>".to_string());
+        //rows.push(format!("<div style='font-size:8pt' id='query_length' sec='{}'></div>" , query_time )); // TODO
+        rows.push("<script src='autolist.js'></script>".to_string());
+
+        let output = rows.join("\n");
+        let state = platform.state();
+        let html = state.get_main_page();
+        let html = html.replace(
+            "<!--querystring-->",
+            platform.form_parameters().to_string().as_str(),
+        );
+        let html = &html.replace("<!--output-->", &output);
+
+        // TODO this is not ideal
+        let html = match platform.psid {
+            Some(psid) => {
+                let psid_string = format!("<span name='psid' style='display:none'>{}</span>", psid);
+                html.replace("<!--psid-->", &psid_string)
+            }
+            None => html.clone(),
+        };
+
+        MyResponse {
+            s: html.to_string(),
+            content_type: ContentType::HTML,
+        }
+    }
+
+    // ?psid=10155065
+
+    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "TODO".to_string()
+    }
+    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "TODO".to_string()
+    }
+    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String {
+        "TODO".to_string()
+    }
+    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
+        "TODO".to_string()
+    }
+    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "TODO".to_string()
+    }
+}
 
 impl RenderHTML {
     pub fn new() -> Box<Self> {
         Box::new(Self {})
+    }
+
+    fn render_html_row(&self, row: &Vec<String>, header: &Vec<(String, String)>) -> String {
+        let mut ret = "<tr>".to_string();
+        for col_num in 0..row.len() {
+            let header_key = match header.get(col_num) {
+                Some(x) => x.0.to_string(),
+                None => "UNKNOWN".to_string(),
+            };
+            let class_name = match header_key.as_str() {
+                "number" | "pageid" | "touched" => "num",
+                "title" => "link_container",
+                _ => "",
+            };
+            if class_name.is_empty() {
+                ret += "<td>";
+            } else {
+                ret += "<td class='";
+                ret += class_name;
+                ret += "'>";
+            }
+            ret += &row[col_num];
+            ret += "</td>";
+        }
+        ret += "</tr>";
+        ret
+    }
+
+    fn get_table_header(&self, columns: &Vec<&str>, _params: &RenderParams) -> String {
+        let mut ret = "<table class='table table-sm table-striped' id='main_table'>".to_string();
+        ret += "<thead><tr>";
+        let fdk = self.file_data_keys();
+        for col in columns {
+            let col = col.to_string();
+            let x = match col.as_str() {
+                "checkbox" => "<th></th>".to_string(),
+                "number" => "<th class='num'>#</th>".to_string(),
+                "image" => "<th tt='h_image'></th>".to_string(),
+                "title" => "<th class='text-nowrap' tt='h_title'></th>".to_string(),
+                "page_id" => "<th class='text-nowrap' tt='h_id'></th>".to_string(),
+                "namespace" => "<th class='text-nowrap' tt='h_namespace'></th>".to_string(),
+                "linknumber" => "<th tt='link_number'></th>".to_string(),
+                "size" => "<th class='text-nowrap' tt='h_len'></th>".to_string(),
+                "timestamp" => "<th class='text-nowrap' tt='h_touched'></th>".to_string(),
+                "wikidata_item" => "<th tt='h_wikidata'></th>".to_string(),
+                "coordinates" => "<th tt='h_coordinates'></th>".to_string(),
+                "defaultsort" => "<th tt='h_defaultsort'></th>".to_string(),
+                "disambiguation" => "<th tt='h_disambiguation'></th>".to_string(),
+                "incoming_links" => "<th tt='h_incoming_links'></th>".to_string(),
+                "fileusage" => "<th tt='file_usage_data'></th>".to_string(),
+                other => {
+                    // File data etc.
+                    if fdk.contains(&other) {
+                        format!("<th tt='h_{}'></th>", &other)
+                    } else {
+                        format!("<th>UNKNOWN:'{}'</th>", &other)
+                    }
+
+                    //for ( auto k = file_data_keys.begin() ; k != file_data_keys.end() ; k++ ) {
+                    //	if ( *k == col ) ret += "<th tt='h_"+col+"'></th>" ;
+                    //}
+                }
+            };
+            ret += &(&x.to_owned()).to_string();
+        }
+        ret += "</tr></thead>";
+        ret
     }
 }
