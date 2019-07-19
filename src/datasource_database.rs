@@ -132,7 +132,7 @@ impl DataSource for SourceDatabase {
     }
 
     fn run(&mut self, platform: &Platform) -> Option<PageList> {
-        self.get_pages(&platform.state, None)
+        self.get_pages(&platform.state(), None)
     }
 }
 

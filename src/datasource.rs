@@ -45,11 +45,12 @@ impl DataSource for SourceLabels {
     }
 
     fn run(&mut self, platform: &Platform) -> Option<PageList> {
-        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let state = platform.state();
+        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let sql = platform.get_label_sql();
         let mut ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
         let mut conn = platform
-            .state
+            .state()
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
         let result = match conn.prep_exec(sql.0, sql.1) {
             Ok(r) => r,
@@ -100,9 +101,10 @@ impl DataSource for SourceWikidata {
             return None;
         }
 
-        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let state = platform.state();
+        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut conn = platform
-            .state
+            .state()
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
         let sites = Platform::prep_quote(&sites);
 
@@ -163,7 +165,7 @@ impl DataSource for SourcePagePile {
     fn run(&mut self, platform: &Platform) -> Option<PageList> {
         let pagepile = platform.get_param("pagepile")?;
         let api = platform
-            .state
+            .state()
             .get_api_for_wiki("wikidatawiki".to_string())?; // Just because we need query_raw
         let params = api.params_into(&vec![
             ("id", &pagepile.to_string()),
@@ -176,7 +178,7 @@ impl DataSource for SourcePagePile {
             .ok()?;
         let v: Value = serde_json::from_str(&text).ok()?;
         let wiki = v["wiki"].as_str()?;
-        let api = platform.state.get_api_for_wiki(wiki.to_string())?; // Just because we need query_raw
+        let api = platform.state().get_api_for_wiki(wiki.to_string())?; // Just because we need query_raw
         let entries = v["pages"]
             .as_array()?
             .iter()
@@ -217,7 +219,7 @@ impl DataSource for SourceSearch {
             .get_param("search_max_results")?
             .parse::<usize>()
             .ok()?;
-        let api = platform.state.get_api_for_wiki(wiki.to_string())?;
+        let api = platform.state().get_api_for_wiki(wiki.to_string())?;
         let params = api.params_into(&vec![
             ("action", "query"),
             ("list", "search"),
@@ -256,7 +258,7 @@ impl DataSource for SourceManual {
 
     fn run(&mut self, platform: &Platform) -> Option<PageList> {
         let wiki = platform.get_param("manual_list_wiki")?;
-        let api = platform.state.get_api_for_wiki(wiki.to_string())?;
+        let api = platform.state().get_api_for_wiki(wiki.to_string())?;
         let entries: Vec<PageListEntry> = platform
             .get_param("manual_list")?
             .split("\n")

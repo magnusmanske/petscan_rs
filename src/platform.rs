@@ -13,7 +13,7 @@ use rocket::http::Status;
 use rocket::response::Responder;
 use rocket::Request;
 use rocket::Response;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -45,9 +45,10 @@ enum Combination {
 #[derive(Debug, Clone)]
 pub struct Platform {
     form_parameters: Arc<FormParameters>,
-    pub state: Arc<AppState>,
+    state: Arc<AppState>,
     result: Option<PageList>,
     pub psid: Option<u64>,
+    existing_labels: HashSet<String>,
 }
 
 impl Platform {
@@ -57,6 +58,7 @@ impl Platform {
             state: Arc::new(state.clone()),
             result: None,
             psid: None,
+            existing_labels: HashSet::new(),
         }
     }
 
@@ -132,8 +134,8 @@ impl Platform {
             Some(regexp) => result.regexp_filter(&regexp),
             None => {}
         }
-
         self.process_redlinks(&mut result);
+        self.process_creator(&mut result);
 
         // DONE
         self.result = Some(result);
@@ -149,7 +151,6 @@ impl Platform {
 
         params["format"] = getParam ( "format" , "html" , true ) ;
 
-        processCreator ( pagelist ) ;
         applyResultsLimit ( pagelist ) ;
 
         string wdf_main = getParam ( "wdf_main" , "" ) ;
@@ -158,6 +159,62 @@ impl Platform {
             return wdfist.run() ;
         }
         */
+    }
+
+    pub fn state(&self) -> Arc<AppState> {
+        self.state.clone()
+    }
+
+    fn process_creator(&mut self, result: &mut PageList) {
+        if result.is_empty() || result.is_wikidata() {
+            return;
+        }
+        if !self.has_param("show_redlinks")
+            && self.get_param_blank("wikidata_item") != "without".to_string()
+        {
+            return;
+        }
+
+        let batches: Vec<SQLtuple> = result
+                .to_sql_batches(PAGE_BATCH_SIZE)
+                .iter_mut()
+                .map(|mut sql_batch| {
+                    sql_batch.0 = "SELECT DISTINCT term_text FROM wb_terms WHERE term_entity_type='item' AND term_type IN ('label','alias') AND term_text IN (".to_string() ;
+                    sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
+                    sql_batch.0 += ")";
+                    // Looking for labels, so spaces instead of underscores
+                    for element in sql_batch.1.iter_mut() {
+                        *element = Title::underscores_to_spaces(element);
+                    }
+                    sql_batch.to_owned()
+                })
+                .collect::<Vec<SQLtuple>>();
+
+        let state = self.state();
+        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let mut conn = self
+            .state
+            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())
+            .unwrap();
+
+        batches.iter().for_each(|sql| {
+            let result = match conn.prep_exec(&sql.0, &sql.1) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("ERROR: {:?}", e);
+                    return;
+                }
+            };
+            for row in result {
+                match row {
+                    Ok(row) => {
+                        let term_text = my::from_row::<String>(row);
+                        self.existing_labels.insert(term_text);
+                    }
+                    _ => {} // Ignore error
+                }
+            }
+        });
     }
 
     fn process_redlinks(&self, result: &mut PageList) {
@@ -884,9 +941,13 @@ impl Platform {
                 other => Some(other.to_string()),
             })
             .collect();
+        (Platform::get_questionmarks(escaped.len()), escaped)
+    }
+
+    pub fn get_questionmarks(len: usize) -> String {
         let mut questionmarks: Vec<String> = Vec::new();
-        questionmarks.resize(escaped.len(), "?".to_string());
-        (questionmarks.join(","), escaped)
+        questionmarks.resize(len, "?".to_string());
+        questionmarks.join(",")
     }
 
     pub fn sql_tuple() -> SQLtuple {

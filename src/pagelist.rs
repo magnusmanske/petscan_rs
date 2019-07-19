@@ -5,8 +5,7 @@ use mediawiki::title::Title;
 use mysql as my;
 use regex::Regex;
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 //use rayon::prelude::*;
 
@@ -501,9 +500,10 @@ impl PageList {
         batches: Vec<SQLtuple>,
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
     ) {
-        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let state = platform.state();
+        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut conn = platform
-            .state
+            .state()
             .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
             .unwrap();
 
@@ -536,9 +536,10 @@ impl PageList {
         col_ns: usize,
         f: &dyn Fn(my::Row, &mut PageListEntry),
     ) {
-        let db_user_pass = platform.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let state = platform.state();
+        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut conn = platform
-            .state
+            .state()
             .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
             .unwrap();
 
@@ -709,7 +710,7 @@ impl PageList {
             .collect::<Vec<SQLtuple>>();
 
         self.entries.clear();
-        let api = platform.state.get_api_for_wiki(wiki.to_string()).unwrap();
+        let api = platform.state().get_api_for_wiki(wiki.to_string()).unwrap();
         self.process_batch_results(platform, batches, &|row: my::Row| {
             let ips_site_page: String = my::from_row(row);
             Some(PageListEntry::new(Title::new_from_full(
