@@ -12,6 +12,7 @@ pub mod datasource_database;
 pub mod form_parameters;
 pub mod pagelist;
 pub mod platform;
+pub mod render;
 
 use crate::form_parameters::FormParameters;
 use app_state::AppState;

@@ -3,6 +3,7 @@ use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
+use crate::render::*;
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
@@ -34,12 +35,30 @@ impl Responder<'static> for MyResponse {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Combination {
+pub enum Combination {
     None,
     Source(String),
     Intersection((Box<Combination>, Box<Combination>)),
     Union((Box<Combination>, Box<Combination>)),
     Not((Box<Combination>, Box<Combination>)),
+}
+
+impl Combination {
+    pub fn to_string(&self) -> String {
+        match self {
+            Combination::None => "nothing".to_string(),
+            Combination::Source(s) => s.to_string(),
+            Combination::Intersection((a, b)) => {
+                "(".to_string() + &a.to_string() + " AND " + &b.to_string() + ")"
+            }
+            Combination::Union((a, b)) => {
+                "(".to_string() + &a.to_string() + " OR " + &b.to_string() + ")"
+            }
+            Combination::Not((a, b)) => {
+                "(".to_string() + &a.to_string() + " NOT " + &b.to_string() + ")"
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +68,8 @@ pub struct Platform {
     result: Option<PageList>,
     pub psid: Option<u64>,
     existing_labels: HashSet<String>,
+    combination: Combination,
+    output_redlinks: bool,
 }
 
 impl Platform {
@@ -59,7 +80,17 @@ impl Platform {
             result: None,
             psid: None,
             existing_labels: HashSet::new(),
+            combination: Combination::None,
+            output_redlinks: false,
         }
+    }
+
+    pub fn combination(&self) -> Combination {
+        self.combination.clone()
+    }
+
+    pub fn do_output_redlinks(&self) -> bool {
+        self.output_redlinks
     }
 
     pub fn run(&mut self) {
@@ -95,25 +126,9 @@ impl Platform {
             .filter(|s| s.can_run(&self))
             .map(|s| s.name())
             .collect();
-        let combination = self.get_combination(&available_sources);
-
-        //println!("{:#?}", &combination);
-
-        self.result = self.combine_results(&mut results, &combination);
+        self.combination = self.get_combination(&available_sources);
+        self.result = self.combine_results(&mut results, &self.combination);
         self.post_process_result(&available_sources);
-
-        /*
-        // TODO
-        sortResults ( pagelist ) ; // later:
-        let _dummy = result.get_sorted_vec(PageListSort::new_from_params(
-            &self.get_param_blank("sortby"),
-            self.get_param_blank("sortorder") == "descending".to_string(),
-        ));
-        applyResultsLimit ( pagelist ) ;
-
-
-        params["format"] = getParam ( "format" , "html" , true ) ;
-        */
     }
 
     fn post_process_result(&mut self, available_sources: &Vec<String>) {
@@ -149,7 +164,6 @@ impl Platform {
         }
         self.process_redlinks(&mut result);
         self.process_creator(&mut result);
-        self.apply_results_limit(&mut result);
 
         // DONE
         self.result = Some(result);
@@ -168,12 +182,14 @@ impl Platform {
         self.state.clone()
     }
 
-    fn apply_results_limit(&mut self, _result: &mut PageList) {
+    fn apply_results_limit(&self, pages: &mut Vec<PageListEntry>) {
         let limit = self
             .get_param_default("output_limit", "0")
             .parse::<usize>()
             .unwrap_or(0);
-        if limit != 0 {}
+        if limit != 0 && limit < pages.len() {
+            pages.resize(limit, PageListEntry::new(Title::new("", 0)));
+        }
     }
 
     fn process_creator(&mut self, result: &mut PageList) {
@@ -186,6 +202,7 @@ impl Platform {
             return;
         }
 
+        self.output_redlinks = true;
         let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE)
                 .iter_mut()
@@ -907,10 +924,42 @@ impl Platform {
     }
 
     pub fn get_response(&self) -> MyResponse {
+        if self.result.is_none() || self.result.as_ref().unwrap().wiki.is_none() {
+            return MyResponse {
+                s: format!("No joy"),
+                content_type: ContentType::Plain,
+            };
+        }
+
+        let mut pages =
+            self.result
+                .as_ref()
+                .unwrap()
+                .get_sorted_vec(PageListSort::new_from_params(
+                    &self.get_param_blank("sortby"),
+                    self.get_param_blank("sortorder") == "descending".to_string(),
+                ));
+        self.apply_results_limit(&mut pages);
+
+        let renderer: Box<dyn Render> = match self.get_param_blank("format").as_str() {
+            "wiki" => RenderWiki::new(),
+            "csv" => RenderTSV::new(","),
+            "tsv" => RenderTSV::new("\t"),
+            // JSON
+            // PagePile
+            _ => RenderHTML::new(),
+        };
+        renderer.response(
+            &self,
+            &self.result.as_ref().unwrap().wiki.as_ref().unwrap(),
+            pages,
+        )
+        /*
         MyResponse {
             s: format!("{:#?}", self.result()),
             content_type: ContentType::Plain,
         }
+        */
     }
 
     pub fn get_param_as_vec(&self, param: &str, separator: &str) -> Vec<String> {
