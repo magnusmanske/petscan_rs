@@ -187,7 +187,7 @@ impl SourceDatabase {
         });
         Platform::append_sql(&mut sql, &mut Platform::prep_quote(cats));
         sql.0 += ")";
-        println!("{:?}", sql);
+        //println!("{:?}", sql);
 
         let mut new_cats: Vec<String> = vec![];
         let result = match conn.prep_exec(sql.0, sql.1) {
@@ -395,7 +395,7 @@ impl SourceDatabase {
         } else {
             return None;
         };
-        println!("PRIMARY: {}", &primary);
+        //println!("PRIMARY: {}", &primary);
 
         let link_count_sql = if self.params.gather_link_count {
             ",(SELECT count(*) FROM pagelinks WHERE pl_from=p.page_id) AS link_count"

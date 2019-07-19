@@ -144,7 +144,7 @@ pub struct PageListEntry {
     pub wikidata_item: Option<String>,
     pub wikidata_label: Option<String>,
     pub wikidata_description: Option<String>,
-    pub redlinks: Vec<Title>,
+    pub redlink_count: Option<usize>,
 }
 
 impl Hash for PageListEntry {
@@ -179,7 +179,7 @@ impl PageListEntry {
             file_info: None,
             wikidata_label: None,
             wikidata_description: None,
-            redlinks: vec![],
+            redlink_count: None,
         }
     }
 
@@ -212,11 +212,10 @@ impl PageListEntry {
 
     fn compare_by_redlinks(
         self: &PageListEntry,
-        _other: &PageListEntry,
-        _descending: bool,
+        other: &PageListEntry,
+        descending: bool,
     ) -> Ordering {
-        // TODO
-        Ordering::Equal
+        self.compare_by_opt(&self.redlink_count, &other.redlink_count, descending)
     }
 
     fn compare_by_random(
@@ -723,7 +722,7 @@ impl PageList {
 
     pub fn regexp_filter(&mut self, regexp: &String) {
         let regexp_all = "^".to_string() + regexp + "$";
-        let is_wikidata = self.wiki == Some("wikidatawiki".to_string());
+        let is_wikidata = self.is_wikidata();
         match Regex::new(&regexp_all) {
             Ok(re) => self.entries.retain(|entry| match is_wikidata {
                 true => match &entry.wikidata_label {
@@ -734,5 +733,9 @@ impl PageList {
             }),
             _ => {}
         }
+    }
+
+    pub fn is_wikidata(&self) -> bool {
+        self.wiki == Some("wikidatawiki".to_string())
     }
 }

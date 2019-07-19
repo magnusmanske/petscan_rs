@@ -95,7 +95,7 @@ impl Platform {
             .collect();
         let combination = self.get_combination(&available_sources);
 
-        println!("{:#?}", &combination);
+        //println!("{:#?}", &combination);
 
         self.result = self.combine_results(&mut results, &combination);
         self.post_process_result(&available_sources);
@@ -147,7 +147,6 @@ impl Platform {
         ));
 
 
-        processRedlinks ( pagelist ) ; // Supersedes sort
         params["format"] = getParam ( "format" , "html" , true ) ;
 
         processCreator ( pagelist ) ;
@@ -161,7 +160,80 @@ impl Platform {
         */
     }
 
-    fn process_redlinks(&self, _result: &mut PageList) {}
+    fn process_redlinks(&self, result: &mut PageList) {
+        if result.is_empty() || !self.has_param("show_redlinks") || result.is_wikidata() {
+            return;
+        }
+        let ns0_only = self.has_param("article_redlinks_only");
+        let remove_template_redlinks = self.has_param("remove_template_redlinks");
+
+        let batches: Vec<SQLtuple> = result
+                .to_sql_batches(PAGE_BATCH_SIZE/20) // ???
+                .iter_mut()
+                .map(|mut sql_batch| {
+                    let mut sql = "SELECT pl_title,pl_namespace,(SELECT COUNT(*) FROM page p1 WHERE p1.page_title=pl0.pl_title AND p1.page_namespace=pl0.pl_namespace) AS cnt from page p0,pagelinks pl0 WHERE pl_from=p0.page_id AND ".to_string() ;
+                    sql += &sql_batch.0 ;
+                    if ns0_only {sql += " AND pl_namespace=0" ;}
+                    else {sql += " AND pl_namespace>=0" ;}
+                    if remove_template_redlinks {
+                        sql += " AND NOT EXISTS (SELECT * FROM pagelinks pl1 WHERE pl1.pl_from_namespace=10 AND pl0.pl_namespace=pl1.pl_namespace AND pl0.pl_title=pl1.pl_title LIMIT 1)" ;
+                    }
+                    sql += " GROUP BY page_id,pl_namespace,pl_title" ;
+                    sql += " HAVING cnt=0" ;
+
+                    sql_batch.0 = sql ;
+                    sql_batch.to_owned()
+                })
+                .collect::<Vec<SQLtuple>>();
+        //println!("{:?}", &batches);
+
+        let mut redlink_counter: HashMap<Title, usize> = HashMap::new();
+
+        let db_user_pass = self.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let mut conn = self
+            .state
+            .get_wiki_db_connection(&db_user_pass, &result.wiki.as_ref().unwrap())
+            .unwrap();
+
+        batches.iter().for_each(|sql| {
+            let result = match conn.prep_exec(&sql.0, &sql.1) {
+                Ok(r) => r,
+                Err(e) => {
+                    println!("ERROR: {:?}", e);
+                    return;
+                }
+            };
+            for row in result {
+                match row {
+                    Ok(row) => {
+                        let (page_title, namespace_id, _count) =
+                            my::from_row::<(String, NamespaceID, u8)>(row);
+                        let title = Title::new(&page_title, namespace_id);
+                        let new_value = match &redlink_counter.get(&title) {
+                            Some(x) => *x + 1,
+                            None => 1,
+                        };
+                        redlink_counter.insert(title, new_value);
+                    }
+                    _ => {} // Ignore error
+                }
+            }
+        });
+
+        let min_redlinks = self
+            .get_param_default("min_redlink_count", "1")
+            .parse::<usize>()
+            .unwrap_or(1);
+        redlink_counter.retain(|_, &mut v| v >= min_redlinks);
+        result.entries = redlink_counter
+            .iter()
+            .map(|(k, redlink_count)| {
+                let mut ret = PageListEntry::new(k.to_owned());
+                ret.redlink_count = Some(*redlink_count);
+                ret
+            })
+            .collect();
+    }
 
     fn process_subpages(&self, result: &mut PageList) {
         let add_subpages = self.has_param("add_subpages");
@@ -399,7 +471,7 @@ impl Platform {
     }
 
     fn annotate_with_wikidata_item(&self, result: &mut PageList) {
-        if result.wiki == Some("wikidatawiki".to_string()) {
+        if result.is_wikidata() {
             return;
         }
 
