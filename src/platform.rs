@@ -101,6 +101,19 @@ impl Platform {
 
         self.result = self.combine_results(&mut results, &combination);
         self.post_process_result(&available_sources);
+
+        /*
+        // TODO
+        sortResults ( pagelist ) ; // later:
+        let _dummy = result.get_sorted_vec(PageListSort::new_from_params(
+            &self.get_param_blank("sortby"),
+            self.get_param_blank("sortorder") == "descending".to_string(),
+        ));
+        applyResultsLimit ( pagelist ) ;
+
+
+        params["format"] = getParam ( "format" , "html" , true ) ;
+        */
     }
 
     fn post_process_result(&mut self, available_sources: &Vec<String>) {
@@ -136,23 +149,13 @@ impl Platform {
         }
         self.process_redlinks(&mut result);
         self.process_creator(&mut result);
+        self.apply_results_limit(&mut result);
 
         // DONE
         self.result = Some(result);
 
         /*
         // TODO
-        sortResults ( pagelist ) ; // later:
-        let _dummy = result.get_sorted_vec(PageListSort::new_from_params(
-            &self.get_param_blank("sortby"),
-            self.get_param_blank("sortorder") == "descending".to_string(),
-        ));
-
-
-        params["format"] = getParam ( "format" , "html" , true ) ;
-
-        applyResultsLimit ( pagelist ) ;
-
         string wdf_main = getParam ( "wdf_main" , "" ) ;
         if ( !wdf_main.empty() ) {
             TWDFIST wdfist ( &pagelist , this ) ;
@@ -163,6 +166,14 @@ impl Platform {
 
     pub fn state(&self) -> Arc<AppState> {
         self.state.clone()
+    }
+
+    fn apply_results_limit(&mut self, _result: &mut PageList) {
+        let limit = self
+            .get_param_default("output_limit", "0")
+            .parse::<usize>()
+            .unwrap_or(0);
+        if limit != 0 {}
     }
 
     fn process_creator(&mut self, result: &mut PageList) {
