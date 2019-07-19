@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
-use crate::pagelist::{FileInfo, PageCoordinates, PageList, PageListEntry};
+use crate::pagelist::*;
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
@@ -133,12 +133,20 @@ impl Platform {
             None => {}
         }
 
+        self.process_redlinks(&mut result);
+
         // DONE
         self.result = Some(result);
 
         /*
         // TODO
-        sortResults ( pagelist ) ;
+        sortResults ( pagelist ) ; // later:
+        let _dummy = result.get_sorted_vec(PageListSort::new_from_params(
+            &self.get_param_blank("sortby"),
+            self.get_param_blank("sortorder") == "descending".to_string(),
+        ));
+
+
         processRedlinks ( pagelist ) ; // Supersedes sort
         params["format"] = getParam ( "format" , "html" , true ) ;
 
@@ -152,6 +160,8 @@ impl Platform {
         }
         */
     }
+
+    fn process_redlinks(&self, _result: &mut PageList) {}
 
     fn process_subpages(&self, result: &mut PageList) {
         let add_subpages = self.has_param("add_subpages");

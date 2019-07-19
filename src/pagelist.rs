@@ -4,10 +4,44 @@ use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
 use regex::Regex;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 //use rayon::prelude::*;
+
+//________________________________________________________________________________________________________________________
+
+#[derive(Debug, Clone)]
+pub enum PageListSort {
+    Default(bool),
+    Title(bool),
+    NsTitle(bool),
+    Size(bool),
+    Date(bool),
+    RedlinksCount(bool),
+    IncomingLinks(bool),
+    FileSize(bool),
+    UploadDate(bool),
+    Random(bool),
+}
+
+impl PageListSort {
+    pub fn new_from_params(s: &String, descending: bool) -> Self {
+        match s.as_str() {
+            "title" => Self::Title(descending),
+            "ns_title" => Self::Title(descending),
+            "size" => Self::Title(descending),
+            "date" => Self::Title(descending),
+            "redlinks" => Self::RedlinksCount(descending),
+            "incoming_links" => Self::Title(descending),
+            "filesize" => Self::Title(descending),
+            "uploaddate" => Self::Title(descending),
+            "random" => Self::Title(descending),
+            _ => Self::Default(descending),
+        }
+    }
+}
 
 //________________________________________________________________________________________________________________________
 
@@ -110,6 +144,7 @@ pub struct PageListEntry {
     pub wikidata_item: Option<String>,
     pub wikidata_label: Option<String>,
     pub wikidata_description: Option<String>,
+    pub redlinks: Vec<Title>,
 }
 
 impl Hash for PageListEntry {
@@ -121,7 +156,7 @@ impl Hash for PageListEntry {
 
 impl PartialEq for PageListEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.title == other.title // && self.namespace_id == other.namespace_id
+        self.title == other.title
     }
 }
 
@@ -144,11 +179,147 @@ impl PageListEntry {
             file_info: None,
             wikidata_label: None,
             wikidata_description: None,
+            redlinks: vec![],
         }
     }
 
     pub fn title(&self) -> &Title {
         &self.title
+    }
+
+    pub fn compare(&self, other: &Self, sorter: &PageListSort) -> Ordering {
+        match sorter {
+            PageListSort::Default(d) => self.compare_by_page_id(other, *d),
+            PageListSort::Title(d) => self.compare_by_title(other, *d),
+            PageListSort::NsTitle(d) => self.compare_by_ns_title(other, *d),
+            PageListSort::Size(d) => self.compare_by_size(other, *d),
+            PageListSort::IncomingLinks(d) => self.compare_by_incoming(other, *d),
+            PageListSort::Date(d) => self.compare_by_date(other, *d),
+            PageListSort::UploadDate(d) => self.compare_by_upload_date(other, *d),
+            PageListSort::FileSize(d) => self.compare_by_file_size(other, *d),
+            PageListSort::RedlinksCount(d) => self.compare_by_redlinks(other, *d),
+            PageListSort::Random(d) => self.compare_by_random(other, *d),
+        }
+    }
+
+    fn compare_by_page_id(
+        self: &PageListEntry,
+        other: &PageListEntry,
+        descending: bool,
+    ) -> Ordering {
+        self.compare_by_opt(&self.page_id, &other.page_id, descending)
+    }
+
+    fn compare_by_redlinks(
+        self: &PageListEntry,
+        _other: &PageListEntry,
+        _descending: bool,
+    ) -> Ordering {
+        // TODO
+        Ordering::Equal
+    }
+
+    fn compare_by_random(
+        self: &PageListEntry,
+        _other: &PageListEntry,
+        _descending: bool,
+    ) -> Ordering {
+        if rand::random() {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        }
+    }
+
+    fn compare_by_size(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
+        self.compare_by_opt(&self.page_bytes, &other.page_bytes, descending)
+    }
+
+    fn compare_by_incoming(
+        self: &PageListEntry,
+        other: &PageListEntry,
+        descending: bool,
+    ) -> Ordering {
+        self.compare_by_opt(&self.incoming_links, &other.incoming_links, descending)
+    }
+
+    fn compare_by_date(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
+        self.compare_by_opt(&self.page_timestamp, &other.page_timestamp, descending)
+    }
+
+    fn compare_by_file_size(
+        self: &PageListEntry,
+        other: &PageListEntry,
+        descending: bool,
+    ) -> Ordering {
+        match (&self.file_info, &other.file_info) {
+            (Some(f1), Some(f2)) => self.compare_by_opt(&f1.img_size, &f2.img_size, descending),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        }
+    }
+
+    // TODO
+    fn compare_by_upload_date(
+        self: &PageListEntry,
+        _other: &PageListEntry,
+        _descending: bool,
+    ) -> Ordering {
+        Ordering::Equal
+    }
+
+    fn compare_by_opt<T: PartialOrd>(
+        &self,
+        mine: &Option<T>,
+        other: &Option<T>,
+        descending: bool,
+    ) -> Ordering {
+        self.compare_order(
+            match (mine, other) {
+                (Some(a), Some(b)) => a.partial_cmp(&b).unwrap(),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            },
+            descending,
+        )
+    }
+
+    fn compare_by_ns_title(
+        self: &PageListEntry,
+        other: &PageListEntry,
+        descending: bool,
+    ) -> Ordering {
+        if self.title.namespace_id() == other.title.namespace_id() {
+            self.compare_by_title(other, descending)
+        } else {
+            self.compare_order(
+                self.title
+                    .namespace_id()
+                    .partial_cmp(&other.title.namespace_id())
+                    .unwrap(),
+                descending,
+            )
+        }
+    }
+
+    fn compare_by_title(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
+        self.compare_order(
+            self.title
+                .pretty()
+                .partial_cmp(other.title.pretty())
+                .unwrap(),
+            descending,
+        )
+    }
+
+    fn compare_order(&self, ret: Ordering, descending: bool) -> Ordering {
+        if descending {
+            ret.reverse()
+        } else {
+            ret
+        }
     }
 }
 
@@ -177,6 +348,12 @@ impl PageList {
             wiki: Some(wiki.to_string()),
             entries: entries_hashset,
         }
+    }
+
+    pub fn get_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {
+        let mut ret: Vec<PageListEntry> = self.entries.iter().cloned().collect();
+        ret.sort_by(|a, b| a.compare(b, &sorter));
+        ret
     }
 
     pub fn group_by_namespace(&self) -> HashMap<NamespaceID, Vec<String>> {
