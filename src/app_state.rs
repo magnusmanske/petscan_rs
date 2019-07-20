@@ -82,10 +82,14 @@ impl AppState {
     }
 
     /// Returns the server and database name for the wiki, as a tuple
-    pub fn db_host_and_schema_for_wiki(wiki: &String) -> (String, String) {
+    pub fn db_host_and_schema_for_wiki(&self, wiki: &String) -> (String, String) {
         // TESTING
         // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.analytics.db.svc.eqiad.wmflabs:3306 -N
-        let host = "127.0.0.1".to_string(); // TESTING wiki.to_owned() + ".analytics.db.svc.eqiad.wmflabs";
+        let host = match self.config["host"].as_str() {
+            Some("127.0.0.1") => "127.0.0.1".to_string(),
+            Some(_host) => wiki.to_owned() + ".analytics.db.svc.eqiad.wmflabs",
+            None => panic!("No host in config file"),
+        };
         let schema = wiki.to_owned() + "_p";
         (host, schema)
     }
@@ -112,7 +116,7 @@ impl AppState {
         let mut loops_left = MYSQL_MAX_CONNECTION_ATTEMPTS;
         let mut milliseconds = MYSQL_CONNECTION_INITIAL_DELAY_MS;
         loop {
-            let (host, schema) = AppState::db_host_and_schema_for_wiki(wiki);
+            let (host, schema) = self.db_host_and_schema_for_wiki(wiki);
             let (user, pass) = db_user_pass;
             let mut builder = my::OptsBuilder::new();
             builder
