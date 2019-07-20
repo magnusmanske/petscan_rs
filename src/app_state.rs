@@ -204,8 +204,11 @@ impl AppState {
             .db_name(Some(schema))
             .user(Some(user))
             .pass(Some(pass));
-        //let port = self.config["db_port"].as_u64().unwrap_or(3306) as u16; // TODO testing locally
-        let port: u16 = 3308;
+        let port: u16 = match self.config["host"].as_str() {
+            Some("127.0.0.1") => 3308,
+            Some(_host) => self.config["db_port"].as_u64().unwrap_or(3306) as u16,
+            None => 3306, // Fallback
+        };
         builder.tcp_port(port);
 
         match my::Conn::new(builder) {
