@@ -916,10 +916,13 @@ impl Platform {
         // TODO
         let language = self.get_param("language")?;
         let project = self.get_param("project")?;
-        if project == "wikipedia" {
-            Some(language.to_owned() + "wiki")
-        } else {
-            None
+        match (language.as_str(), project.as_str()) {
+            (language, "wikipedia") => Some(language.to_owned() + "wiki"),
+            ("commons", _) => Some("commonswiki".to_string()),
+            ("wikidata", _) => Some("wikidatawiki".to_string()),
+            (_, "wikidata") => Some("wikidatawiki".to_string()),
+            // TODO more
+            _ => None,
         }
     }
 
