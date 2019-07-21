@@ -149,17 +149,23 @@ impl AppState {
         Api::new(&url).ok()
     }
 
-    fn get_url_for_wiki_from_site(&self, wiki: &String, site: &Value) -> Option<String> {
+    fn get_value_from_site_matrix_entry(
+        &self,
+        value: &String,
+        site: &Value,
+        key_match: &str,
+        key_return: &str,
+    ) -> Option<String> {
         if site["closed"].as_str().is_some() {
             return None;
         }
         if site["private"].as_str().is_some() {
             return None;
         }
-        match site["dbname"].as_str() {
-            Some(dbname) => {
-                if wiki == dbname {
-                    match site["url"].as_str() {
+        match site[key_match].as_str() {
+            Some(site_url) => {
+                if value == site_url {
+                    match site[key_return].as_str() {
                         Some(url) => Some(url.to_string()),
                         None => None,
                     }
@@ -169,6 +175,38 @@ impl AppState {
             }
             None => None,
         }
+    }
+
+    fn get_wiki_for_server_url_from_site(&self, url: &String, site: &Value) -> Option<String> {
+        self.get_value_from_site_matrix_entry(url, site, "url", "dbname")
+    }
+
+    fn get_url_for_wiki_from_site(&self, wiki: &String, site: &Value) -> Option<String> {
+        self.get_value_from_site_matrix_entry(wiki, site, "dbname", "url")
+    }
+
+    pub fn get_wiki_for_server_url(&self, url: &String) -> Option<String> {
+        self.site_matrix["sitematrix"]
+            .as_object()
+            .expect("AppState::get_wiki_for_server_url: sitematrix not an object")
+            .iter()
+            .filter_map(|(id, data)| match id.as_str() {
+                "count" => None,
+                "specials" => data
+                    .as_array()
+                    .expect("AppState::get_wiki_for_server_url: 'specials' is not an array")
+                    .iter()
+                    .filter_map(|site| self.get_wiki_for_server_url_from_site(url, site))
+                    .next(),
+                _other => match data["site"].as_array() {
+                    Some(sites) => sites
+                        .iter()
+                        .filter_map(|site| self.get_wiki_for_server_url_from_site(url, site))
+                        .next(),
+                    None => None,
+                },
+            })
+            .next()
     }
 
     pub fn get_server_url_for_wiki(&self, wiki: &String) -> Option<String> {
@@ -303,5 +341,47 @@ impl AppState {
 
     pub fn is_shutting_down(&self) -> bool {
         *self.shutting_down.lock().unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    //use crate::app_state::AppState;
+    use serde_json::Value;
+    use std::env;
+    use std::fs::File;
+
+    fn get_new_state() -> Arc<AppState> {
+        let basedir = env::current_dir()
+            .expect("Can't get CWD")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path = basedir.to_owned() + "/config.json";
+        let file = File::open(path).expect("Can not open config file");
+        let petscan_config: Value =
+            serde_json::from_reader(file).expect("Can not parse JSON from config file");
+        Arc::new(AppState::new_from_config(&petscan_config))
+    }
+
+    fn get_state() -> Arc<AppState> {
+        lazy_static! {
+            static ref STATE: Arc<AppState> = get_new_state();
+        }
+        STATE.clone()
+    }
+
+    #[test]
+    fn test_get_wiki_for_server_url() {
+        let state = get_state();
+        assert_eq!(
+            state.get_wiki_for_server_url(&"https://am.wiktionary.org".to_string()),
+            Some("amwiktionary".to_string())
+        );
+        assert_eq!(
+            state.get_wiki_for_server_url(&"https://outreach.wikimedia.org".to_string()),
+            Some("outreachwiki".to_string())
+        );
     }
 }
