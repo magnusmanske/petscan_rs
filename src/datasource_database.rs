@@ -127,8 +127,13 @@ impl DataSource for SourceDatabase {
     }
 
     fn can_run(&self, platform: &Platform) -> bool {
-        // TODO more
         platform.has_param("categories")
+            || platform.has_param("templates_yes")
+            || platform.has_param("templates_any")
+            || platform.has_param("outlinks_yes")
+            || platform.has_param("outlinks_any")
+            || platform.has_param("links_to_all")
+            || platform.has_param("links_to_any")
     }
 
     fn run(&mut self, platform: &Platform) -> Option<PageList> {
@@ -259,7 +264,7 @@ impl SourceDatabase {
 
         sql.0 += " IN (";
         Platform::append_sql(&mut sql, &mut Platform::prep_quote(input));
-        sql.0 += ")";
+        sql.0 += "))";
 
         sql
     }
@@ -806,7 +811,7 @@ impl SourceDatabase {
             }
         }
 
-        //println!("SQL:{:?}", &sql);
+        println!("SQL:{:?}", &sql);
 
         let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
 

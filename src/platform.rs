@@ -94,8 +94,6 @@ impl Platform {
     }
 
     pub fn run(&mut self) -> Result<(), String> {
-        // TODO legacy parameters
-
         let mut candidate_sources: Vec<Box<dyn DataSource>> = vec![];
         candidate_sources.push(Box::new(SourceDatabase::new(self.db_params())));
         candidate_sources.push(Box::new(SourceSparql::new()));
