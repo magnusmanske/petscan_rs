@@ -1,0 +1,19 @@
+# Install rustup
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Setup
+rustup install nightly
+git clone https://github.com/magnusmanske/petscan_rs.git
+cd petscan_rs
+rustup override set nightly
+sudo apt-get install libssl-dev automake autoconf clang pkg-config
+
+copy config.json
+
+
+cargo build --release
+sudo ./target/release/petscan_rs
+
+
+# Get external IP
+/sbin/ifconfig eth0 | grep "inet\|inet6" | awk -F' ' '{print $2}' | awk '{print $1}' | head -1
