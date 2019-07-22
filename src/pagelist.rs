@@ -52,17 +52,28 @@ pub struct FileUsage {
 }
 
 impl FileUsage {
-    pub fn new_from_part(part: &String) -> Self {
+    pub fn new_from_part(part: &String) -> Option<Self> {
         let mut parts: Vec<&str> = part.split(":").collect();
+        if parts.len() < 4 {
+            return None;
+        }
         let wiki = parts.remove(0);
         let namespace_id = parts.remove(0).parse::<NamespaceID>().unwrap();
         let namespace_name = parts.remove(0);
         let page = parts.join(":");
-        Self {
+        Some(Self {
             title: Title::new(&page, namespace_id),
             namespace_name: namespace_name.to_string(),
             wiki: wiki.to_string(),
-        }
+        })
+    }
+
+    pub fn wiki(&self) -> &String {
+        &self.wiki
+    }
+
+    pub fn title(&self) -> &Title {
+        &self.title
     }
 }
 
@@ -87,7 +98,7 @@ impl FileInfo {
         let mut ret = FileInfo::new();
         ret.file_usage = gil_group
             .split("|")
-            .map(|part| FileUsage::new_from_part(&part.to_string()))
+            .filter_map(|part| FileUsage::new_from_part(&part.to_string()))
             .collect();
         ret
     }

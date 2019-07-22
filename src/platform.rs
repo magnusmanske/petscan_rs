@@ -913,16 +913,26 @@ impl Platform {
     }
 
     pub fn get_main_wiki(&self) -> Option<String> {
-        // TODO
         let language = self.get_param("language")?;
         let project = self.get_param("project")?;
+        self.get_wiki_for_lagnuage_project(&language, &project)
+    }
+
+    pub fn get_wiki_for_lagnuage_project(
+        &self,
+        language: &String,
+        project: &String,
+    ) -> Option<String> {
         match (language.as_str(), project.as_str()) {
             (language, "wikipedia") => Some(language.to_owned() + "wiki"),
             ("commons", _) => Some("commonswiki".to_string()),
             ("wikidata", _) => Some("wikidatawiki".to_string()),
             (_, "wikidata") => Some("wikidatawiki".to_string()),
             // TODO more
-            _ => None,
+            (l, p) => {
+                let url = "https://".to_string() + &l + "." + &p + ".org";
+                self.state.get_wiki_for_server_url(&url)
+            }
         }
     }
 

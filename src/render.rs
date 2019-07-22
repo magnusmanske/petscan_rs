@@ -129,6 +129,9 @@ pub trait Render {
     fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String;
     fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String;
     fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
+    fn render_cell_fileusage(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "".to_string()
+    }
 
     fn opt_usize(&self, o: &Option<usize>) -> String {
         o.map(|x| x.to_string()).unwrap_or("".to_string())
@@ -213,7 +216,7 @@ pub trait Render {
                 "checkbox" => "TODO".to_string(), // auto-creator
                 "linknumber" => "TODO".to_string(),
                 "coordinates" => "TODO".to_string(),
-                "fileusage" => "TODO".to_string(),
+                "fileusage" => self.render_cell_fileusage(&entry, &params),
 
                 _ => "<".to_string() + k + ">",
             };
@@ -576,14 +579,20 @@ impl Render for RenderHTML {
     // ?psid=10155065
 
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
-        self.render_wikilink(&entry.title(), &params.wiki, &entry.wikidata_label, params)
+        self.render_wikilink(
+            &entry.title(),
+            &params.wiki,
+            &entry.wikidata_label,
+            params,
+            true,
+        )
     }
     fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
         "TODO".to_string()
     }
     fn render_user_name(&self, user: &String, params: &RenderParams) -> String {
         let title = Title::new(user, 2);
-        self.render_wikilink(&title, &params.wiki, &None, params)
+        self.render_wikilink(&title, &params.wiki, &None, params, false)
     }
     fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
         "TODO".to_string()
@@ -599,6 +608,24 @@ impl Render for RenderHTML {
             namespace_name
         }
     }
+
+    fn render_cell_fileusage(&self, entry: &PageListEntry, params: &RenderParams) -> String {
+        match &entry.file_info {
+            Some(fi) => {
+                let mut rows: Vec<String> = vec![];
+                for fu in &fi.file_usage {
+                    let html = "<div class='fileusage'>".to_string()
+                        + &fu.wiki().to_owned()
+                        + ":"
+                        + &self.render_wikilink(fu.title(), fu.wiki(), &None, params, false)
+                        + "</div>";
+                    rows.push(html);
+                }
+                rows.join("\n")
+            }
+            None => "".to_string(),
+        }
+    }
 }
 
 impl RenderHTML {
@@ -612,6 +639,7 @@ impl RenderHTML {
         wiki: &String,
         alt_label: &Option<String>,
         params: &RenderParams,
+        is_page_link: bool,
     ) -> String {
         let server = params
             .state
@@ -623,9 +651,17 @@ impl RenderHTML {
             + &Uri::percent_encode(&title.full_with_underscores(&params.api).unwrap());
         let label = match alt_label {
             Some(label) => label.to_string(),
-            None => title.full_pretty(&params.api).unwrap(),
+            None => match is_page_link {
+                true => title.pretty().to_string(),
+                false => title.full_pretty(&params.api).unwrap(),
+            },
         };
-        "<a target='_blank' href='".to_string() + &url + "'>" + &label + "</a>"
+        let mut ret = "<a".to_string();
+        if is_page_link {
+            ret += " class='pagelink'";
+        }
+        ret += &(" target='_blank' href='".to_string() + &url + "'>" + &label + "</a>");
+        ret
     }
 
     fn render_html_row(&self, row: &Vec<String>, header: &Vec<(String, String)>) -> String {
@@ -636,7 +672,7 @@ impl RenderHTML {
                 None => "UNKNOWN".to_string(),
             };
             let class_name = match header_key.as_str() {
-                "number" | "pageid" | "touched" => "num",
+                "number" | "page_id" | "timestamp" | "size" => "num",
                 "title" => "link_container",
                 _ => "",
             };
@@ -683,10 +719,6 @@ impl RenderHTML {
                     } else {
                         format!("<th>UNKNOWN:'{}'</th>", &other)
                     }
-
-                    //for ( auto k = file_data_keys.begin() ; k != file_data_keys.end() ; k++ ) {
-                    //  if ( *k == col ) ret += "<th tt='h_"+col+"'></th>" ;
-                    //}
                 }
             };
             ret += &(&x.to_owned()).to_string();
