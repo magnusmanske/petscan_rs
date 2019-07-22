@@ -552,6 +552,7 @@ impl Render for RenderHTML {
             entries.len()
         ));
 
+        /*
         // No need to render an empty table
         if entries.is_empty() {
             return MyResponse {
@@ -559,6 +560,7 @@ impl Render for RenderHTML {
                 content_type: ContentType::HTML,
             };
         }
+        */
 
         let header = self.get_initial_columns(&params);
         rows.push("<div style='clear:both;overflow:auto'>".to_string());
