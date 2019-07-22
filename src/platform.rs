@@ -827,15 +827,6 @@ impl Platform {
     }
 
     pub fn db_params(&self) -> SourceDatabaseParameters {
-        /*
-        // TODO Legacy parameters
-        if ( params.find("comb_subset") != params.end() ) params["combination"] = "subset" ;
-        if ( params.find("comb_union") != params.end() ) params["combination"] = "union" ;
-        if ( params.find("get_q") != params.end() ) params["wikidata_item"] = "any" ;
-        if ( params.find("wikidata") != params.end() ) params["wikidata_item"] = "any" ;
-        if ( params.find("wikidata_no_item") != params.end() ) params["wikidata_item"] = "without" ;
-        */
-
         let depth: u16 = self
             .get_param("depth")
             .unwrap_or("0".to_string())
@@ -958,8 +949,8 @@ impl Platform {
             "wiki" => RenderWiki::new(),
             "csv" => RenderTSV::new(","),
             "tsv" => RenderTSV::new("\t"),
-            // JSON
-            // PagePile
+            "json" => RenderJSON::new(),
+            // TODO PagePile
             _ => RenderHTML::new(),
         };
         renderer.response(
@@ -967,12 +958,6 @@ impl Platform {
             &self.result.as_ref().unwrap().wiki.as_ref().unwrap(),
             pages,
         )
-        /*
-        MyResponse {
-            s: format!("{:#?}", self.result()),
-            content_type: ContentType::Plain,
-        }
-        */
     }
 
     pub fn get_param_as_vec(&self, param: &str, separator: &str) -> Vec<String> {

@@ -20,15 +20,6 @@ pub struct FormParameters {
 }
 
 impl FormParameters {
-    /*
-    pub fn new() -> Self {
-        Self {
-            params: HashMap::new(),
-            ns: HashSet::new(),
-        }
-    }
-    */
-
     /// Extracts namespaces from parameter list
     fn ns_from_params(params: &HashMap<String, String>) -> HashSet<usize> {
         lazy_static! {
@@ -57,10 +48,12 @@ impl FormParameters {
         let parsed_url = Url::parse(&("https://127.0.0.1/?".to_string() + query)).unwrap();
         let params: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
         let ns = Self::ns_from_params(&params);
-        FormParameters {
+        let mut ret = FormParameters {
             params: params,
             ns: ns,
-        }
+        };
+        ret.legacy_parameters();
+        ret
     }
 
     /// Amends a an object based on a previous one (used for PSID in main.rs)
@@ -74,6 +67,7 @@ impl FormParameters {
                 self.params.insert(k.to_string(), v.to_string());
             }
         });
+        self.legacy_parameters();
         self.ns = Self::ns_from_params(&self.params);
     }
 
@@ -85,6 +79,32 @@ impl FormParameters {
             })
             .collect::<Vec<String>>()
             .join("&")
+    }
+
+    fn has_param(&self, key: &str) -> bool {
+        self.params.contains_key(&key.to_string())
+    }
+
+    fn set_param(&mut self, key: &str, value: &str) {
+        self.params.insert(key.to_string(), value.to_string());
+    }
+
+    fn legacy_parameters(&mut self) {
+        if self.has_param("comb_subset") {
+            self.set_param("combination", "subset");
+        }
+        if self.has_param("comb_union") {
+            self.set_param("combination", "union");
+        }
+        if self.has_param("get_q") {
+            self.set_param("wikidata_item", "any");
+        }
+        if self.has_param("wikidata") {
+            self.set_param("wikidata_item", "any");
+        }
+        if self.has_param("wikidata_no_item") {
+            self.set_param("wikidata_item", "without");
+        }
     }
 }
 
