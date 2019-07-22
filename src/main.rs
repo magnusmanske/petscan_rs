@@ -47,19 +47,11 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
         let psid = form_parameters.params.get("psid").unwrap().to_string();
         if !psid.is_empty() {
             match state.get_query_from_psid(&psid) {
-                Some(psid_query) => {
+                Ok(psid_query) => {
                     let psid_params = FormParameters::outcome_from_query(&psid_query);
                     form_parameters.rebase(&psid_params);
                 }
-                None => {
-                    state.render_error(
-                        format!(
-                            "ERROR: PSID {} was requested, but not found in database",
-                            psid
-                        ),
-                        &form_parameters,
-                    );
-                }
+                Err(e) => return state.render_error(e, &form_parameters),
             }
         }
     }
@@ -73,7 +65,10 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
         }
     }
     platform.state().modify_threads_running(-1);
-    platform.psid = state.get_or_create_psid_for_query(&form_parameters.to_string());
+    platform.psid = match state.get_or_create_psid_for_query(&form_parameters.to_string()) {
+        Ok(psid) => Some(psid),
+        Err(e) => return state.render_error(e, &form_parameters),
+    };
 
     match platform.get_response() {
         Ok(response) => response,

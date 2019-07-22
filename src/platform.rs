@@ -1283,27 +1283,26 @@ mod tests {
         STATE.clone()
     }
 
-    fn run_psid_ext(psid: usize, addendum: &str) -> Platform {
+    fn run_psid_ext(psid: usize, addendum: &str) -> Result<Platform, String> {
         let state = get_state();
         let form_parameters = match state.get_query_from_psid(&format!("{}", &psid)) {
-            Some(psid_query) => {
+            Ok(psid_query) => {
                 let query = psid_query + addendum;
                 FormParameters::outcome_from_query(&query)
             }
-            None => panic!("Can't get PSID {}", &psid),
+            Err(e) => return Err(e),
         };
         let mut platform = Platform::new_from_parameters(&form_parameters, &state);
-        platform.run();
-        platform
+        platform.run().unwrap();
+        Ok(platform)
     }
 
     fn run_psid(psid: usize) -> Platform {
-        run_psid_ext(psid, "")
+        run_psid_ext(psid, "").unwrap()
     }
 
     fn check_results_for_psid_ext(psid: usize, addendum: &str, wiki: &str, expected: Vec<Title>) {
-        let platform = run_psid_ext(psid, addendum);
-        assert!(platform.result.is_some());
+        let platform = run_psid_ext(psid, addendum).unwrap();
         let result = platform.result.unwrap();
         assert_eq!(result.wiki, Some(wiki.to_string()));
         let entries = result

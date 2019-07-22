@@ -246,7 +246,10 @@ impl AppState {
             .next()
     }
 
-    pub fn get_tool_db_connection(&self, tool_db_user_pass: DbUserPass) -> Option<my::Conn> {
+    pub fn get_tool_db_connection(
+        &self,
+        tool_db_user_pass: DbUserPass,
+    ) -> Result<my::Conn, String> {
         let (host, schema) = self.db_host_and_schema_for_tool_db();
         let (user, pass) = tool_db_user_pass.clone();
         let mut builder = my::OptsBuilder::new();
@@ -263,18 +266,15 @@ impl AppState {
         builder.tcp_port(port);
 
         match my::Conn::new(builder) {
-            Ok(conn) => Some(conn),
-            Err(e) => {
-                println!(
-                    "AppState::get_tool_db_connection can't get DB connection to {}:{} : '{}'",
-                    &host, port, &e
-                );
-                None
-            }
+            Ok(conn) => Ok(conn),
+            Err(e) => Err(format!(
+                "AppState::get_tool_db_connection can't get DB connection to {}:{} : '{}'",
+                &host, port, &e
+            )),
         }
     }
 
-    pub fn get_query_from_psid(&self, psid: &String) -> Option<String> {
+    pub fn get_query_from_psid(&self, psid: &String) -> Result<String, String> {
         let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
@@ -285,19 +285,20 @@ impl AppState {
         let result = match conn.prep_exec(sql, ()) {
             Ok(r) => r,
             Err(e) => {
-                println!("AppState::get_query_from_psid query error: {:?}", e);
-                return None;
+                return Err(format!(
+                    "AppState::get_query_from_psid query error: {:?}",
+                    e
+                ))
             }
         };
         for row in result {
             let query: String = my::from_row(row.unwrap());
-            return Some(query);
+            return Ok(query);
         }
-
-        None
+        Err("No such PSID in the database".to_string())
     }
 
-    pub fn get_or_create_psid_for_query(&self, query_string: &String) -> Option<u64> {
+    pub fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
         let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
@@ -310,7 +311,7 @@ impl AppState {
             Ok(result) => {
                 for row in result {
                     let psid: u64 = my::from_row(row.unwrap());
-                    return Some(psid);
+                    return Ok(psid);
                 }
             }
             Err(_) => {}
@@ -324,11 +325,11 @@ impl AppState {
             vec![query_string.to_owned(), now],
         );
         let ret = match conn.prep_exec(sql.0, sql.1) {
-            Ok(r) => Some(r.last_insert_id()),
-            Err(e) => {
-                println!("AppState::get_new_psid_for_query query error: {:?}", e);
-                None
-            }
+            Ok(r) => Ok(r.last_insert_id()),
+            Err(e) => Err(format!(
+                "AppState::get_new_psid_for_query query error: {:?}",
+                e
+            )),
         };
         ret
     }
