@@ -105,6 +105,8 @@ impl AppState {
 
     /// Returns a random mutex. The mutex value itself contains a user name and password for DB login!
     pub fn get_db_mutex(&self) -> &Arc<Mutex<DbUserPass>> {
+        // TODO make sure mutex is available
+        // TODO make sure mutex is not poisoned
         &self.db_pool.choose(&mut rand::thread_rng()).unwrap()
     }
 

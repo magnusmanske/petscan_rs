@@ -94,7 +94,7 @@ fn main() {
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
     let rocket_config = Config::build(Environment::Staging)
-        .address("127.0.0.1")
+        //.address("127.0.0.1")
         .port(petscan_config["http_port"].as_u64().unwrap_or(80) as u16)
         .finalize()
         .unwrap();
