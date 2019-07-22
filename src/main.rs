@@ -5,6 +5,8 @@ extern crate lazy_static;
 #[macro_use]
 extern crate rocket;
 extern crate regex;
+#[macro_use]
+extern crate serde_json;
 
 pub mod app_state;
 pub mod datasource;

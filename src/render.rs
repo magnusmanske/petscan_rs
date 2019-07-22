@@ -5,6 +5,7 @@ use mediawiki::api::Api;
 use mediawiki::title::Title;
 use rocket::http::uri::Uri;
 use rocket::http::ContentType;
+use serde_json::Value;
 use std::sync::Arc;
 
 //________________________________________________________________________________________________________________________
@@ -28,6 +29,11 @@ pub struct RenderParams {
     api: Api,
     state: Arc<AppState>,
     row_number: usize,
+    json_output_compatability: String,
+    json_callback: String,
+    json_sparse: bool,
+    json_pretty: bool,
+    giu: bool,
 }
 
 impl RenderParams {
@@ -51,6 +57,12 @@ impl RenderParams {
             api: platform.state().get_api_for_wiki(wiki.to_string()).unwrap(),
             state: platform.state(),
             row_number: 0,
+            json_output_compatability: platform
+                .get_param_default("output_compatability", "catscan"),
+            json_callback: platform.get_param_blank("callback"),
+            json_sparse: platform.has_param("sparse"),
+            json_pretty: platform.has_param("json-pretty"),
+            giu: platform.has_param("giu"),
         };
         ret.show_wikidata_item = ret.wdi == "any" || ret.wdi == "with";
         ret
@@ -129,8 +141,24 @@ pub trait Render {
     fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String;
     fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String;
     fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
-    fn render_cell_fileusage(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "".to_string()
+    fn render_cell_fileusage(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
+        match &entry.file_info {
+            Some(fi) => {
+                let mut rows: Vec<String> = vec![];
+                for fu in &fi.file_usage {
+                    let txt = fu.wiki().to_owned()
+                        + ":"
+                        + &fu.title().namespace_id().to_string()
+                        + ":"
+                        + fu.namespace_name()
+                        + ":"
+                        + fu.title().pretty();
+                    rows.push(txt);
+                }
+                rows.join("|")
+            }
+            None => "".to_string(),
+        }
     }
 
     fn opt_usize(&self, o: &Option<usize>) -> String {
@@ -725,5 +753,96 @@ impl RenderHTML {
         }
         ret += "</tr></thead>";
         ret
+    }
+}
+
+//________________________________________________________________________________________________________________________
+
+/// Renders HTML
+pub struct RenderJSON {}
+
+impl Render for RenderJSON {
+    fn response(
+        &self,
+        platform: &Platform,
+        wiki: &String,
+        entries: Vec<PageListEntry>,
+    ) -> MyResponse {
+        let mut params = RenderParams::new(platform, wiki);
+        let mut content_type = "application/json; charset=utf-8".to_string();
+        if params.json_pretty {
+            content_type = "text/html; charset=utf-8".to_owned();
+        }
+        params.file_usage = params.giu || params.file_usage;
+        if params.giu {
+            params.json_sparse = false;
+        }
+        let value: Value = match params.json_output_compatability.as_str() {
+            "quick-intersection" => self.quick_intersection(platform, wiki, entries, &params),
+            _ => self.cat_scan(platform, wiki, entries, &params), // Default
+        };
+
+        let mut out: String = "".to_string();
+        if !params.json_callback.is_empty() {
+            out += &params.json_callback;
+            out += "(";
+        }
+
+        if params.json_pretty {
+            out += &::serde_json::to_string(&value).unwrap();
+        } else {
+            out += &::serde_json::to_string_pretty(&value).unwrap();
+        }
+
+        if !params.json_callback.is_empty() {
+            out += ")";
+        }
+
+        MyResponse {
+            s: out.to_string(),
+            content_type: ContentType::parse_flexible(&content_type).unwrap(),
+        }
+    }
+
+    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "N/A".to_string()
+    }
+    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String {
+        "N/A".to_string()
+    }
+    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
+        "N/A".to_string()
+    }
+    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "N/A".to_string()
+    }
+    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "N/A".to_string()
+    }
+}
+
+impl RenderJSON {
+    pub fn new() -> Box<Self> {
+        Box::new(Self {})
+    }
+
+    fn quick_intersection(
+        &self,
+        _platform: &Platform,
+        _wiki: &String,
+        _entries: Vec<PageListEntry>,
+        _params: &RenderParams,
+    ) -> Value {
+        json!([])
+    }
+
+    fn cat_scan(
+        &self,
+        _platform: &Platform,
+        _wiki: &String,
+        _entries: Vec<PageListEntry>,
+        _params: &RenderParams,
+    ) -> Value {
+        json!([])
     }
 }

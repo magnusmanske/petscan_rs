@@ -75,6 +75,10 @@ impl FileUsage {
     pub fn title(&self) -> &Title {
         &self.title
     }
+
+    pub fn namespace_name(&self) -> &String {
+        &self.namespace_name
+    }
 }
 
 //________________________________________________________________________________________________________________________
