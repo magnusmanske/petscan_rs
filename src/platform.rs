@@ -93,7 +93,7 @@ impl Platform {
         self.output_redlinks
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> Result<(), String> {
         // TODO legacy parameters
 
         let mut candidate_sources: Vec<Box<dyn DataSource>> = vec![];
@@ -108,7 +108,7 @@ impl Platform {
             candidate_sources = vec![];
             candidate_sources.push(Box::new(SourceLabels::new()));
             if !candidate_sources.iter().any(|source| source.can_run(&self)) {
-                return;
+                return Err(format!("No possible data source found in parameters"));
             }
         }
 
@@ -129,6 +129,7 @@ impl Platform {
         self.combination = self.get_combination(&available_sources);
         self.result = self.combine_results(&mut results, &self.combination);
         self.post_process_result(&available_sources);
+        Ok(())
     }
 
     fn post_process_result(&mut self, available_sources: &Vec<String>) {
@@ -927,12 +928,9 @@ impl Platform {
         }
     }
 
-    pub fn get_response(&self) -> MyResponse {
+    pub fn get_response(&self) -> Result<MyResponse, String> {
         if self.result.is_none() || self.result.as_ref().unwrap().wiki.is_none() {
-            return MyResponse {
-                s: format!("No joy"),
-                content_type: ContentType::Plain,
-            };
+            return Err(format!("No result"));
         }
 
         let mut pages =

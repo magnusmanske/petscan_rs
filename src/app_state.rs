@@ -1,10 +1,13 @@
 extern crate rocket;
 
+use crate::form_parameters::FormParameters;
+use crate::platform::MyResponse;
 use chrono::prelude::*;
 use mediawiki::api::Api;
 use mysql as my;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
+use rocket::http::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -143,6 +146,14 @@ impl AppState {
             }
         }
         None
+    }
+
+    pub fn render_error(&self, error: String, _form_parameters: &FormParameters) -> MyResponse {
+        // TODO render in proper content format
+        return MyResponse {
+            s: error.to_string(),
+            content_type: ContentType::Plain,
+        };
     }
 
     pub fn get_api_for_wiki(&self, wiki: String) -> Option<Api> {

@@ -52,24 +52,33 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
                     form_parameters.rebase(&psid_params);
                 }
                 None => {
-                    return MyResponse {
-                        s: format!(
+                    state.render_error(
+                        format!(
                             "ERROR: PSID {} was requested, but not found in database",
                             psid
                         ),
-                        content_type: ContentType::Plain,
-                    };
+                        &form_parameters,
+                    );
                 }
             }
         }
     }
     state.modify_threads_running(1);
     let mut platform = Platform::new_from_parameters(&form_parameters, &state.inner());
-    platform.run();
+    match platform.run() {
+        Ok(_) => {}
+        Err(error) => {
+            platform.state().modify_threads_running(-1);
+            return state.render_error(error, &form_parameters);
+        }
+    }
     platform.state().modify_threads_running(-1);
     platform.psid = state.get_or_create_psid_for_query(&form_parameters.to_string());
 
-    platform.get_response()
+    match platform.get_response() {
+        Ok(response) => response,
+        Err(error) => state.render_error(error, &form_parameters),
+    }
 }
 
 #[post("/", data = "<params>")]

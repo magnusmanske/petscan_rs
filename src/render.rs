@@ -37,7 +37,14 @@ pub struct RenderParams {
 }
 
 impl RenderParams {
-    pub fn new(platform: &Platform, wiki: &String) -> Self {
+    pub fn new(platform: &Platform, wiki: &String) -> Result<Self, String> {
+        let api = platform
+            .state()
+            .get_api_for_wiki(wiki.to_string())
+            .ok_or(format!(
+                "RenderParams::new: Cannot get a MediaWiki API for {}",
+                &wiki
+            ))?;
         let mut ret = Self {
             wiki: wiki.to_owned(),
             file_data: platform.has_param("ext_image_data"),
@@ -54,7 +61,7 @@ impl RenderParams {
             do_output_redlinks: platform.do_output_redlinks(),
             use_autolist: false,          // Possibly set downstream
             autolist_creator_mode: false, // Possibly set downstream
-            api: platform.state().get_api_for_wiki(wiki.to_string()).unwrap(),
+            api: api,
             state: platform.state(),
             row_number: 0,
             json_output_compatability: platform
@@ -65,7 +72,7 @@ impl RenderParams {
             giu: platform.has_param("giu"),
         };
         ret.show_wikidata_item = ret.wdi == "any" || ret.wdi == "with";
-        ret
+        Ok(ret)
     }
 }
 
@@ -77,7 +84,7 @@ pub trait Render {
         _platform: &Platform,
         _wiki: &String,
         _pages: Vec<PageListEntry>,
-    ) -> MyResponse;
+    ) -> Result<MyResponse, String>;
 
     fn file_data_keys(&self) -> Vec<&str> {
         vec![
@@ -265,8 +272,8 @@ impl Render for RenderWiki {
         platform: &Platform,
         wiki: &String,
         entries: Vec<PageListEntry>,
-    ) -> MyResponse {
-        let mut params = RenderParams::new(platform, wiki);
+    ) -> Result<MyResponse, String> {
+        let mut params = RenderParams::new(platform, wiki)?;
         let mut rows: Vec<String> = vec![];
         rows.push("== ".to_string() + &platform.combination().to_string() + " ==");
         rows.push(
@@ -319,10 +326,10 @@ impl Render for RenderWiki {
 
         rows.push("|}".to_string());
 
-        MyResponse {
+        Ok(MyResponse {
             s: rows.join("\n"),
             content_type: ContentType::Plain,
-        }
+        })
     }
 
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
@@ -392,8 +399,8 @@ impl Render for RenderTSV {
         platform: &Platform,
         wiki: &String,
         entries: Vec<PageListEntry>,
-    ) -> MyResponse {
-        let mut params = RenderParams::new(platform, wiki);
+    ) -> Result<MyResponse, String> {
+        let mut params = RenderParams::new(platform, wiki)?;
         let mut rows: Vec<String> = vec![];
         let mut header: Vec<(&str, &str)> = vec![
             ("number", "number"),
@@ -436,7 +443,7 @@ impl Render for RenderTSV {
             rows.push(row);
         }
 
-        MyResponse {
+        Ok(MyResponse {
             s: rows.join("\n"),
             content_type: match self.separator.as_str() {
                 "," => ContentType::parse_flexible("text/csv; charset=utf-8").unwrap(),
@@ -445,7 +452,7 @@ impl Render for RenderTSV {
                 }
                 _ => ContentType::Plain, // Fallback
             },
-        }
+        })
     }
 
     fn render_cell_title(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
@@ -506,8 +513,8 @@ impl Render for RenderHTML {
         platform: &Platform,
         wiki: &String,
         entries: Vec<PageListEntry>,
-    ) -> MyResponse {
-        let mut params = RenderParams::new(platform, wiki);
+    ) -> Result<MyResponse, String> {
+        let mut params = RenderParams::new(platform, wiki)?;
         let mut rows: Vec<String> = vec![];
 
         rows.push("<hr/>".to_string());
@@ -552,16 +559,6 @@ impl Render for RenderHTML {
             entries.len()
         ));
 
-        /*
-        // No need to render an empty table
-        if entries.is_empty() {
-            return MyResponse {
-                s: rows.join("\n"),
-                content_type: ContentType::HTML,
-            };
-        }
-        */
-
         let header = self.get_initial_columns(&params);
         rows.push("<div style='clear:both;overflow:auto'>".to_string());
         rows.push(self.get_table_header(&header, &params));
@@ -600,10 +597,10 @@ impl Render for RenderHTML {
             None => html.clone(),
         };
 
-        MyResponse {
+        Ok(MyResponse {
             s: html.to_string(),
             content_type: ContentType::HTML,
-        }
+        })
     }
 
     // ?psid=10155065
@@ -769,8 +766,8 @@ impl Render for RenderJSON {
         platform: &Platform,
         wiki: &String,
         entries: Vec<PageListEntry>,
-    ) -> MyResponse {
-        let mut params = RenderParams::new(platform, wiki);
+    ) -> Result<MyResponse, String> {
+        let mut params = RenderParams::new(platform, wiki)?;
         let mut content_type = "application/json; charset=utf-8".to_string();
         if params.json_pretty {
             content_type = "text/plain; charset=utf-8".to_owned();
@@ -836,10 +833,10 @@ impl Render for RenderJSON {
             out += ")";
         }
 
-        MyResponse {
+        Ok(MyResponse {
             s: out.to_string(),
             content_type: ContentType::parse_flexible(&content_type).unwrap(),
-        }
+        })
     }
 
     fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
