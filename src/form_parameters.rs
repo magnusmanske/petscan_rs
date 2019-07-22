@@ -43,9 +43,12 @@ impl FormParameters {
     }
 
     /// Parses a query string into a new object
-    pub fn outcome_from_query(query: &str) -> Self {
+    pub fn outcome_from_query(query: &str) -> Result<Self, String> {
         // TODO PSID IMPORTANT for parsing see https://api.rocket.rs/v0.4/rocket/request/struct.Request.html#method.uri
-        let parsed_url = Url::parse(&("https://127.0.0.1/?".to_string() + query)).unwrap();
+        let parsed_url = match Url::parse(&("https://127.0.0.1/?".to_string() + query)) {
+            Ok(url) => url,
+            Err(e) => return Err(format!("{:?}", &e)),
+        };
         let params: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
         let ns = Self::ns_from_params(&params);
         let mut ret = FormParameters {
@@ -53,7 +56,7 @@ impl FormParameters {
             ns: ns,
         };
         ret.legacy_parameters();
-        ret
+        Ok(ret)
     }
 
     /// Amends a an object based on a previous one (used for PSID in main.rs)
@@ -117,10 +120,10 @@ impl<'a, 'r> FromRequest<'a, 'r> for FormParameters {
             // TODO Not sure if method check is really necessary
             Method::Get => {
                 match request.uri().query() {
-                    Some(query) => {
-                        let form_params = FormParameters::outcome_from_query(query);
-                        Outcome::Success(form_params)
-                    }
+                    Some(query) => match FormParameters::outcome_from_query(query) {
+                        Ok(fp) => Outcome::Success(fp),
+                        Err(e) => Outcome::Failure((Status::BadRequest, format!("{}", &e))),
+                    },
                     None => {
                         let mut ret = FormParameters {
                             params: HashMap::new(),
@@ -158,6 +161,9 @@ impl<'b> FromData<'b> for FormParameters {
 
     fn from_data(_: &Request, outcome: Transformed<'b, Self>) -> DataOutcome<Self, Self::Error> {
         let query = outcome.borrowed()?;
-        Success(FormParameters::outcome_from_query(query))
+        match FormParameters::outcome_from_query(query) {
+            Ok(fp) => Outcome::Success(fp),
+            Err(e) => Outcome::Failure((Status::BadRequest, format!("{}", &e))),
+        }
     }
 }

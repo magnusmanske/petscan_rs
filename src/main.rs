@@ -48,7 +48,10 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
         if !psid.is_empty() {
             match state.get_query_from_psid(&psid) {
                 Ok(psid_query) => {
-                    let psid_params = FormParameters::outcome_from_query(&psid_query);
+                    let psid_params = match FormParameters::outcome_from_query(&psid_query) {
+                        Ok(pp) => pp,
+                        Err(e) => return state.render_error(e, &form_parameters),
+                    };
                     form_parameters.rebase(&psid_params);
                 }
                 Err(e) => return state.render_error(e, &form_parameters),
