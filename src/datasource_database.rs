@@ -811,7 +811,7 @@ impl SourceDatabase {
             }
         }
 
-        println!("SQL:{:?}", &sql);
+        //println!("SQL:{:?}", &sql);
 
         let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
 
