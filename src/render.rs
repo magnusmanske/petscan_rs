@@ -771,15 +771,51 @@ impl Render for RenderJSON {
         let mut params = RenderParams::new(platform, wiki);
         let mut content_type = "application/json; charset=utf-8".to_string();
         if params.json_pretty {
-            content_type = "text/html; charset=utf-8".to_owned();
+            content_type = "text/plain; charset=utf-8".to_owned();
         }
         params.file_usage = params.giu || params.file_usage;
         if params.giu {
             params.json_sparse = false;
         }
+
+        // Header
+        let mut header: Vec<(&str, &str)> = vec![
+            ("title", "Title"),
+            ("page_id", "Page ID"),
+            ("namespace", "Namespace"),
+            ("size", "Size (bytes)"),
+            ("timestamp", "Last change"),
+        ];
+        if params.show_wikidata_item {
+            header.push(("wikidata_item", "Wikidata"));
+        }
+        let mut header: Vec<(String, String)> = header
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        for col in self.get_initial_columns(&params) {
+            if !header.iter().any(|(k, _)| col == k) && col != "number" {
+                header.push((col.to_string(), col.to_string()));
+            }
+        }
+        let mut header: Vec<(String, String)> = header
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        for col in self.get_initial_columns(&params) {
+            if !header.iter().any(|(k, _)| col == k) && col != "number" {
+                header.push((col.to_string(), col.to_string()));
+            }
+        }
+        if params.file_data {
+            self.file_data_keys()
+                .iter()
+                .for_each(|k| header.push((k.to_string(), k.to_string())));
+        }
+
         let value: Value = match params.json_output_compatability.as_str() {
-            "quick-intersection" => self.quick_intersection(platform, wiki, entries, &params),
-            _ => self.cat_scan(platform, wiki, entries, &params), // Default
+            "quick-intersection" => self.quick_intersection(platform, entries, &params, &header),
+            _ => self.cat_scan(platform, entries, &params, &header), // Default
         };
 
         let mut out: String = "".to_string();
@@ -789,9 +825,9 @@ impl Render for RenderJSON {
         }
 
         if params.json_pretty {
-            out += &::serde_json::to_string(&value).unwrap();
-        } else {
             out += &::serde_json::to_string_pretty(&value).unwrap();
+        } else {
+            out += &::serde_json::to_string(&value).unwrap();
         }
 
         if !params.json_callback.is_empty() {
@@ -826,23 +862,211 @@ impl RenderJSON {
         Box::new(Self {})
     }
 
-    fn quick_intersection(
-        &self,
-        _platform: &Platform,
-        _wiki: &String,
-        _entries: Vec<PageListEntry>,
-        _params: &RenderParams,
-    ) -> Value {
-        json!([])
+    fn get_query_string(&self, platform: &Platform) -> String {
+        "https://petscan.wmflabs.org/?".to_string() + &platform.form_parameters().to_string()
     }
 
     fn cat_scan(
         &self,
-        _platform: &Platform,
-        _wiki: &String,
-        _entries: Vec<PageListEntry>,
-        _params: &RenderParams,
+        platform: &Platform,
+        entries: Vec<PageListEntry>,
+        params: &RenderParams,
+        header: &Vec<(String, String)>,
     ) -> Value {
-        json!([])
+        let entry_data: Vec<Value> = if params.json_sparse {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    Some(json!(entry.title().full_with_underscores(&params.api)?))
+                })
+                .collect()
+        } else {
+            entries.iter().filter_map(|entry| {
+                let mut o = json!({
+                    "n":"page",
+                    "title":entry.title().with_underscores(),
+                    "id":entry.page_id.unwrap_or(0),
+                    "namespace":entry.title().namespace_id(),
+                    "len":entry.page_bytes.unwrap_or(0),
+                    "touched":entry.page_timestamp.as_ref().unwrap_or(&"".to_string()),
+                    "nstext":params.api.get_local_namespace_name(entry.title().namespace_id()).unwrap_or("".to_string())
+                });
+                match &entry.wikidata_item {
+                    Some(q) => o["q"] = json!(q),
+                    None => {}
+                }
+                self.add_metadata(&mut o, &entry, header);
+                if params.file_data {
+                    match &o["metadata"].get("fileusage") {
+                        Some(_) => o["gil"] = o["metadata"]["fileusage"].to_owned(),
+                        None => {}
+                    }
+                    self.file_data_keys().iter().for_each(|k|{
+                        match &o["metadata"].get(k) {
+                            Some(_) => o[k] = o["metadata"][k].to_owned(),
+                            None => {}
+                        }
+                    });
+                }
+                Some(o)
+            }).collect()
+        };
+        json!({"n":"result","a":{"query":self.get_query_string(platform)},"*":[{"n":"combination","a":[{"type":platform.get_param_default("combination","subset"),"*":entry_data}]}]})
+    }
+
+    fn quick_intersection(
+        &self,
+        platform: &Platform,
+        entries: Vec<PageListEntry>,
+        params: &RenderParams,
+        header: &Vec<(String, String)>,
+    ) -> Value {
+        let mut ret = json!({
+            "namespaces":{},
+            "status":"OK",
+            "start":0,
+            "max":entries.len()+1,
+            "query":self.get_query_string(platform),
+            "pagecount":entries.len(),
+            "pages":[]
+        });
+
+        // Namespaces
+        match params.api.get_site_info()["query"]["namespaces"].as_object() {
+            Some(namespaces) => {
+                for (k, v) in namespaces {
+                    match v["*"].as_str() {
+                        Some(ns_local_name) => ret["namespaces"][k] = json!(ns_local_name),
+                        None => {}
+                    }
+                }
+            }
+            None => {
+                // Huh. No namespace info from the API
+            }
+        }
+
+        // Entries
+        if params.json_sparse {
+            ret["pages"] = entries
+                .iter()
+                .filter_map(|entry| entry.title().full_with_underscores(&params.api))
+                .collect();
+        } else {
+            ret["pages"] = entries
+                .iter()
+                .filter_map(|entry| {
+                    let mut o = json!({
+                        "page_id" : entry.page_id.unwrap_or(0),
+                        "page_namespace" : entry.title().namespace_id(),
+                        "page_title" : entry.title().with_underscores(),
+                        "page_latest" : entry.page_timestamp.as_ref().unwrap_or(&"".to_string()),
+                        "page_len" : entry.page_bytes.unwrap_or(0),
+                        //"meta" : {}
+                    });
+                    if params.giu || params.file_usage {
+                        match self.get_file_usage(&entry) {
+                            Some(fu) => o["giu"] = fu,
+                            None => {}
+                        }
+                    }
+                    self.add_metadata(&mut o, &entry, header);
+                    Some(o)
+                })
+                .collect();
+        }
+
+        ret
+    }
+
+    fn get_file_info_value(&self, entry: &PageListEntry, key: &str) -> Option<Value> {
+        match &entry.file_info {
+            Some(fi) => match key {
+                "img_size" => fi.img_size.as_ref().map(|s| json!(s)),
+                "img_width" => fi.img_width.as_ref().map(|s| json!(s)),
+                "img_height" => fi.img_height.as_ref().map(|s| json!(s)),
+                "img_media_type" => fi.img_media_type.as_ref().map(|s| json!(s)),
+                "img_major_mime" => fi.img_major_mime.as_ref().map(|s| json!(s)),
+                "img_minor_mime" => fi.img_minor_mime.as_ref().map(|s| json!(s)),
+                "img_user_text" => fi.img_user_text.as_ref().map(|s| json!(s)),
+                "img_timestamp" => fi.img_timestamp.as_ref().map(|s| json!(s)),
+                "img_sha1" => fi.img_sha1.as_ref().map(|s| json!(s)),
+                other => {
+                    println!("KEY NOT FOUND:{}", &other);
+                    None
+                }
+            },
+            None => None,
+        }
+    }
+
+    fn get_file_usage(&self, entry: &PageListEntry) -> Option<Value> {
+        match &entry.file_info {
+            Some(fi) => match fi.file_usage.is_empty() {
+                true => None,
+                false => Some(
+                    fi.file_usage
+                        .iter()
+                        .map(|fu| {
+                            json!({
+                                "ns":fu.title().namespace_id(),
+                                "page":fu.title().with_underscores(),
+                                "wiki":fu.wiki()
+                            })
+                        })
+                        .collect(),
+                ),
+            },
+            None => None,
+        }
+    }
+
+    fn get_file_usage_as_string(&self, entry: &PageListEntry) -> Option<Value> {
+        match &entry.file_info {
+            Some(fi) => match fi.file_usage.is_empty() {
+                true => None,
+                false => Some(json!(fi
+                    .file_usage
+                    .iter()
+                    .map(|fu| {
+                        format!(
+                            "{}:{}:{}:{}",
+                            fu.wiki(),
+                            fu.title().namespace_id(),
+                            fu.namespace_name(),
+                            fu.title().with_underscores()
+                        )
+                    })
+                    .collect::<Vec<String>>()
+                    .join("|"))),
+            },
+            None => None,
+        }
+    }
+
+    fn add_metadata(&self, o: &mut Value, entry: &PageListEntry, header: &Vec<(String, String)>) {
+        header.iter().for_each(|(head, _)| {
+            let value = match head.to_string().as_str() {
+                "checkbox" | "number" | "page_id" | "title" | "namespace" | "size"
+                | "timestamp" => None,
+                "image" => entry.page_image.as_ref().map(|s| json!(s)),
+                "linknumber" => entry.link_count.as_ref().map(|s| json!(s)),
+                "wikidata" => entry.wikidata_item.as_ref().map(|s| json!(s)),
+                "defaultsort" => entry.defaultsort.as_ref().map(|s| json!(s)),
+                "disambiguation" => entry.disambiguation.as_ref().map(|s| json!(s)),
+                "incoming_links" => entry.incoming_links.as_ref().map(|s| json!(s)),
+                "coordinates" => match &entry.coordinates {
+                    Some(coord) => Some(json!(format!("{}/{}", coord.lat, coord.lon))),
+                    None => None,
+                },
+                "fileusage" => self.get_file_usage_as_string(entry),
+                other => self.get_file_info_value(entry, other),
+            };
+            //println!("{}:{:?}", &head, &value);
+            match value {
+                Some(v) => o["metadata"][head] = v,
+                None => {}
+            }
+        });
     }
 }
