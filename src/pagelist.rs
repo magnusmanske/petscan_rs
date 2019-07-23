@@ -547,6 +547,7 @@ impl PageList {
                 .for_each(|row| rows_lock.push(row.clone()));
         });
 
+        // Check error
         match &*error.lock().unwrap() {
             Some(e) => return Err(e.to_string()),
             None => {}
@@ -571,10 +572,11 @@ impl PageList {
         col_title: usize,
         col_ns: usize,
         f: &dyn Fn(my::Row, &mut PageListEntry),
-    ) {
+    ) -> Result<(), String> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
 
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
+        let error: Mutex<Option<String>> = Mutex::new(None);
 
         batches.par_iter().for_each(|sql| {
             // Get DB connection
@@ -589,7 +591,7 @@ impl PageList {
             let result = match conn.prep_exec(&sql.0, &sql.1) {
                 Ok(r) => r,
                 Err(e) => {
-                    println!("ERROR: {:?}", e);
+                    *error.lock().unwrap() = Some(format!("ERROR: {:?}", e));
                     return;
                 }
             };
@@ -601,6 +603,13 @@ impl PageList {
                 .for_each(|row| rows_lock.push(row.clone()));
         });
 
+        // Check error
+        match &*error.lock().unwrap() {
+            Some(e) => return Err(e.to_string()),
+            None => {}
+        }
+
+        // Rows to entries
         rows.lock().unwrap().iter().for_each(|row| {
             let page_title = match row.get(col_title) {
                 Some(title) => match title {
@@ -626,13 +635,14 @@ impl PageList {
             f(row.clone(), &mut entry);
             self.add_entry(entry);
         });
+        Ok(())
     }
 
     pub fn load_missing_metadata(
         &mut self,
         wikidata_language: Option<String>,
         platform: &Platform,
-    ) {
+    ) -> Result<(), String> {
         let batches: Vec<SQLtuple> = self
             .to_sql_batches(PAGE_BATCH_SIZE)
             .par_iter_mut()
@@ -656,30 +666,31 @@ impl PageList {
                 entry.page_bytes = Some(page_len);
                 entry.page_timestamp = Some(page_touched);
             },
-        );
+        )?;
 
         // All done
         if self.wiki != Some("wikidatawiki".to_string()) || wikidata_language.is_none() {
-            return;
+            return Ok(());
         }
 
         // No need to load labels for WDFIST mode
         if !platform.has_param("regexp_filter") && platform.has_param("wdf_main") {
-            return;
+            return Ok(());
         }
 
         match wikidata_language {
             Some(wikidata_language) => {
-                self.add_wikidata_labels_for_namespace(0, "item", &wikidata_language, platform);
+                self.add_wikidata_labels_for_namespace(0, "item", &wikidata_language, platform)?;
                 self.add_wikidata_labels_for_namespace(
                     120,
                     "property",
                     &wikidata_language,
                     platform,
-                );
+                )?;
             }
             None => {}
         }
+        Ok(())
     }
 
     fn add_wikidata_labels_for_namespace(
@@ -688,7 +699,7 @@ impl PageList {
         entity_type: &str,
         wikidata_language: &String,
         platform: &Platform,
-    ) {
+    ) -> Result<(), String> {
         let batches: Vec<SQLtuple> = self
             .to_sql_batches_namespace(PAGE_BATCH_SIZE,namespace_id)
             .par_iter_mut()
@@ -716,7 +727,7 @@ impl PageList {
                     _ => {}
                 }
             },
-        );
+        )
     }
 
     fn convert_to_wikidata(&mut self, platform: &Platform) -> Result<(), String> {

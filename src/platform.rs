@@ -157,16 +157,16 @@ impl Platform {
         if !available_sources.contains(&"categories".to_string()) {
             self.process_missing_database_filters(&mut result);
         }
-        self.process_by_wikidata_item(&mut result);
-        self.process_files(&mut result);
-        self.process_pages(&mut result);
+        self.process_by_wikidata_item(&mut result)?;
+        self.process_files(&mut result)?;
+        self.process_pages(&mut result)?;
         self.process_subpages(&mut result);
 
         let wikidata_label_language = self.get_param_default(
             "wikidata_label_language",
             &self.get_param_default("interface_language", "en"),
         );
-        result.load_missing_metadata(Some(wikidata_label_language), &self);
+        result.load_missing_metadata(Some(wikidata_label_language), &self)?;
         match self.get_param("regexp_filter") {
             Some(regexp) => result.regexp_filter(&regexp),
             None => {}
@@ -388,7 +388,7 @@ impl Platform {
         });
     }
 
-    fn process_pages(&self, result: &mut PageList) {
+    fn process_pages(&self, result: &mut PageList) -> Result<(), String> {
         let add_coordinates = self.has_param("add_coordinates");
         let add_image = self.has_param("add_image");
         let add_defaultsort = self.has_param("add_defaultsort");
@@ -399,7 +399,7 @@ impl Platform {
             && !add_defaultsort
             && !add_disambiguation & !add_incoming_links
         {
-            return;
+            return Ok(());
         }
 
         let batches: Vec<SQLtuple> = result
@@ -461,10 +461,10 @@ impl Platform {
                     };
                 }
             },
-        );
+        )
     }
 
-    fn process_files(&self, result: &mut PageList) {
+    fn process_files(&self, result: &mut PageList) -> Result<(), String> {
         let giu = self.has_param("giu");
         let file_data = self.has_param("ext_image_data")
             || self.get_param("sortby") == Some("filesize".to_string())
@@ -497,7 +497,7 @@ impl Platform {
                         my::from_row::<(String, usize, String)>(row);
                     entry.file_info = Some(FileInfo::new_from_gil_group(&gil_group));
                 },
-            );
+            )?;
         }
 
         if file_data {
@@ -562,13 +562,14 @@ impl Platform {
                         None => {}
                     }
                 },
-            );
+            )?;
         }
+        Ok(())
     }
 
-    fn annotate_with_wikidata_item(&self, result: &mut PageList) {
+    fn annotate_with_wikidata_item(&self, result: &mut PageList) -> Result<(), String> {
         if result.is_wikidata() {
-            return;
+            return Ok(());
         }
 
         // Batches
@@ -590,24 +591,25 @@ impl Platform {
                     my::from_row::<(String, NamespaceID, String)>(row);
                 entry.wikidata_item = Some(pp_value);
             },
-        );
+        )
     }
 
-    fn process_by_wikidata_item(&mut self, result: &mut PageList) {
+    fn process_by_wikidata_item(&mut self, result: &mut PageList) -> Result<(), String> {
         if result.wiki == Some("wikidatawiki".to_string()) {
-            return;
+            return Ok(());
         }
         let wdi = self.get_param_default("wikidata_item", "no");
         if wdi != "any" && wdi != "with" && wdi != "without" {
-            return;
+            return Ok(());
         }
-        self.annotate_with_wikidata_item(result);
+        self.annotate_with_wikidata_item(result)?;
         if wdi == "with" {
             result.entries.retain(|entry| entry.wikidata_item.is_some());
         }
         if wdi == "without" {
             result.entries.retain(|entry| entry.wikidata_item.is_none());
         }
+        Ok(())
     }
 
     fn process_missing_database_filters(&mut self, result: &mut PageList) {

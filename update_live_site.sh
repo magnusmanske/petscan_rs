@@ -16,4 +16,4 @@ url="http://127.0.0.1/?restart=$code"
 
 # Restart server
 curl -s -o /dev/null $url
-echo "Server restarted!"
+screen -r
