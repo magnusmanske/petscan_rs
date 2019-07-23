@@ -345,12 +345,15 @@ impl AppState {
             .expect("Can't run action=sitematrix on Wikidata API")
     }
 
-    pub fn modify_threads_running(&self, diff: i64) {
-        let mut threads_running = self.threads_running.lock().unwrap();
-        *threads_running += diff;
-        if self.is_shutting_down() && *threads_running == 0 {
-            panic!("Planned shutdown")
+    pub fn try_shutdown(&self) {
+        if self.is_shutting_down() && *self.threads_running.lock().unwrap() == 0 {
+            ::std::process::exit(0);
         }
+    }
+
+    pub fn modify_threads_running(&self, diff: i64) {
+        *self.threads_running.lock().unwrap() += diff;
+        self.try_shutdown()
     }
 
     pub fn is_shutting_down(&self) -> bool {

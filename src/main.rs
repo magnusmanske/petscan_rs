@@ -37,7 +37,6 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
                 Some(config_code) => {
                     if given_code == config_code {
                         state.shut_down();
-                        println!("SHUTDOWN INITIATED!");
                     }
                 }
                 None => {}
@@ -46,6 +45,7 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
         None => {}
     }
     if state.is_shutting_down() {
+        state.try_shutdown();
         return MyResponse {
             s: "Temporary maintenance".to_string(),
             content_type: ContentType::Plain,
