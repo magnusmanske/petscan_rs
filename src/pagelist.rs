@@ -8,6 +8,7 @@ use regex::Regex;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::Mutex;
 
 //________________________________________________________________________________________________________________________
 
@@ -516,14 +517,19 @@ impl PageList {
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
     ) {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
-        let state = platform.state();
-        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-        let mut conn = platform
-            .state()
-            .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
-            .unwrap();
 
-        batches.iter().for_each(|sql| {
+        let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
+
+        batches.par_iter().for_each(|sql| {
+            // Get DB connection
+            let state = platform.state();
+            let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+            let mut conn = platform
+                .state()
+                .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
+                .unwrap();
+
+            // Run query
             let result = match conn.prep_exec(&sql.0, &sql.1) {
                 Ok(r) => r,
                 Err(e) => {
@@ -531,16 +537,22 @@ impl PageList {
                     return;
                 }
             };
-            for row in result {
-                match row {
-                    Ok(row) => match f(row) {
-                        Some(entry) => self.add_entry(entry),
-                        None => {}
-                    },
-                    _ => {} // Ignore error
-                }
-            }
+
+            // Add to row list
+            let mut rows_lock = rows.lock().unwrap();
+            result
+                .filter_map(|row| row.ok())
+                .for_each(|row| rows_lock.push(row.clone()));
         });
+
+        // Rows to entries
+        rows.lock()
+            .unwrap()
+            .iter()
+            .for_each(|row| match f(row.to_owned()) {
+                Some(entry) => self.add_entry(entry),
+                None => {}
+            });
     }
 
     /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
@@ -553,14 +565,19 @@ impl PageList {
         f: &dyn Fn(my::Row, &mut PageListEntry),
     ) {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
-        let state = platform.state();
-        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-        let mut conn = platform
-            .state()
-            .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
-            .unwrap();
 
-        batches.iter().for_each(|sql| {
+        let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
+
+        batches.par_iter().for_each(|sql| {
+            // Get DB connection
+            let state = platform.state();
+            let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+            let mut conn = platform
+                .state()
+                .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
+                .unwrap();
+
+            // Run query
             let result = match conn.prep_exec(&sql.0, &sql.1) {
                 Ok(r) => r,
                 Err(e) => {
@@ -568,36 +585,38 @@ impl PageList {
                     return;
                 }
             };
-            for row in result {
-                match row {
-                    Ok(row) => {
-                        let page_title = match row.get(col_title) {
-                            Some(title) => match title {
-                                my::Value::Bytes(uv) => String::from_utf8(uv).unwrap(),
-                                _ => continue,
-                            },
-                            None => continue,
-                        };
-                        let namespace_id = match row.get(col_ns) {
-                            Some(title) => match title {
-                                my::Value::Int(i) => i,
-                                _ => continue,
-                            },
-                            None => continue,
-                        };
 
-                        let tmp_entry = PageListEntry::new(Title::new(&page_title, namespace_id));
-                        let mut entry = match self.entries.get(&tmp_entry) {
-                            Some(e) => (*e).clone(),
-                            None => continue,
-                        };
+            // Add to row list
+            let mut rows_lock = rows.lock().unwrap();
+            result
+                .filter_map(|row| row.ok())
+                .for_each(|row| rows_lock.push(row.clone()));
+        });
 
-                        f(row, &mut entry);
-                        self.add_entry(entry);
-                    }
-                    _ => {} // Ignore error
-                }
-            }
+        rows.lock().unwrap().iter().for_each(|row| {
+            let page_title = match row.get(col_title) {
+                Some(title) => match title {
+                    my::Value::Bytes(uv) => String::from_utf8(uv).unwrap(),
+                    _ => return,
+                },
+                None => return,
+            };
+            let namespace_id = match row.get(col_ns) {
+                Some(title) => match title {
+                    my::Value::Int(i) => i,
+                    _ => return,
+                },
+                None => return,
+            };
+
+            let tmp_entry = PageListEntry::new(Title::new(&page_title, namespace_id));
+            let mut entry = match self.entries.get(&tmp_entry) {
+                Some(e) => (*e).clone(),
+                None => return,
+            };
+
+            f(row.clone(), &mut entry);
+            self.add_entry(entry);
         });
     }
 
@@ -608,7 +627,7 @@ impl PageList {
     ) {
         let batches: Vec<SQLtuple> = self
             .to_sql_batches(PAGE_BATCH_SIZE)
-            .iter_mut()
+            .par_iter_mut()
             .map(|mut sql_batch| {
                 sql_batch.0 =
                     "SELECT page_title,page_namespace,page_id,page_len,page_touched FROM page WHERE"
@@ -664,7 +683,7 @@ impl PageList {
     ) {
         let batches: Vec<SQLtuple> = self
             .to_sql_batches_namespace(PAGE_BATCH_SIZE,namespace_id)
-            .iter_mut()
+            .par_iter_mut()
             .map(|mut sql_batch| {
                 // entity_type and namespace_id are "database safe"
                 sql_batch.0 = format!("SELECT term_full_entity_id,{} AS dummy_namespace,term_text,term_type FROM wb_terms WHERE term_entity_type='{}' AND term_language=? AND term_full_entity_id IN (",namespace_id,&entity_type);
