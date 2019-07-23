@@ -134,24 +134,24 @@ impl Platform {
             .collect();
         self.combination = self.get_combination(&available_sources);
         self.result = self.combine_results(&mut results, &self.combination);
-        self.post_process_result(&available_sources);
+        self.post_process_result(&available_sources)?;
         self.query_time = Some(start_time.elapsed().unwrap());
         println!("Elapsed:{:?}", &self.query_time);
         Ok(())
     }
 
-    fn post_process_result(&mut self, available_sources: &Vec<String>) {
+    fn post_process_result(&mut self, available_sources: &Vec<String>) -> Result<(), String> {
         if self.result.is_none() {
-            return;
+            return Ok(());
         }
 
         let mut result = self.result.as_ref().unwrap().to_owned();
 
         // Filter and post-process
-        self.filter_wikidata(&mut result);
-        self.process_sitelinks(&mut result);
+        self.filter_wikidata(&mut result)?;
+        self.process_sitelinks(&mut result)?;
         if *available_sources != vec!["labels".to_string()] {
-            self.process_labels(&mut result);
+            self.process_labels(&mut result)?;
         }
         //if ( !common_wiki.empty() && pagelist.wiki != common_wiki ) pagelist.convertToWiki ( common_wiki ) ; // TODO
         if !available_sources.contains(&"categories".to_string()) {
@@ -185,6 +185,8 @@ impl Platform {
             return wdfist.run() ;
         }
         */
+
+        Ok(())
     }
 
     pub fn state(&self) -> Arc<AppState> {
@@ -621,14 +623,14 @@ impl Platform {
         }
     }
 
-    fn process_labels(&mut self, result: &mut PageList) {
+    fn process_labels(&mut self, result: &mut PageList) -> Result<(), String> {
         let mut sql = self.get_label_sql();
         if sql.1.is_empty() {
-            return;
+            return Ok(());
         }
-        result.convert_to_wiki("wikidatawiki", &self);
+        result.convert_to_wiki("wikidatawiki", &self)?;
         if result.is_empty() {
-            return;
+            return Ok(());
         }
         sql.0 += " AND term_full_entity_id IN (";
 
@@ -648,12 +650,12 @@ impl Platform {
         result.process_batch_results(self, batches, &|row: my::Row| {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
-        });
+        })
     }
 
-    fn process_sitelinks(&mut self, result: &mut PageList) {
+    fn process_sitelinks(&mut self, result: &mut PageList) -> Result<(), String> {
         if result.is_empty() {
-            return;
+            return Ok(());
         }
 
         let sitelinks_yes = self.get_param_as_vec("sitelinks_yes", "\n");
@@ -669,11 +671,11 @@ impl Platform {
             && sitelinks_min.is_empty()
             && sitelinks_max.is_empty()
         {
-            return;
+            return Ok(());
         }
-        result.convert_to_wiki("wikidatawiki", &self);
+        result.convert_to_wiki("wikidatawiki", &self)?;
         if result.is_empty() {
-            return;
+            return Ok(());
         }
 
         let use_min_max = !sitelinks_min.is_empty() || !sitelinks_max.is_empty();
@@ -737,12 +739,12 @@ impl Platform {
         result.process_batch_results(self, batches, &|row: my::Row| {
             let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
             Some(PageListEntry::new(Title::new(&page_title, 0)))
-        });
+        })
     }
 
-    fn filter_wikidata(&mut self, result: &mut PageList) {
+    fn filter_wikidata(&mut self, result: &mut PageList) -> Result<(), String> {
         if result.is_empty() {
-            return;
+            return Ok(());
         }
         let no_statements = self.has_param("wpiu_no_statements");
         let no_sitelinks = self.has_param("wpiu_no_sitelinks");
@@ -750,11 +752,11 @@ impl Platform {
         let list = self.get_param_blank("wikidata_prop_item_use");
         let list = list.trim();
         if list.is_empty() && !no_statements && !no_sitelinks {
-            return;
+            return Ok(());
         }
-        result.convert_to_wiki("wikidatawiki", &self);
+        result.convert_to_wiki("wikidatawiki", &self)?;
         if result.is_empty() {
-            return;
+            return Ok(());
         }
         // For all/any/none
         let parts = list
@@ -822,7 +824,7 @@ impl Platform {
         result.process_batch_results(self, batches, &|row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
-        });
+        })
     }
 
     pub fn entry_from_entity(entity: &str) -> Option<PageListEntry> {

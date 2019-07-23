@@ -488,15 +488,16 @@ impl PageList {
         ret
     }
 
-    pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) {
+    pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
         // Already that wiki?
         if self.wiki == None || self.wiki == Some(wiki.to_string()) {
-            return;
+            return Ok(());
         }
-        self.convert_to_wikidata(platform);
+        self.convert_to_wikidata(platform)?;
         if wiki != "wikidatawiki" {
-            self.convert_from_wikidata(wiki, platform);
+            self.convert_from_wikidata(wiki, platform)?;
         }
+        Ok(())
     }
 
     pub fn clear_entries(&mut self) {
@@ -515,10 +516,11 @@ impl PageList {
         platform: &Platform,
         batches: Vec<SQLtuple>,
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
-    ) {
+    ) -> Result<(), String> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
 
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
+        let error: Mutex<Option<String>> = Mutex::new(None);
 
         batches.par_iter().for_each(|sql| {
             // Get DB connection
@@ -530,13 +532,19 @@ impl PageList {
                 .unwrap();
 
             // Run query
-            let result = match conn.prep_exec(&sql.0, &sql.1) {
-                Ok(r) => r,
-                Err(e) => {
-                    println!("ERROR: {:?}", e);
-                    return;
-                }
-            };
+            let result;
+            loop {
+                match conn.prep_exec(&sql.0, &sql.1) {
+                    Ok(r) => {
+                        result = r;
+                        break;
+                    }
+                    Err(e) => {
+                        *error.lock().unwrap() = Some(format!("ERROR: {:?}", e));
+                        return;
+                    }
+                };
+            }
 
             // Add to row list
             let mut rows_lock = rows.lock().unwrap();
@@ -544,6 +552,11 @@ impl PageList {
                 .filter_map(|row| row.ok())
                 .for_each(|row| rows_lock.push(row.clone()));
         });
+
+        match &*error.lock().unwrap() {
+            Some(e) => return Err(e.to_string()),
+            None => {}
+        }
 
         // Rows to entries
         rows.lock()
@@ -553,6 +566,7 @@ impl PageList {
                 Some(entry) => self.add_entry(entry),
                 None => {}
             });
+        Ok(())
     }
 
     /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
@@ -711,9 +725,9 @@ impl PageList {
         );
     }
 
-    fn convert_to_wikidata(&mut self, platform: &Platform) {
+    fn convert_to_wikidata(&mut self, platform: &Platform) -> Result<(), String> {
         if self.wiki == None || self.wiki == Some("wikidatatwiki".to_string()) {
-            return;
+            return Ok(());
         }
 
         let batches: Vec<SQLtuple> = self.to_sql_batches(PAGE_BATCH_SIZE)
@@ -727,13 +741,14 @@ impl PageList {
         self.process_batch_results(platform, batches, &|row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
-        });
+        })?;
         self.wiki = Some("wikidatawiki".to_string());
+        Ok(())
     }
 
-    fn convert_from_wikidata(&mut self, wiki: &str, platform: &Platform) {
+    fn convert_from_wikidata(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
         if self.wiki == None || self.wiki != Some("wikidatatwiki".to_string()) {
-            return;
+            return Ok(());
         }
 
         let batches = self.to_sql_batches(PAGE_BATCH_SIZE)
@@ -753,8 +768,9 @@ impl PageList {
                 &ips_site_page,
                 &api,
             )))
-        });
+        })?;
         self.wiki = Some(wiki.to_string());
+        Ok(())
     }
 
     pub fn regexp_filter(&mut self, regexp: &String) {
