@@ -425,6 +425,7 @@ impl Platform {
             1,
             &|row: my::Row, entry: &mut PageListEntry| {
                 let mut parts = row.unwrap();
+                println!("{:?}", &parts);
                 parts.remove(0); // page_title
                 parts.remove(0); // page_namespace
                 if add_image {

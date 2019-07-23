@@ -169,6 +169,12 @@ pub trait Render {
             None => "".to_string(),
         }
     }
+    fn render_coordinates(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
+        match &entry.coordinates {
+            Some(coords) => format!("{}/{}", coords.lat, coords.lon),
+            None => "".to_string(),
+        }
+    }
 
     fn opt_usize(&self, o: &Option<usize>) -> String {
         o.map(|x| x.to_string()).unwrap_or("".to_string())
@@ -252,7 +258,7 @@ pub trait Render {
 
                 "checkbox" => "TODO".to_string(), // auto-creator
                 "linknumber" => "TODO".to_string(),
-                "coordinates" => "TODO".to_string(),
+                "coordinates" => self.render_coordinates(entry, params),
                 "fileusage" => self.render_cell_fileusage(&entry, &params),
 
                 _ => "<".to_string() + k + ">",
@@ -622,8 +628,6 @@ impl Render for RenderHTML {
         })
     }
 
-    // ?psid=10155065
-
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         self.render_wikilink(
             &entry.title(),
@@ -668,6 +672,34 @@ impl Render for RenderHTML {
                     rows.push(html);
                 }
                 rows.join("\n")
+            }
+            None => "".to_string(),
+        }
+    }
+
+    fn render_coordinates(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
+        match &entry.coordinates {
+            Some(coords) => {
+                let lang = "en"; // TODO
+                let mut url = format!(
+                    "https://tools.wmflabs.org/geohack/geohack.php?language={}&params=",
+                    &lang
+                );
+                if coords.lat < 0.0 {
+                    url += &format!("{}_S_", -coords.lat);
+                } else {
+                    url += &format!("{}_N_", coords.lat);
+                };
+                if coords.lon < 0.0 {
+                    url += &format!("{}_W_", -coords.lon)
+                } else {
+                    url += &format!("{}_E_", coords.lon)
+                };
+                url += "globe:earth";
+                format!(
+                    "<a class='smaller' target='_blank' href='{}'>{}/{}</a>",
+                    url, &coords.lat, &coords.lon
+                )
             }
             None => "".to_string(),
         }
