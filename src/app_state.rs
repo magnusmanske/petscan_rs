@@ -356,6 +356,10 @@ impl AppState {
     pub fn is_shutting_down(&self) -> bool {
         *self.shutting_down.lock().unwrap()
     }
+
+    pub fn shut_down(&self) {
+        *self.shutting_down.lock().unwrap() = true;
+    }
 }
 
 #[cfg(test)]

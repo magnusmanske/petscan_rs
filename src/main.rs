@@ -30,7 +30,21 @@ use std::fs::File;
 //use std::sync::Arc;
 
 fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> MyResponse {
-    // TODO check restart-code
+    match form_parameters.params.get("restart") {
+        Some(code) => {
+            let given_code = code.to_string();
+            match state.config["restart-code"].as_str() {
+                Some(config_code) => {
+                    if given_code == config_code {
+                        state.shut_down();
+                        println!("SHUTDOWN INITIATED!");
+                    }
+                }
+                None => {}
+            }
+        }
+        None => {}
+    }
     if state.is_shutting_down() {
         return MyResponse {
             s: "Temporary maintenance".to_string(),
