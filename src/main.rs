@@ -100,8 +100,12 @@ fn main() {
     let petscan_config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
-    let rocket_config = Config::build(Environment::Staging)
-        //.address("127.0.0.1")
+    let mut rocket_config = Config::build(Environment::Staging);
+    match petscan_config["http_server"].as_str() {
+        Some(address) => rocket_config = rocket_config.address(address),
+        None => {} // 0.0.0.0; default
+    }
+    let rocket_config = rocket_config
         .port(petscan_config["http_port"].as_u64().unwrap_or(80) as u16)
         .finalize()
         .unwrap();

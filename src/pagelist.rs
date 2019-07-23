@@ -3,11 +3,11 @@ use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
+use rayon::prelude::*;
 use regex::Regex;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-//use rayon::prelude::*;
 
 //________________________________________________________________________________________________________________________
 
@@ -365,7 +365,7 @@ impl PageList {
 
     pub fn get_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {
         let mut ret: Vec<PageListEntry> = self.entries.iter().cloned().collect();
-        ret.sort_by(|a, b| a.compare(b, &sorter));
+        ret.par_sort_by(|a, b| a.compare(b, &sorter));
         ret
     }
 
@@ -515,6 +515,7 @@ impl PageList {
         batches: Vec<SQLtuple>,
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
     ) {
+        // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
         let state = platform.state();
         let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut conn = platform
@@ -551,6 +552,7 @@ impl PageList {
         col_ns: usize,
         f: &dyn Fn(my::Row, &mut PageListEntry),
     ) {
+        // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
         let state = platform.state();
         let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut conn = platform

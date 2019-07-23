@@ -17,7 +17,7 @@ use std::sync::Arc;
 use serde_json::value::Value;
 */
 
-static MAX_CATEGORY_BATCH_SIZE: usize = 50;
+static MAX_CATEGORY_BATCH_SIZE: usize = 50000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
@@ -451,16 +451,19 @@ impl SourceDatabase {
                 };
 
                 for category_batch in category_batches {
+                    let mut sql = Platform::sql_tuple();
                     match self.params.combine.as_str() {
                         "subset" => {
                             sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
                             sql.0 += link_count_sql;
                             sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
+                            //println!("\nSTART:\n{:?}", &sql);
                             Platform::append_sql(
                                 &mut sql,
                                 &mut Platform::prep_quote(&category_batch[0].to_owned()),
                             );
                             sql.0 += ")) cl0";
+                            //println!("\nAPPENDED:\n{:?}", &sql);
                             for a in 1..category_batch.len() {
                                 sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
                                 Platform::append_sql(
@@ -468,6 +471,7 @@ impl SourceDatabase {
                                     &mut Platform::prep_quote(&category_batch[a].to_owned()),
                                 );
                                 sql.0 += ")";
+                                //println!("\nINNER:\n{:?}", &sql);
                             }
                         }
                         "union" => {
@@ -811,7 +815,7 @@ impl SourceDatabase {
             }
         }
 
-        println!("SQL:{:?}", &sql);
+        //println!("\nSQL:{:?}", &sql);
 
         let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
 
