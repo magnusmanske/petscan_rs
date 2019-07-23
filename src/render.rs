@@ -257,7 +257,10 @@ pub trait Render {
                 },
 
                 "checkbox" => "TODO".to_string(), // auto-creator
-                "linknumber" => "TODO".to_string(),
+                "linknumber" => match &entry.link_count {
+                    Some(lc) => format!("{}", &lc),
+                    None => "".to_string(),
+                },
                 "coordinates" => self.render_coordinates(entry, params),
                 "fileusage" => self.render_cell_fileusage(&entry, &params),
 
@@ -500,7 +503,6 @@ impl RenderTSV {
         })
     }
 
-    // TODO properly
     fn escape_cell(&self, s: &String) -> String {
         if self.separator == "," {
             "\"".to_string() + &s.replace("\"", "\\\"") + "\""
@@ -559,8 +561,6 @@ impl Render for RenderHTML {
             rows.push( "<label class='btn btn-secondary'><input type='radio' name='results_mode' value='thumbnails' checked autocomplete='off' /><span tt='show_thumbnails'></span></label>".to_string());
             rows.push("</div>".to_string());
         }
-
-        // Todo: Coordinates?
 
         rows.push(format!(
             "<h2><a name='results'></a><span id='num_results' num='{}'></span></h2>",
@@ -637,8 +637,17 @@ impl Render for RenderHTML {
             true,
         )
     }
-    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "TODO".to_string()
+    fn render_cell_wikidata_item(&self, entry: &PageListEntry, params: &RenderParams) -> String {
+        match &entry.wikidata_item {
+            Some(q) => self.render_wikilink(
+                &Title::new(&q, 0),
+                &"wikidatawiki".to_string(),
+                &None,
+                params,
+                false,
+            ),
+            None => "".to_string(),
+        }
     }
     fn render_user_name(&self, user: &String, params: &RenderParams) -> String {
         let title = Title::new(user, 2);
