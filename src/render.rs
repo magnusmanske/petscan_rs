@@ -8,6 +8,8 @@ use rocket::http::ContentType;
 use serde_json::Value;
 use std::sync::Arc;
 
+static MAX_HTML_RESULTS: usize = 10000;
+
 //________________________________________________________________________________________________________________________
 
 pub struct RenderParams {
@@ -515,7 +517,7 @@ impl Render for RenderHTML {
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let mut params = RenderParams::new(platform, wiki)?;
-        let mut rows: Vec<String> = vec![];
+        let mut rows: Vec<String> = Vec::with_capacity(entries.len() + 100);
 
         rows.push("<hr/>".to_string());
         rows.push("<script>var output_wiki='".to_string() + &wiki + "';</script>");
@@ -568,15 +570,32 @@ impl Render for RenderHTML {
             .iter()
             .map(|x| (x.to_string(), x.to_string()))
             .collect();
-        for entry in entries {
-            params.row_number += 1;
-            let row = self.row_from_entry(&entry, &header, &params);
-            let row = self.render_html_row(&row, &header);
-            rows.push(row);
-        }
+
+        entries.iter().for_each(|entry| {
+            if params.row_number < MAX_HTML_RESULTS {
+                params.row_number += 1;
+                let row = self.row_from_entry(&entry, &header, &params);
+                let row = self.render_html_row(&row, &header);
+                rows.push(row);
+            }
+        });
 
         rows.push("</tbody></table></div>".to_string());
-        //rows.push(format!("<div style='font-size:8pt' id='query_length' sec='{}'></div>" , query_time )); // TODO
+
+        if entries.len() > MAX_HTML_RESULTS {
+            rows.push( format!("<div class='alert alert-warning' style='clear:both'>Only the first {} results are shown in HTML, so as to not crash your browser; other formats will have complete results.</div>",MAX_HTML_RESULTS) );
+        }
+
+        match platform.query_time() {
+            Some(duration) => {
+                let seconds = (duration.as_millis() as f32) / (1000 as f32);
+                rows.push(format!(
+                    "<div style='font-size:8pt' id='query_length' sec='{}'></div>",
+                    seconds
+                ));
+            }
+            None => {}
+        }
         rows.push("<script src='autolist.js'></script>".to_string());
 
         let output = rows.join("\n");
@@ -910,7 +929,11 @@ impl RenderJSON {
                 Some(o)
             }).collect()
         };
-        json!({"n":"result","a":{"query":self.get_query_string(platform)},"*":[{"n":"combination","a":[{"type":platform.get_param_default("combination","subset"),"*":entry_data}]}]})
+        let seconds: f32 = match platform.query_time() {
+            Some(duration) => (duration.as_millis() as f32) / (1000 as f32),
+            None => 0.0,
+        };
+        json!({"n":"result","a":{"query":self.get_query_string(platform)},"querytime_sec":seconds,"*":[{"n":"combination","a":[{"type":platform.get_param_default("combination","subset"),"*":entry_data}]}]})
     }
 
     fn quick_intersection(
@@ -929,6 +952,12 @@ impl RenderJSON {
             "pagecount":entries.len(),
             "pages":[]
         });
+        match platform.query_time() {
+            Some(duration) => {
+                ret["querytime"] = json!((duration.as_millis() as f32) / (1000 as f32))
+            }
+            None => {}
+        }
 
         // Namespaces
         match params.api.get_site_info()["query"]["namespaces"].as_object() {

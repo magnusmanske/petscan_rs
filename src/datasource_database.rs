@@ -119,6 +119,7 @@ pub struct SourceDatabase {
     has_pos_templates: bool,
     has_pos_linked_from: bool,
     params: SourceDatabaseParameters,
+    talk_namespace_ids: String,
 }
 
 impl DataSource for SourceDatabase {
@@ -149,6 +150,7 @@ impl SourceDatabase {
             has_pos_templates: false,
             has_pos_linked_from: false,
             params,
+            talk_namespace_ids: "".to_string(),
         }
     }
 
@@ -238,6 +240,26 @@ impl SourceDatabase {
             .collect()
     }
 
+    fn get_talk_namespace_ids(&mut self, conn: &mut my::Conn) {
+        let mut sql = Platform::sql_tuple();
+        sql.0 =
+            "SELECT DISTINCT page_namespace FROM page WHERE MOD(page_namespace,2)=1".to_string();
+        let result = match conn.prep_exec(sql.0, sql.1) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("ERROR: {:?}", e);
+                return;
+            }
+        };
+
+        self.talk_namespace_ids = result
+            .filter_map(|row| row.ok())
+            .map(|row| my::from_row::<NamespaceID>(row))
+            .map(|id| id.to_string())
+            .collect::<Vec<String>>()
+            .join(",");
+    }
+
     pub fn template_subquery(
         &self,
         input: &Vec<String>,
@@ -251,7 +273,10 @@ impl SourceDatabase {
             } else {
                 " AND EXISTS "
             };
-            sql.0 += "(SELECT * FROM templatelinks,page pt WHERE MOD(p.page_namespace,2)=0 AND pt.page_title=p.page_title AND pt.page_namespace=p.page_namespace+1 AND tl_from=pt.page_id AND tl_namespace=10 AND tl_title";
+            //sql.0 += "(SELECT * FROM templatelinks,page pt WHERE MOD(p.page_namespace,2)=0 AND pt.page_title=p.page_title AND pt.page_namespace=p.page_namespace+1 AND tl_from=pt.page_id AND tl_namespace=10 AND tl_title";
+            sql.0 += "(SELECT * FROM page pt WHERE pt.page_title=p.page_title AND pt.page_namespace-1=p.page_namespace AND pt.page_id IN (SELECT tl_from FROM templatelinks WHERE tl_namespace=10 AND tl_from_namespace IN (";
+            sql.0 += &self.talk_namespace_ids;
+            sql.0 += ")  AND tl_title";
         } else {
             sql.0 += if find_not {
                 " AND p.page_id NOT IN "
@@ -265,6 +290,9 @@ impl SourceDatabase {
         sql.0 += " IN (";
         Platform::append_sql(&mut sql, &mut Platform::prep_quote(input));
         sql.0 += "))";
+        if use_talk_page {
+            sql.0 += ")";
+        }
 
         sql
     }
@@ -359,17 +387,17 @@ impl SourceDatabase {
             }
             None => {}
         }
-        //println!("{:?}", &self.params);
 
         // Paranoia
         if self.params.wiki.is_none() || self.params.wiki == Some("wiki".to_string()) {
             return None;
         }
 
-        let wiki = self.params.wiki.as_ref()?;
+        let wiki = self.params.wiki.as_ref()?.clone();
         let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut ret = PageList::new_from_wiki(&wiki);
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
+        self.get_talk_namespace_ids(&mut conn);
 
         self.cat_pos = self.parse_category_list(
             &mut conn,
@@ -815,7 +843,7 @@ impl SourceDatabase {
             }
         }
 
-        //println!("\nSQL:{:?}", &sql);
+        println!("\nSQL:{:?}", &sql);
 
         let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
 
@@ -827,6 +855,9 @@ impl SourceDatabase {
                 return false;
             }
         };
+
+        println!("SQL done");
+
         let mut had_page: HashSet<usize> = HashSet::new();
         for row in result {
             //println!("ROW: {:?}", &row);

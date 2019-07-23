@@ -8,6 +8,7 @@ use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
 use regex::Regex;
+use std::time::{Duration, SystemTime};
 //use rayon::prelude::*;
 use rocket::http::ContentType;
 use rocket::http::Status;
@@ -70,6 +71,7 @@ pub struct Platform {
     existing_labels: HashSet<String>,
     combination: Combination,
     output_redlinks: bool,
+    query_time: Option<Duration>,
 }
 
 impl Platform {
@@ -82,6 +84,7 @@ impl Platform {
             existing_labels: HashSet::new(),
             combination: Combination::None,
             output_redlinks: false,
+            query_time: None,
         }
     }
 
@@ -93,7 +96,12 @@ impl Platform {
         self.output_redlinks
     }
 
+    pub fn query_time(&self) -> Option<Duration> {
+        self.query_time.to_owned()
+    }
+
     pub fn run(&mut self) -> Result<(), String> {
+        let start_time = SystemTime::now();
         let mut candidate_sources: Vec<Box<dyn DataSource>> = vec![];
         candidate_sources.push(Box::new(SourceDatabase::new(self.db_params())));
         candidate_sources.push(Box::new(SourceSparql::new()));
@@ -127,6 +135,8 @@ impl Platform {
         self.combination = self.get_combination(&available_sources);
         self.result = self.combine_results(&mut results, &self.combination);
         self.post_process_result(&available_sources);
+        self.query_time = Some(start_time.elapsed().unwrap());
+        println!("Elapsed:{:?}", &self.query_time);
         Ok(())
     }
 
@@ -903,8 +913,8 @@ impl Platform {
     }
 
     pub fn get_main_wiki(&self) -> Option<String> {
-        let language = self.get_param("language")?;
-        let project = self.get_param("project")?;
+        let language = self.get_param_default("language", "en");
+        let project = self.get_param_default("project", "wikipedia");
         self.get_wiki_for_lagnuage_project(&language, &project)
     }
 
@@ -962,7 +972,7 @@ impl Platform {
                 .split(separator)
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
+                .map(|s| Title::spaces_to_underscores(&s.to_string()))
                 .collect(),
             None => vec![],
         }
@@ -1286,7 +1296,7 @@ mod tests {
         let form_parameters = match state.get_query_from_psid(&format!("{}", &psid)) {
             Ok(psid_query) => {
                 let query = psid_query + addendum;
-                FormParameters::outcome_from_query(&query)
+                FormParameters::outcome_from_query(&query)?
             }
             Err(e) => return Err(e),
         };

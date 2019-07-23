@@ -90,7 +90,7 @@ impl AppState {
         // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.analytics.db.svc.eqiad.wmflabs:3306 -N
         let host = match self.config["host"].as_str() {
             Some("127.0.0.1") => "127.0.0.1".to_string(),
-            Some(_host) => wiki.to_owned() + ".analytics.db.svc.eqiad.wmflabs",
+            Some(_host) => wiki.to_owned() + ".web.db.svc.eqiad.wmflabs", //".analytics.db.svc.eqiad.wmflabs",
             None => panic!("No host in config file"),
         };
         let schema = wiki.to_owned() + "_p";
