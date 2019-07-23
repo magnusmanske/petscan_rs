@@ -568,8 +568,6 @@ impl PageList {
 
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
 
-        println!("Starting {} SQL batches", batches.len());
-
         batches.par_iter().for_each(|sql| {
             // Get DB connection
             let state = platform.state();
@@ -594,8 +592,6 @@ impl PageList {
                 .filter_map(|row| row.ok())
                 .for_each(|row| rows_lock.push(row.clone()));
         });
-
-        println!("Got {} rows back", rows.lock().unwrap().len());
 
         rows.lock().unwrap().iter().for_each(|row| {
             let page_title = match row.get(col_title) {

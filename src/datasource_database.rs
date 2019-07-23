@@ -843,7 +843,7 @@ impl SourceDatabase {
             }
         }
 
-        println!("\nSQL:{:?}", &sql);
+        //println!("\nSQL:{:?}", &sql);
 
         let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
 
@@ -856,7 +856,7 @@ impl SourceDatabase {
             }
         };
 
-        println!("SQL done");
+        //println!("SQL done");
 
         let mut had_page: HashSet<usize> = HashSet::new();
         for row in result {
