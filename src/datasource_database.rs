@@ -17,7 +17,7 @@ use std::sync::Arc;
 use serde_json::value::Value;
 */
 
-static MAX_CATEGORY_BATCH_SIZE: usize = 5000;
+static MAX_CATEGORY_BATCH_SIZE: usize = 50;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
@@ -107,7 +107,7 @@ impl SourceDatabaseParameters {
             only_new_since: false,
             before: "".to_string(),
             after: "".to_string(),
-            use_new_category_mode: true,
+            use_new_category_mode: false, //TODO
         }
     }
 }
@@ -811,7 +811,7 @@ impl SourceDatabase {
             }
         }
 
-        //println!("SQL:{:?}", &sql);
+        println!("SQL:{:?}", &sql);
 
         let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
 
