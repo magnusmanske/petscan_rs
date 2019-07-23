@@ -7,6 +7,7 @@ use rocket::http::uri::Uri;
 use rocket::http::ContentType;
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 static MAX_HTML_RESULTS: usize = 10000;
 
@@ -150,6 +151,14 @@ pub trait Render {
     fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String;
     fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String;
     fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
+    fn render_cell_checkbox(
+        &self,
+        _entry: &PageListEntry,
+        _params: &RenderParams,
+        _platform: &Platform,
+    ) -> String {
+        "".to_string()
+    }
     fn render_cell_fileusage(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
         match &entry.file_info {
             Some(fi) => {
@@ -203,6 +212,7 @@ pub trait Render {
         entry: &PageListEntry,
         header: &Vec<(String, String)>,
         params: &RenderParams,
+        platform: &Platform,
     ) -> Vec<String> {
         let mut ret = vec![];
         for (k, _) in header {
@@ -256,7 +266,7 @@ pub trait Render {
                     None => "".to_string(),
                 },
 
-                "checkbox" => "TODO".to_string(), // auto-creator
+                "checkbox" => self.render_cell_checkbox(entry, params, platform),
                 "linknumber" => match &entry.link_count {
                     Some(lc) => format!("{}", &lc),
                     None => "".to_string(),
@@ -330,7 +340,7 @@ impl Render for RenderWiki {
         for entry in entries {
             params.row_number += 1;
             rows.push("|-".to_string());
-            let row = self.row_from_entry(&entry, &header, &params);
+            let row = self.row_from_entry(&entry, &header, &params, &platform);
             let row = "| ".to_string() + &row.join(" || ");
             rows.push(row);
         }
@@ -448,7 +458,7 @@ impl Render for RenderTSV {
 
         for entry in entries {
             params.row_number += 1;
-            let row = self.row_from_entry(&entry, &header, &params);
+            let row = self.row_from_entry(&entry, &header, &params, &platform);
             let row: Vec<String> = row.iter().map(|s| self.escape_cell(s)).collect();
             let row = row.join(&self.separator);
             rows.push(row);
@@ -580,7 +590,7 @@ impl Render for RenderHTML {
         entries.iter().for_each(|entry| {
             if params.row_number < MAX_HTML_RESULTS {
                 params.row_number += 1;
-                let row = self.row_from_entry(&entry, &header, &params);
+                let row = self.row_from_entry(&entry, &header, &params, &platform);
                 let row = self.render_html_row(&row, &header);
                 rows.push(row);
             }
@@ -725,6 +735,57 @@ impl Render for RenderHTML {
             }
             None => "".to_string(),
         }
+    }
+
+    fn render_cell_checkbox(
+        &self,
+        entry: &PageListEntry,
+        params: &RenderParams,
+        platform: &Platform,
+    ) -> String {
+        let mut q: String;
+        let checked: &str;
+        if params.autolist_creator_mode {
+            if platform.label_exists(entry.title().pretty()) {
+                checked = "";
+            } else {
+                if entry.title().pretty().contains('(') {
+                    checked = "";
+                } else {
+                    checked = "checked";
+                }
+            }
+            q = format!(
+                "create_item_{}_{}",
+                &params.row_number,
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_micros()
+            );
+        } else {
+            q = entry.title().pretty().to_string();
+            q.remove(0);
+            checked = "checked";
+        };
+        format!(
+            "<input type='checkbox' class='qcb' q='{}' id='autolist_checkbox_{}' {} />",
+            &q, &q, &checked
+        )
+        /*
+            string q ;
+            string checked = "checked" ;
+            if ( autolist_creator_mode ) {
+                string el = platform->getExistingLabel ( page.name ) ;
+                if ( !el.empty() ) checked = "" ; // No checkbox check if label/alias exists
+                if ( page.name.find_first_of('(') != string::npos ) checked = "" ; // Names with "(" are unchecked by default
+                sprintf ( tmp , "create_item_%d_%ld" , cnt , now_ish.tv_usec ) ; // Using microtime to get unique checkbox
+                q = tmp ;
+            } else {
+                q = page.name.substr(1) ;
+            }
+            ret += "<td><input type='checkbox' class='qcb' q='"+q+"' id='autolist_checkbox_"+q+"' "+checked+"></td>" ;
+        */
     }
 }
 

@@ -88,6 +88,11 @@ impl Platform {
         }
     }
 
+    pub fn label_exists(&self, label: &String) -> bool {
+        // TODO normalization?
+        self.existing_labels.contains(label)
+    }
+
     pub fn combination(&self) -> Combination {
         self.combination.clone()
     }
@@ -136,7 +141,7 @@ impl Platform {
         self.result = self.combine_results(&mut results, &self.combination);
         self.post_process_result(&available_sources)?;
         self.query_time = Some(start_time.elapsed().unwrap());
-        println!("Elapsed:{:?}", &self.query_time);
+        //println!("Elapsed:{:?}", &self.query_time);
         Ok(())
     }
 
@@ -1219,7 +1224,7 @@ impl Platform {
         results: &mut HashMap<String, Option<PageList>>,
         combination: &Combination,
     ) -> Option<PageList> {
-        println!("COMB: {:?}", &combination);
+        //println!("COMB: {:?}", &combination);
         match combination {
             Combination::Source(s) => match results.get(s) {
                 Some(r) => r.to_owned(),
