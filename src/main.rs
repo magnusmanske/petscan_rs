@@ -30,6 +30,7 @@ use std::fs::File;
 //use std::sync::Arc;
 
 fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> MyResponse {
+    // Restart command?
     match form_parameters.params.get("restart") {
         Some(code) => {
             let given_code = code.to_string();
@@ -44,6 +45,8 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
         }
         None => {}
     }
+
+    // In the process of shutting down?
     if state.is_shutting_down() {
         state.try_shutdown();
         return MyResponse {
@@ -51,12 +54,16 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
             content_type: ContentType::Plain,
         };
     }
+
+    // Just show the main page
     if form_parameters.params.contains_key("show_main_page") {
         return MyResponse {
             s: state.get_main_page().to_owned(),
             content_type: ContentType::HTML,
         };
     }
+
+    // "psid" parameter? Load, and patch in, existing query
     if form_parameters.params.contains_key("psid") {
         let psid = form_parameters.params.get("psid").unwrap().to_string();
         if !psid.is_empty() {
@@ -72,6 +79,18 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
             }
         }
     }
+
+    // No "doit" parameter, just display the HTML form with the current query
+    if !form_parameters.params.contains_key("doit") {
+        let html = state.get_main_page();
+        let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
+        return MyResponse {
+            s: html,
+            content_type: ContentType::HTML,
+        };
+    }
+
+    // Actually do something useful!
     state.modify_threads_running(1);
     let mut platform = Platform::new_from_parameters(&form_parameters, &state.inner());
     match platform.run() {
@@ -82,11 +101,14 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
         }
     }
     platform.state().modify_threads_running(-1);
+
+    // Generate and store a new PSID
     platform.psid = match state.get_or_create_psid_for_query(&form_parameters.to_string()) {
         Ok(psid) => Some(psid),
         Err(e) => return state.render_error(e, &form_parameters),
     };
 
+    // Render response
     match platform.get_response() {
         Ok(response) => response,
         Err(error) => state.render_error(error, &form_parameters),
