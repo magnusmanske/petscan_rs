@@ -644,8 +644,21 @@ impl Render for RenderHTML {
         let title = Title::new(user, 2);
         self.render_wikilink(&title, &params.wiki, &None, params, false)
     }
-    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
-        "TODO".to_string()
+    fn render_cell_image(&self, image: &Option<String>, params: &RenderParams) -> String {
+        match image {
+            Some(img) => {
+                let thumnail_size = "120px"; // TODO
+                let server_url = params.state.get_server_url_for_wiki(&params.wiki).unwrap();
+                let file = Uri::percent_encode(img);
+                let url = format!("{}/wiki/File:{}", &server_url, &file);
+                let src = format!(
+                    "{}/wiki/Special:Redirect/file/{}?width={}",
+                    &server_url, &file, &thumnail_size
+                );
+                format!("<div class='card thumbcard'><a target='_blank' href='{}'><img class='card-img thumbcard-img' src='{}'/></a></div>",url,src)
+            }
+            None => "".to_string(),
+        }
     }
     fn render_cell_namespace(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         let namespace_name = entry
