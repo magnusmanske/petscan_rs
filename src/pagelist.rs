@@ -532,19 +532,13 @@ impl PageList {
                 .unwrap();
 
             // Run query
-            let result;
-            loop {
-                match conn.prep_exec(&sql.0, &sql.1) {
-                    Ok(r) => {
-                        result = r;
-                        break;
-                    }
-                    Err(e) => {
-                        *error.lock().unwrap() = Some(format!("ERROR: {:?}", e));
-                        return;
-                    }
-                };
-            }
+            let result = match conn.prep_exec(&sql.0, &sql.1) {
+                Ok(r) => r,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(format!("ERROR: {:?}", e));
+                    return;
+                }
+            };
 
             // Add to row list
             let mut rows_lock = rows.lock().unwrap();
