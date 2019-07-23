@@ -310,7 +310,7 @@ impl SourceDatabase {
             }
             ret.get_mut(&title.namespace_id())
                 .unwrap()
-                .push(title.pretty().to_string());
+                .push(title.with_underscores().to_string());
         });
         ret
     }
