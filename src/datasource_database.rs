@@ -107,7 +107,7 @@ impl SourceDatabaseParameters {
             only_new_since: false,
             before: "".to_string(),
             after: "".to_string(),
-            use_new_category_mode: false, //TODO
+            use_new_category_mode: true,
         }
     }
 }
@@ -523,7 +523,7 @@ impl SourceDatabase {
                     sql.0 += " INNER JOIN (page p";
                     sql.0 += ") ON p.page_id=cl0.cl_from";
                     let mut pl2 = PageList::new_from_wiki(&wiki.clone());
-                    if self.get_pages_for_primary(
+                    self.get_pages_for_primary(
                         &mut conn,
                         &primary.to_string(),
                         &mut sql,
@@ -531,14 +531,12 @@ impl SourceDatabase {
                         &mut pl2,
                         &mut is_before_after_done,
                         state.get_api_for_wiki(wiki.clone())?,
-                    ) {
-                        if ret.is_empty() {
-                            ret.swap_entries(&mut pl2);
-                        } else {
-                            ret.union(Some(pl2)).unwrap();
-                        }
+                    )
+                    .ok()?;
+                    if ret.is_empty() {
+                        ret.swap_entries(&mut pl2);
                     } else {
-                        return None;
+                        ret.union(Some(pl2)).unwrap();
                     }
                 }
 
@@ -598,7 +596,7 @@ impl SourceDatabase {
         }
 
         let wiki = self.params.wiki.as_ref()?;
-        if self.get_pages_for_primary(
+        self.get_pages_for_primary(
             &mut conn,
             &primary.to_string(),
             &mut sql,
@@ -606,11 +604,9 @@ impl SourceDatabase {
             &mut ret,
             &mut is_before_after_done,
             state.get_api_for_wiki(wiki.clone())?,
-        ) {
-            Some(ret)
-        } else {
-            None
-        }
+        )
+        .ok()?;
+        Some(ret)
     }
 
     fn get_pages_for_primary(
@@ -622,7 +618,7 @@ impl SourceDatabase {
         pages_sublist: &mut PageList,
         is_before_after_done: &mut bool,
         api: Api,
-    ) -> bool {
+    ) -> Result<(), String> {
         // Namespaces
         if !self.params.namespace_ids.is_empty() {
             sql.0 += " AND p.page_namespace IN(";
@@ -847,12 +843,10 @@ impl SourceDatabase {
 
         let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
 
-        let sql = sql.clone(); // TODO don't do that
-        let result = match conn.prep_exec(sql.0, sql.1) {
+        let result = match conn.prep_exec(sql.0.to_owned(), sql.1.to_owned()) {
             Ok(r) => r,
             Err(e) => {
-                println!("ERROR: {:?}", e);
-                return false;
+                return Err(format!("{:?}", &e));
             }
         };
 
@@ -879,7 +873,7 @@ impl SourceDatabase {
         //println!("RESULT: {:?}", &pl1);
         pl1.swap_entries(pages_sublist);
 
-        true
+        Ok(())
     }
 }
 
