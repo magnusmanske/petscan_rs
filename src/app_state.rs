@@ -151,12 +151,26 @@ impl AppState {
         ))
     }
 
-    pub fn render_error(&self, error: String, _form_parameters: &FormParameters) -> MyResponse {
-        // TODO render in proper content format
-        return MyResponse {
-            s: error.to_string(),
-            content_type: ContentType::Plain,
-        };
+    pub fn render_error(&self, error: String, form_parameters: &FormParameters) -> MyResponse {
+        match form_parameters.params.get("format").map(|s| s.as_str()) {
+            Some("") | Some("html") => {
+                let output = format!(
+                    "<div class='alert alert-danger' role='alert'>{}</div>",
+                    &error
+                );
+                let html = self.get_main_page().to_owned();
+                let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
+                let html = &html.replace("<!--output-->", &output);
+                MyResponse {
+                    s: html.to_string(),
+                    content_type: ContentType::HTML,
+                }
+            }
+            _ => MyResponse {
+                s: error.to_string(),
+                content_type: ContentType::Plain,
+            },
+        }
     }
 
     pub fn get_api_for_wiki(&self, wiki: String) -> Result<Api, String> {

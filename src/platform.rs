@@ -209,7 +209,7 @@ impl Platform {
         self.process_by_wikidata_item(&mut result)?;
         self.process_files(&mut result)?;
         self.process_pages(&mut result)?;
-        self.process_subpages(&mut result);
+        self.process_subpages(&mut result)?;
 
         let wikidata_label_language = self.get_param_default(
             "wikidata_label_language",
@@ -366,11 +366,12 @@ impl Platform {
 
         let mut redlink_counter: HashMap<Title, usize> = HashMap::new();
 
+        let wiki = match &result.wiki {
+            Some(wiki) => wiki.to_owned(),
+            None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
+        };
         let db_user_pass = self.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-        let mut conn = self
-            .state
-            .get_wiki_db_connection(&db_user_pass, &result.wiki.as_ref().unwrap())
-            .unwrap();
+        let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki)?;
 
         let mut error: Option<String> = None;
         batches.iter().for_each(|sql| {
@@ -418,11 +419,11 @@ impl Platform {
         Ok(())
     }
 
-    fn process_subpages(&self, result: &mut PageList) {
+    fn process_subpages(&self, result: &mut PageList) -> Result<(), String> {
         let add_subpages = self.has_param("add_subpages");
         let subpage_filter = self.get_param_default("subpage_filter", "either");
         if !add_subpages && subpage_filter != "subpages" && subpage_filter != "no_subpages" {
-            return;
+            return Ok(());
         }
 
         if add_subpages {
@@ -437,12 +438,14 @@ impl Platform {
                 })
                 .collect();
 
+            let wiki = match &result.wiki {
+                Some(wiki) => wiki.to_owned(),
+                None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
+            };
             let db_user_pass = self.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-            let mut conn = self
-                .state
-                .get_wiki_db_connection(&db_user_pass, &result.wiki.as_ref().unwrap())
-                .unwrap();
+            let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki)?;
 
+            let mut error: Option<String> = None;
             title_ns.iter().for_each(|(title, namespace_id)| {
                 let sql: SQLtuple = (
                     "SELECT page_title,page_namespace FROM page WHERE page_namespace=? AND page_title LIKE ?"
@@ -452,20 +455,24 @@ impl Platform {
                 let db_result = match conn.prep_exec(&sql.0, &sql.1) {
                     Ok(r) => r,
                     Err(e) => {
-                        println!("ERROR: {:?}", e);
+                        error = Some(format!("{:?}", e));
                         return;
                     }
                 };
-                for row in db_result {
-                    let (page_title,page_namespace) = my::from_row::<(String,NamespaceID)>(row.unwrap());
+                db_result.filter_map(|row_result|row_result.ok()).for_each(|row|{
+                    let (page_title,page_namespace) = my::from_row::<(String,NamespaceID)>(row);
                     result.entries.insert(PageListEntry::new(Title::new(&page_title,page_namespace)));
-                }
+                });
             });
+            match error {
+                Some(e) => return Err(e),
+                None => {}
+            }
             // TODO if new pages were added, they should get some of the post_process_result treatment as well
         }
 
         if subpage_filter != "subpages" && subpage_filter != "no_subpages" {
-            return;
+            return Ok(());
         }
 
         let keep_subpages = subpage_filter == "subpages";
@@ -473,6 +480,7 @@ impl Platform {
             let has_slash = entry.title().pretty().find('/').is_some();
             has_slash == keep_subpages
         });
+        Ok(())
     }
 
     fn process_pages(&self, result: &mut PageList) -> Result<(), String> {
@@ -511,8 +519,7 @@ impl Platform {
             0,
             1,
             &|row: my::Row, entry: &mut PageListEntry| {
-                let mut parts = row.unwrap();
-                println!("{:?}", &parts);
+                let mut parts = row.unwrap(); // Unwrap into vector, should be safe
                 parts.remove(0); // page_title
                 parts.remove(0); // page_namespace
                 if add_image {
@@ -984,16 +991,16 @@ impl Platform {
             redirects: self.get_param_blank("show_redirects"),
             minlinks: self
                 .get_param("minlinks")
-                .map(|i| i.parse::<usize>().unwrap()),
+                .map(|i| i.parse::<usize>().unwrap()), // TODO
             maxlinks: self
                 .get_param("maxlinks")
-                .map(|i| i.parse::<usize>().unwrap()),
+                .map(|i| i.parse::<usize>().unwrap()), // TODO
             larger: self
                 .get_param("larger")
-                .map(|i| i.parse::<usize>().unwrap()),
+                .map(|i| i.parse::<usize>().unwrap()), // TODO
             smaller: self
                 .get_param("smaller")
-                .map(|i| i.parse::<usize>().unwrap()),
+                .map(|i| i.parse::<usize>().unwrap()), // TODO
             wiki: self.get_main_wiki(),
             namespace_ids: self
                 .form_parameters
@@ -1031,18 +1038,19 @@ impl Platform {
     }
 
     pub fn get_response(&self) -> Result<MyResponse, String> {
-        if self.result.is_none() || self.result.as_ref().unwrap().wiki.is_none() {
-            return Err(format!("No result"));
-        }
+        let result = match &self.result {
+            Some(result) => result,
+            None => return Err(format!("Platform::get_response: No result")),
+        };
+        let wiki = match &result.wiki {
+            Some(wiki) => wiki,
+            None => return Err(format!("Platform::get_response: No wiki in result")),
+        };
 
-        let mut pages =
-            self.result
-                .as_ref()
-                .unwrap()
-                .get_sorted_vec(PageListSort::new_from_params(
-                    &self.get_param_blank("sortby"),
-                    self.get_param_blank("sortorder") == "descending".to_string(),
-                ));
+        let mut pages = result.get_sorted_vec(PageListSort::new_from_params(
+            &self.get_param_blank("sortby"),
+            self.get_param_blank("sortorder") == "descending".to_string(),
+        ));
         self.apply_results_limit(&mut pages);
 
         let renderer: Box<dyn Render> = match self.get_param_blank("format").as_str() {
@@ -1053,11 +1061,7 @@ impl Platform {
             // TODO PagePile
             _ => RenderHTML::new(),
         };
-        renderer.response(
-            &self,
-            &self.result.as_ref().unwrap().wiki.as_ref().unwrap(),
-            pages,
-        )
+        renderer.response(&self, &wiki, pages)
     }
 
     pub fn get_param_as_vec(&self, param: &str, separator: &str) -> Vec<String> {
@@ -1132,7 +1136,8 @@ impl Platform {
 
     pub fn get_label_sql(&self) -> SQLtuple {
         lazy_static! {
-            static ref RE1: Regex = Regex::new(r#"[^a-z,]"#).unwrap();
+            static ref RE1: Regex =
+                Regex::new(r#"[^a-z,]"#).expect("Platform::get_label_sql Regex is invalid");
         }
         let mut ret: SQLtuple = ("".to_string(), vec![]);
         let yes = self.get_param_as_vec("labels_yes", "\n");
@@ -1203,7 +1208,8 @@ impl Platform {
 
     fn parse_combination_string(s: &String) -> Combination {
         lazy_static! {
-            static ref RE: Regex = Regex::new(r"\w+(?:'\w+)?|[^\w\s]").unwrap();
+            static ref RE: Regex = Regex::new(r"\w+(?:'\w+)?|[^\w\s]")
+                .expect("Platform::parse_combination_string: Regex is invalid");
         }
         match s.trim().to_lowercase().as_str() {
             "" => return Combination::None,
@@ -1214,7 +1220,8 @@ impl Platform {
         }
         let mut parts: Vec<String> = RE
             .captures_iter(s)
-            .map(|cap| cap.get(0).unwrap().as_str().to_string())
+            .filter_map(|cap| cap.get(0))
+            .map(|s| s.as_str().to_string())
             .filter(|s| !s.is_empty())
             .collect();
         // Problem?
@@ -1222,7 +1229,11 @@ impl Platform {
             return Combination::None;
         }
 
-        let left = if parts.get(0).unwrap() == "(" {
+        let first_part = match parts.get(0) {
+            Some(part) => part.to_owned(),
+            None => "".to_string(),
+        };
+        let left = if first_part == "(" {
             let mut cnt = 0;
             let mut new_left: Vec<String> = vec![];
             loop {
