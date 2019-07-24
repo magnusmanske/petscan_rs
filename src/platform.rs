@@ -184,11 +184,10 @@ impl Platform {
     }
 
     fn post_process_result(&mut self, available_sources: &Vec<String>) -> Result<(), String> {
-        if self.result.is_none() {
-            return Ok(());
-        }
-
-        let mut result = self.result.as_ref().unwrap().to_owned();
+        let mut result = match self.result.as_ref() {
+            Some(res) => res.to_owned(),
+            None => return Ok(()),
+        };
 
         // Filter and post-process
         self.filter_wikidata(&mut result)?;
@@ -1479,7 +1478,7 @@ mod tests {
     #[test]
     fn test_source_labels() {
         check_results_for_psid(
-            10223488,
+            10225056,
             "wikidatawiki",
             vec![Title::new("Q10995651", 0), Title::new("Q13520818", 0)],
         );

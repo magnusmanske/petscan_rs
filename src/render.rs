@@ -350,7 +350,10 @@ impl Render for RenderWiki {
 
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         if entry.title().namespace_id() == 6 && params.thumbnails_in_wiki_output {
-            "[[".to_string() + &entry.title().full_pretty(&params.api).unwrap() + "|120px|]]"
+            match entry.title().full_pretty(&params.api) {
+                Some(file) => "[[".to_string() + &file + "|120px|]]",
+                None => "[[File:".to_string() + &entry.title().pretty() + "|120px|]]",
+            }
         } else {
             self.render_wikilink(&entry, &params)
         }
@@ -395,7 +398,10 @@ impl RenderWiki {
             if entry.title().namespace_id() == 14 {
                 ret += ":";
             }
-            ret += &entry.title().full_pretty(&params.api).unwrap();
+            ret += &entry
+                .title()
+                .full_pretty(&params.api)
+                .unwrap_or(entry.title().pretty().to_string());
             ret += "|]]";
             ret
         }
@@ -462,10 +468,10 @@ impl Render for RenderTSV {
         Ok(MyResponse {
             s: rows.join("\n"),
             content_type: match self.separator.as_str() {
-                "," => ContentType::parse_flexible("text/csv; charset=utf-8").unwrap(),
-                "\t" => {
-                    ContentType::parse_flexible("text/tab-separated-values; charset=utf-8").unwrap()
-                }
+                "," => ContentType::parse_flexible("text/csv; charset=utf-8")
+                    .expect("Can't parse content type text/csv"),
+                "\t" => ContentType::parse_flexible("text/tab-separated-values; charset=utf-8")
+                    .expect("Can't parse content type text/csv"),
                 _ => ContentType::Plain, // Fallback
             },
         })
@@ -662,7 +668,10 @@ impl Render for RenderHTML {
         match image {
             Some(img) => {
                 let thumnail_size = "120px"; // TODO
-                let server_url = params.state.get_server_url_for_wiki(&params.wiki).unwrap();
+                let server_url = match params.state.get_server_url_for_wiki(&params.wiki) {
+                    Ok(url) => url,
+                    _ => return "".to_string(),
+                };
                 let file = Uri::percent_encode(img);
                 let url = format!("{}/wiki/File:{}", &server_url, &file);
                 let src = format!(
@@ -757,14 +766,10 @@ impl Render for RenderHTML {
                     checked = "checked";
                 }
             }
-            q = format!(
-                "create_item_{}_{}",
-                &params.row_number,
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_micros()
-            );
+            q = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                Ok(since) => format!("create_item_{}_{}", &params.row_number, since.as_micros()),
+                _ => "".to_string(),
+            }
         } else {
             q = entry.title().pretty().to_string();
             q.remove(0);
@@ -791,19 +796,24 @@ impl RenderHTML {
         is_page_link: bool,
         wikidata_description: &Option<String>,
     ) -> String {
-        let server = params
-            .state
-            .get_server_url_for_wiki(wiki)
-            .unwrap()
-            .to_string();
-        let url = server
-            + "/wiki/"
-            + &Uri::percent_encode(&title.full_with_underscores(&params.api).unwrap());
+        let server = match params.state.get_server_url_for_wiki(wiki) {
+            Ok(url) => url,
+            Err(_e) => return "".to_string(),
+        };
+        let full_title = match title.full_with_underscores(&params.api) {
+            Some(ft) => ft,
+            None => format!("{:?}", title),
+        };
+        let full_title_pretty = match title.full_pretty(&params.api) {
+            Some(ft) => ft,
+            None => format!("{:?}", title),
+        };
+        let url = server + "/wiki/" + &Uri::percent_encode(&full_title);
         let label = match alt_label {
             Some(label) => label.to_string(),
             None => match is_page_link {
                 true => title.pretty().to_string(),
-                false => title.full_pretty(&params.api).unwrap(),
+                false => full_title_pretty,
             },
         };
         let mut ret = "<a".to_string();
@@ -955,11 +965,16 @@ impl Render for RenderJSON {
             out += "(";
         }
 
-        if params.json_pretty {
-            out += &::serde_json::to_string_pretty(&value).unwrap();
+        let output = if params.json_pretty {
+            ::serde_json::to_string_pretty(&value)
         } else {
-            out += &::serde_json::to_string(&value).unwrap();
-        }
+            ::serde_json::to_string(&value)
+        };
+        match output {
+            Ok(_) => {}
+            Err(e) => return Err(format!("JSON encoding failed: {:?}", e)),
+        };
+        out += &output.unwrap(); // Known to be OK
 
         if !params.json_callback.is_empty() {
             out += ")";
@@ -967,7 +982,10 @@ impl Render for RenderJSON {
 
         Ok(MyResponse {
             s: out.to_string(),
-            content_type: ContentType::parse_flexible(&content_type).unwrap(),
+            content_type: match ContentType::parse_flexible(&content_type) {
+                Some(ct) => ct,
+                _ => ContentType::Plain,
+            },
         })
     }
 
