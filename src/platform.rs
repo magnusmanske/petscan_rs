@@ -1009,7 +1009,7 @@ impl Platform {
     }
 
     pub fn get_main_wiki(&self) -> Option<String> {
-        let language = self.get_param_default("language", "en");
+        let language = self.get_param_default("language", "en").replace("_", "-");
         let project = self.get_param_default("project", "wikipedia");
         self.get_wiki_for_lagnuage_project(&language, &project)
     }
