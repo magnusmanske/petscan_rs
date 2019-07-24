@@ -41,13 +41,7 @@ pub struct RenderParams {
 
 impl RenderParams {
     pub fn new(platform: &Platform, wiki: &String) -> Result<Self, String> {
-        let api = platform
-            .state()
-            .get_api_for_wiki(wiki.to_string())
-            .ok_or(format!(
-                "RenderParams::new: Cannot get a MediaWiki API for {}",
-                &wiki
-            ))?;
+        let api = platform.state().get_api_for_wiki(wiki.to_string())?;
         let mut ret = Self {
             wiki: wiki.to_owned(),
             file_data: platform.has_param("ext_image_data"),

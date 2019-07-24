@@ -792,7 +792,7 @@ impl PageList {
             .collect::<Vec<SQLtuple>>();
 
         self.entries.clear();
-        let api = platform.state().get_api_for_wiki(wiki.to_string()).unwrap();
+        let api = platform.state().get_api_for_wiki(wiki.to_string())?;
         self.process_batch_results(platform, batches, &|row: my::Row| {
             let ips_site_page: String = my::from_row(row);
             Some(PageListEntry::new(Title::new_from_full(

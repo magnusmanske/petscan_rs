@@ -117,7 +117,7 @@ impl AppState {
         &self,
         db_user_pass: &DbUserPass,
         wiki: &String,
-    ) -> Option<my::Conn> {
+    ) -> Result<my::Conn, String> {
         let mut loops_left = MYSQL_MAX_CONNECTION_ATTEMPTS;
         let mut milliseconds = MYSQL_CONNECTION_INITIAL_DELAY_MS;
         loop {
@@ -132,7 +132,7 @@ impl AppState {
             builder.tcp_port(self.config["db_port"].as_u64().unwrap_or(3306) as u16);
 
             match my::Conn::new(builder) {
-                Ok(con) => return Some(con),
+                Ok(con) => return Ok(con),
                 Err(e) => {
                     println!("CONNECTION ERROR: {:?}", e);
                     if loops_left == 0 {
@@ -145,7 +145,10 @@ impl AppState {
                 }
             }
         }
-        None
+        Err(format!(
+            "Could not connect to database replica for '{}' after {} attempts",
+            &wiki, MYSQL_MAX_CONNECTION_ATTEMPTS
+        ))
     }
 
     pub fn render_error(&self, error: String, _form_parameters: &FormParameters) -> MyResponse {
@@ -156,10 +159,13 @@ impl AppState {
         };
     }
 
-    pub fn get_api_for_wiki(&self, wiki: String) -> Option<Api> {
+    pub fn get_api_for_wiki(&self, wiki: String) -> Result<Api, String> {
         // TODO cache url and/or api object?
         let url = self.get_server_url_for_wiki(&wiki)? + "/w/api.php";
-        Api::new(&url).ok()
+        match Api::new(&url) {
+            Ok(api) => Ok(api),
+            Err(e) => Err(format!("{:?}", e)),
+        }
     }
 
     fn get_value_from_site_matrix_entry(
@@ -222,7 +228,7 @@ impl AppState {
             .next()
     }
 
-    pub fn get_server_url_for_wiki(&self, wiki: &String) -> Option<String> {
+    pub fn get_server_url_for_wiki(&self, wiki: &String) -> Result<String, String> {
         self.site_matrix["sitematrix"]
             .as_object()
             .expect("AppState::get_server_url_for_wiki: sitematrix not an object")
@@ -244,6 +250,10 @@ impl AppState {
                 },
             })
             .next()
+            .ok_or(format!(
+                "AppState::get_server_url_for_wiki: Cannot find server for wiki '{}'",
+                &wiki
+            ))
     }
 
     pub fn get_tool_db_connection(

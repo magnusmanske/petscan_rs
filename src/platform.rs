@@ -156,20 +156,19 @@ impl Platform {
         }
 
         // Collect results
+        // TODO remove option
         let mut results: HashMap<String, Option<PageList>> = HashMap::new();
         for _ in 0..threads_running {
             let thread_response = rx.recv().expect("Platform::run: Can't receive");
-            match &thread_response.1 {
-                Some(data) => match &data.wiki {
-                    Some(wiki) => {
-                        self.wiki_by_source
-                            .insert(thread_response.0.to_owned(), wiki.to_string());
-                    }
-                    None => {}
-                },
+            let data = thread_response.1?;
+            match &data.wiki {
+                Some(wiki) => {
+                    self.wiki_by_source
+                        .insert(thread_response.0.to_owned(), wiki.to_string());
+                }
                 None => {}
             }
-            results.insert(thread_response.0, thread_response.1);
+            results.insert(thread_response.0, Some(data));
         }
 
         let available_sources = candidate_sources
@@ -180,7 +179,10 @@ impl Platform {
         self.combination = self.get_combination(&available_sources);
         self.result = Some(self.combine_results(&mut results, &self.combination)?);
         self.post_process_result(&available_sources)?;
-        self.query_time = Some(start_time.elapsed().unwrap());
+        match start_time.elapsed() {
+            Ok(t) => self.query_time = Some(t),
+            _ => {}
+        }
         //println!("Elapsed:{:?}", &self.query_time);
         Ok(())
     }
@@ -202,7 +204,7 @@ impl Platform {
         self.convert_to_common_wiki(&mut result)?;
 
         if !available_sources.contains(&"categories".to_string()) {
-            self.process_missing_database_filters(&mut result);
+            self.process_missing_database_filters(&mut result)?;
         }
         self.process_by_wikidata_item(&mut result)?;
         self.process_files(&mut result)?;
@@ -255,7 +257,7 @@ impl Platform {
                 Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
                 None => return Err(format!("manual wiki requested as output, but not set")),
             },
-            "wikidata" => result.convert_to_wiki("wikidata", &self)?,
+            "wikidata" => result.convert_to_wiki("wikidatawiki", &self)?,
             "other" => match self.get_param("common_wiki_other") {
                 Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
                 None => {
@@ -309,8 +311,7 @@ impl Platform {
         let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut conn = self
             .state
-            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())
-            .unwrap();
+            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
 
         let mut error: Option<String> = None;
         batches.iter().for_each(|sql| {
@@ -699,17 +700,19 @@ impl Platform {
         Ok(())
     }
 
-    fn process_missing_database_filters(&mut self, result: &mut PageList) {
+    fn process_missing_database_filters(&mut self, result: &mut PageList) -> Result<(), String> {
         let mut params = self.db_params();
         params.wiki = match &result.wiki {
             Some(wiki) => Some(wiki.to_string()),
-            None => return,
+            None => {
+                return Err(format!(
+                    "Platform::process_missing_database_filters: result has no wiki"
+                ))
+            }
         };
         let mut db = SourceDatabase::new(params);
-        match db.get_pages(&self.state, Some(result)) {
-            Some(new_result) => *result = new_result,
-            None => {}
-        }
+        *result = db.get_pages(&self.state, Some(result))?;
+        Ok(())
     }
 
     fn process_labels(&mut self, result: &mut PageList) -> Result<(), String> {

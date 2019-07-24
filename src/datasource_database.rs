@@ -137,7 +137,7 @@ impl DataSource for SourceDatabase {
             || platform.has_param("links_to_any")
     }
 
-    fn run(&mut self, platform: &Platform) -> Option<PageList> {
+    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         self.get_pages(&platform.state(), None)
     }
 }
@@ -377,7 +377,7 @@ impl SourceDatabase {
         &mut self,
         state: &Arc<AppState>,
         primary_pagelist: Option<&PageList>,
-    ) -> Option<PageList> {
+    ) -> Result<PageList, String> {
         // Take wiki from given pagelist
         match primary_pagelist {
             Some(pl) => {
@@ -390,10 +390,13 @@ impl SourceDatabase {
 
         // Paranoia
         if self.params.wiki.is_none() || self.params.wiki == Some("wiki".to_string()) {
-            return None;
+            return Err(format!("SourceDatabase: Bad wiki '{:?}'", self.params.wiki));
         }
 
-        let wiki = self.params.wiki.as_ref()?.clone();
+        let wiki = match &self.params.wiki {
+            Some(wiki) => wiki.to_owned(),
+            None => return Err(format!("SourceDatabase::get_pages: No wiki in params")),
+        };
         let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let mut ret = PageList::new_from_wiki(&wiki);
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
@@ -426,9 +429,8 @@ impl SourceDatabase {
         } else if self.params.page_wikidata_item == "without" {
             "no_wikidata"
         } else {
-            return None;
+            return Err(format!("SourceDatabase: Missing primary"));
         };
-        //println!("PRIMARY: {}", &primary);
 
         let link_count_sql = if self.params.gather_link_count {
             ",(SELECT count(*) FROM pagelinks WHERE pl_from=p.page_id) AS link_count"
@@ -531,8 +533,7 @@ impl SourceDatabase {
                         &mut pl2,
                         &mut is_before_after_done,
                         state.get_api_for_wiki(wiki.clone())?,
-                    )
-                    .ok()?;
+                    )?;
                     if ret.is_empty() {
                         ret.swap_entries(&mut pl2);
                     } else {
@@ -541,7 +542,7 @@ impl SourceDatabase {
                 }
 
                 //data_loaded = true ;
-                return Some(ret);
+                return Ok(ret);
             }
             "no_wikidata" => {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
@@ -568,7 +569,7 @@ impl SourceDatabase {
                 ret.wiki = primary_pagelist.wiki.to_owned();
                 if primary_pagelist.is_empty() {
                     // Nothing to do, but that's OK
-                    return Some(ret);
+                    return Ok(ret);
                 }
 
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len ".to_string() ;
@@ -590,12 +591,17 @@ impl SourceDatabase {
                 });
             }
             other => {
-                println!("SourceDatabase::get_pages: other primary '{}'", &other);
-                return None;
+                return Err(format!(
+                    "SourceDatabase::get_pages: other primary '{}'",
+                    &other
+                ));
             }
         }
 
-        let wiki = self.params.wiki.as_ref()?;
+        let wiki = match &self.params.wiki {
+            Some(wiki) => wiki,
+            None => return Err(format!("No wiki 12345")),
+        };
         self.get_pages_for_primary(
             &mut conn,
             &primary.to_string(),
@@ -604,9 +610,8 @@ impl SourceDatabase {
             &mut ret,
             &mut is_before_after_done,
             state.get_api_for_wiki(wiki.clone())?,
-        )
-        .ok()?;
-        Some(ret)
+        )?;
+        Ok(ret)
     }
 
     fn get_pages_for_primary(

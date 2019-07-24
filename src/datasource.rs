@@ -24,7 +24,7 @@ pub type SQLtuple = (String, Vec<String>);
 
 pub trait DataSource {
     fn can_run(&self, platform: &Platform) -> bool;
-    fn run(&mut self, platform: &Platform) -> Option<PageList>;
+    fn run(&mut self, platform: &Platform) -> Result<PageList, String>;
     fn name(&self) -> String;
 }
 
@@ -44,7 +44,7 @@ impl DataSource for SourceLabels {
             || platform.has_param("labels_no")
     }
 
-    fn run(&mut self, platform: &Platform) -> Option<PageList> {
+    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let state = platform.state();
         let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let sql = platform.get_label_sql();
@@ -54,10 +54,7 @@ impl DataSource for SourceLabels {
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
         let result = match conn.prep_exec(sql.0, sql.1) {
             Ok(r) => r,
-            Err(e) => {
-                println!("ERROR: {:?}", e);
-                return None;
-            }
+            Err(e) => return Err(format!("{:?}", e)),
         };
         for row in result {
             let term_full_entity_id: String = my::from_row(row.unwrap());
@@ -69,7 +66,7 @@ impl DataSource for SourceLabels {
             }
         }
 
-        Some(ret)
+        Ok(ret)
     }
 }
 
@@ -93,12 +90,14 @@ impl DataSource for SourceWikidata {
         platform.has_param("wpiu_no_statements") && platform.has_param("wikidata_source_sites")
     }
 
-    fn run(&mut self, platform: &Platform) -> Option<PageList> {
+    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let no_statements = platform.has_param("wpiu_no_statements");
-        let sites = platform.get_param("wikidata_source_sites")?;
+        let sites = platform
+            .get_param("wikidata_source_sites")
+            .ok_or(format!("Missing parameter 'wikidata_source_sites'"))?;
         let sites: Vec<String> = sites.split(",").map(|s| s.to_string()).collect();
         if sites.is_empty() {
-            return None;
+            return Err(format!("SourceWikidata: No wikidata source sites given"));
         }
 
         let state = platform.state();
@@ -122,10 +121,7 @@ impl DataSource for SourceWikidata {
         let mut ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
         let result = match conn.prep_exec(sql, sites.1) {
             Ok(r) => r,
-            Err(e) => {
-                println!("ERROR: {:?}", e);
-                return None;
-            }
+            Err(e) => return Err(format!("{:?}", e)),
         };
         for row in result {
             let ips_item_id: usize = my::from_row(row.unwrap());
@@ -138,7 +134,7 @@ impl DataSource for SourceWikidata {
             }
         }
 
-        Some(ret)
+        Ok(ret)
     }
 }
 
@@ -162,8 +158,10 @@ impl DataSource for SourcePagePile {
         platform.has_param("pagepile")
     }
 
-    fn run(&mut self, platform: &Platform) -> Option<PageList> {
-        let pagepile = platform.get_param("pagepile")?;
+    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+        let pagepile = platform
+            .get_param("pagepile")
+            .ok_or(format!("Missing parameter 'pagepile'"))?;
         let api = platform
             .state()
             .get_api_for_wiki("wikidatawiki".to_string())?; // Just because we need query_raw
@@ -173,20 +171,31 @@ impl DataSource for SourcePagePile {
             ("format", "json"),
             ("doit", "1"),
         ]);
-        let text = api
-            .query_raw("https://tools.wmflabs.org/pagepile/api.php", &params, "GET")
-            .ok()?;
-        let v: Value = serde_json::from_str(&text).ok()?;
-        let wiki = v["wiki"].as_str()?;
+        let text = match api.query_raw("https://tools.wmflabs.org/pagepile/api.php", &params, "GET")
+        {
+            Ok(text) => text,
+            Err(e) => return Err(format!("{:?}", e)),
+        };
+        let v: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => return Err(format!("{:?}", e)),
+        };
+        let wiki = v["wiki"]
+            .as_str()
+            .ok_or(format!("PagePile {} does not specify a wiki", &pagepile))?;
         let api = platform.state().get_api_for_wiki(wiki.to_string())?; // Just because we need query_raw
         let entries = v["pages"]
-            .as_array()?
+            .as_array()
+            .ok_or(format!(
+                "PagePile {} does not have a 'pages' array",
+                &pagepile
+            ))?
             .iter()
             .filter_map(|title| title.as_str())
             .map(|title| PageListEntry::new(Title::new_from_full(&title.to_string(), &api)))
             .collect();
         let pagelist = PageList::new_from_vec(wiki, entries);
-        Some(pagelist)
+        Ok(pagelist)
     }
 }
 
@@ -212,27 +221,38 @@ impl DataSource for SourceSearch {
             && platform.has_param("search_max_results")
     }
 
-    fn run(&mut self, platform: &Platform) -> Option<PageList> {
-        let wiki = platform.get_param("search_wiki")?;
-        let query = platform.get_param("search_query")?;
-        let max = platform
-            .get_param("search_max_results")?
+    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+        let wiki = platform
+            .get_param("search_wiki")
+            .ok_or(format!("Missing parameter 'search_wiki'"))?;
+        let query = platform
+            .get_param("search_query")
+            .ok_or(format!("Missing parameter 'search_query'"))?;
+        let max = match platform
+            .get_param("search_max_results")
+            .ok_or(format!("Missing parameter 'search_max_results'"))?
             .parse::<usize>()
-            .ok()?;
+        {
+            Ok(max) => max,
+            Err(e) => return Err(format!("{:?}", e)),
+        };
         let api = platform.state().get_api_for_wiki(wiki.to_string())?;
         let params = api.params_into(&vec![
             ("action", "query"),
             ("list", "search"),
             ("srsearch", query.as_str()),
         ]);
-        let result = api.get_query_api_json_limit(&params, Some(max)).ok()?;
+        let result = match api.get_query_api_json_limit(&params, Some(max)) {
+            Ok(result) => result,
+            Err(e) => return Err(format!("{:?}", e)),
+        };
         let titles = Api::result_array_to_titles(&result);
         let entries = titles
             .iter()
             .map(|title| PageListEntry::new(title.to_owned()))
             .collect();
         let pagelist = PageList::new_from_vec(&wiki, entries);
-        Some(pagelist)
+        Ok(pagelist)
     }
 }
 
@@ -256,11 +276,14 @@ impl DataSource for SourceManual {
         platform.has_param("manual_list") && platform.has_param("manual_list_wiki")
     }
 
-    fn run(&mut self, platform: &Platform) -> Option<PageList> {
-        let wiki = platform.get_param("manual_list_wiki")?;
+    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+        let wiki = platform
+            .get_param("manual_list_wiki")
+            .ok_or(format!("Missing parameter 'manual_list_wiki'"))?;
         let api = platform.state().get_api_for_wiki(wiki.to_string())?;
         let entries: Vec<PageListEntry> = platform
-            .get_param("manual_list")?
+            .get_param("manual_list")
+            .ok_or(format!("Missing parameter 'manual_list'"))?
             .split("\n")
             .filter_map(|line| {
                 let line = line.trim().to_string();
@@ -274,7 +297,7 @@ impl DataSource for SourceManual {
             })
             .collect();
         let pagelist = PageList::new_from_vec(&wiki, entries);
-        Some(pagelist)
+        Ok(pagelist)
     }
 }
 
@@ -298,16 +321,22 @@ impl DataSource for SourceSparql {
         platform.has_param("sparql")
     }
 
-    fn run(&mut self, platform: &Platform) -> Option<PageList> {
-        let sparql = platform.get_param("sparql")?;
-        //println!("{}", &sparql);
-        let api = Api::new("https://www.wikidata.org/w/api.php").ok()?;
-        let result = api.sparql_query(sparql.as_str()).ok()?;
-        //println!("{}", &result);
-        let first_var = result["head"]["vars"][0].as_str()?;
-        //println!("{}", &first_var);
+    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+        let sparql = platform
+            .get_param("sparql")
+            .ok_or(format!("Missing parameter 'sparql'"))?;
+        let api = match Api::new("https://www.wikidata.org/w/api.php") {
+            Ok(api) => api,
+            Err(e) => return Err(format!("{:?}", e)),
+        };
+        let result = match api.sparql_query(sparql.as_str()) {
+            Ok(result) => result,
+            Err(e) => return Err(format!("{:?}", e)),
+        };
+        let first_var = result["head"]["vars"][0]
+            .as_str()
+            .ok_or(format!("No variables found in SPARQL result"))?;
         let entities = api.entities_from_sparql_result(&result, first_var);
-        //println!("{:?}", &entities);
 
         // TODO letters/namespaces are hardcoded?
         // TODO M for commons?
@@ -315,7 +344,7 @@ impl DataSource for SourceSparql {
             .par_iter()
             .filter_map(|e| Platform::entry_from_entity(e))
             .collect();
-        Some(PageList::new_from_vec("wikidatawiki", ple))
+        Ok(PageList::new_from_vec("wikidatawiki", ple))
     }
 }
 
