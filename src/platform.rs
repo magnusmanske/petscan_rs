@@ -159,6 +159,16 @@ impl Platform {
         let mut results: HashMap<String, Option<PageList>> = HashMap::new();
         for _ in 0..threads_running {
             let thread_response = rx.recv().expect("Platform::run: Can't receive");
+            match &thread_response.1 {
+                Some(data) => match &data.wiki {
+                    Some(wiki) => {
+                        self.wiki_by_source
+                            .insert(thread_response.0.to_owned(), wiki.to_string());
+                    }
+                    None => {}
+                },
+                None => {}
+            }
             results.insert(thread_response.0, thread_response.1);
         }
 
@@ -189,31 +199,7 @@ impl Platform {
             self.process_labels(&mut result)?;
         }
 
-        match self.get_param_default("common_wiki", "auto").as_str() {
-            "auto" => {}
-            "cats" => match self.wiki_by_source.get("categories") {
-                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                None => return Err(format!("categories wiki requested as output, but not set")),
-            },
-            "pagepile" => match self.wiki_by_source.get("pagepile") {
-                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                None => return Err(format!("pagepile wiki requested as output, but not set")),
-            },
-            "manual" => match self.wiki_by_source.get("manual") {
-                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                None => return Err(format!("manual wiki requested as output, but not set")),
-            },
-            "wikidata" => result.convert_to_wiki("wikidata", &self)?,
-            "other" => match self.get_param("common_wiki_other") {
-                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                None => {
-                    return Err(format!(
-                        "Other wiki for output expected, but not given in text field"
-                    ))
-                }
-            },
-            unknown => return Err(format!("Unknown output wiki type '{}'", &unknown)),
-        }
+        self.convert_to_common_wiki(&mut result)?;
 
         if !available_sources.contains(&"categories".to_string()) {
             self.process_missing_database_filters(&mut result);
@@ -252,6 +238,35 @@ impl Platform {
 
     pub fn state(&self) -> Arc<AppState> {
         self.state.clone()
+    }
+
+    fn convert_to_common_wiki(&mut self, result: &mut PageList) -> Result<(), String> {
+        match self.get_param_default("common_wiki", "auto").as_str() {
+            "auto" => {}
+            "cats" => match self.wiki_by_source.get("categories") {
+                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                None => return Err(format!("categories wiki requested as output, but not set")),
+            },
+            "pagepile" => match self.wiki_by_source.get("pagepile") {
+                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                None => return Err(format!("pagepile wiki requested as output, but not set")),
+            },
+            "manual" => match self.wiki_by_source.get("manual") {
+                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                None => return Err(format!("manual wiki requested as output, but not set")),
+            },
+            "wikidata" => result.convert_to_wiki("wikidata", &self)?,
+            "other" => match self.get_param("common_wiki_other") {
+                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                None => {
+                    return Err(format!(
+                        "Other wiki for output expected, but not given in text field"
+                    ))
+                }
+            },
+            unknown => return Err(format!("Unknown output wiki type '{}'", &unknown)),
+        }
+        Ok(())
     }
 
     fn apply_results_limit(&self, pages: &mut Vec<PageListEntry>) {
