@@ -145,10 +145,10 @@ impl Platform {
                 threads_running += 1;
                 let tx = mpsc::Sender::clone(&tx);
                 let ds = source.clone();
-                let mut platform = self.clone();
+                let platform = self.clone(); // Ugly, but it works
                 thread::spawn(move || {
                     let mut ds = ds.lock().unwrap();
-                    let data = ds.run(&mut platform);
+                    let data = ds.run(&platform);
                     tx.send((ds.name(), data))
                         .expect("Platform::run: Can't send");
                 });
