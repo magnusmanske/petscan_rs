@@ -4,6 +4,7 @@ use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
 use crate::render::*;
+use crate::wdfist::WDfist;
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
@@ -180,6 +181,12 @@ impl Platform {
         self.result = Some(self.combine_results(&mut results, &self.combination)?);
         self.post_process_result(&available_sources)?;
         self.query_time = start_time.elapsed().ok();
+
+        if self.has_param("wdf_main") {
+            let mut wdfist = WDfist::new(&self);
+            self.result = wdfist.run();
+        }
+
         Ok(())
     }
 
@@ -220,15 +227,6 @@ impl Platform {
 
         // DONE
         self.result = Some(result);
-
-        /*
-        // TODO
-        string wdf_main = getParam ( "wdf_main" , "" ) ;
-        if ( !wdf_main.empty() ) {
-            TWDFIST wdfist ( &pagelist , this ) ;
-            return wdfist.run() ;
-        }
-        */
 
         Ok(())
     }
@@ -1024,7 +1022,6 @@ impl Platform {
             ("commons", _) => Some("commonswiki".to_string()),
             ("wikidata", _) => Some("wikidatawiki".to_string()),
             (_, "wikidata") => Some("wikidatawiki".to_string()),
-            // TODO more
             (l, p) => {
                 let url = "https://".to_string() + &l + "." + &p + ".org";
                 self.state.get_wiki_for_server_url(&url)

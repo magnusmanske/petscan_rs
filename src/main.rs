@@ -15,6 +15,7 @@ pub mod form_parameters;
 pub mod pagelist;
 pub mod platform;
 pub mod render;
+pub mod wdfist;
 
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
