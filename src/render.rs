@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::pagelist::PageListEntry;
 use crate::platform::*;
+use htmlescape::encode_minimal;
 use mediawiki::api::Api;
 use mediawiki::title::Title;
 use rocket::http::uri::Uri;
@@ -613,21 +614,19 @@ impl Render for RenderHTML {
         let html = state.get_main_page();
         let html = html.replace(
             "<!--querystring-->",
-            platform.form_parameters().to_string().as_str(),
+            encode_minimal(&platform.form_parameters().to_string()).as_str(),
         );
-        let html = &html.replace("<!--output-->", &output);
-
-        // TODO this is not ideal
-        let html = match platform.psid {
+        let mut html = html.replace("<!--output-->", &output).to_string();
+        match platform.psid {
             Some(psid) => {
                 let psid_string = format!("<span name='psid' style='display:none'>{}</span>", psid);
-                html.replace("<!--psid-->", &psid_string)
+                html = html.replace("<!--psid-->", &psid_string);
             }
-            None => html.clone(),
+            None => {}
         };
 
         Ok(MyResponse {
-            s: html.to_string(),
+            s: html,
             content_type: ContentType::HTML,
         })
     }

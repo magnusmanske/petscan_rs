@@ -39,16 +39,13 @@ impl DataSource for SourceLabels {
     }
 
     fn can_run(&self, platform: &Platform) -> bool {
-        platform.has_param("labels_yes")
-            || platform.has_param("labels_any")
-            || platform.has_param("labels_no")
+        platform.has_param("labels_yes") || platform.has_param("labels_any")
     }
 
     fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let state = platform.state();
         let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
         let sql = platform.get_label_sql();
-        let mut ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
         let mut conn = platform
             .state()
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
@@ -56,17 +53,15 @@ impl DataSource for SourceLabels {
             Ok(r) => r,
             Err(e) => return Err(format!("{:?}", e)),
         };
-        for row in result {
-            let term_full_entity_id: String = my::from_row(row.unwrap());
-            match Platform::entry_from_entity(&term_full_entity_id) {
-                Some(entry) => {
-                    ret.add_entry(entry);
-                }
-                None => {}
-            }
-        }
 
-        Ok(ret)
+        let entries_tmp = result
+            .filter_map(|row_result| row_result.ok())
+            .filter_map(|row| Platform::entry_from_entity(&my::from_row::<String>(row)))
+            .collect();
+        Ok(PageList::new_from_vec(
+            &"wikidatawiki".to_string(),
+            entries_tmp,
+        ))
     }
 }
 

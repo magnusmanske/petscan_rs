@@ -36,8 +36,14 @@ impl AppState {
     pub fn new_from_config(config: &Value) -> Self {
         let main_page_path = "./html/index.html";
         let tool_db_access_tuple = (
-            config["user"].as_str().unwrap().to_string(),
-            config["password"].as_str().unwrap().to_string(),
+            config["user"]
+                .as_str()
+                .expect("No user key in config file")
+                .to_string(),
+            config["password"]
+                .as_str()
+                .expect("No password key in config file")
+                .to_string(),
         );
         let mut ret = Self {
             db_pool: vec![],
@@ -46,16 +52,24 @@ impl AppState {
             shutting_down: Arc::new(Mutex::new(false)),
             site_matrix: AppState::load_site_matrix(),
             tool_db_mutex: Arc::new(Mutex::new(tool_db_access_tuple)),
-            main_page: String::from_utf8_lossy(&fs::read(main_page_path).unwrap())
-                .parse()
-                .unwrap(),
+            main_page: String::from_utf8_lossy(
+                &fs::read(main_page_path).expect("Could not read index.html file form disk"),
+            )
+            .parse()
+            .expect("Parsing index.html failed"),
         };
 
         match config["mysql"].as_array() {
             Some(up_list) => {
                 up_list.iter().for_each(|up| {
-                    let user = up[0].as_str().unwrap().to_string();
-                    let pass = up[1].as_str().unwrap().to_string();
+                    let user = up[0]
+                        .as_str()
+                        .expect("Parsing user from mysql array in config failed")
+                        .to_string();
+                    let pass = up[1]
+                        .as_str()
+                        .expect("Parsing pass from mysql array in config failed")
+                        .to_string();
                     let connections = up[2].as_u64().unwrap_or(5);
                     for _connection_num in 1..connections {
                         let tuple = (user.to_owned(), pass.to_owned());
@@ -67,8 +81,14 @@ impl AppState {
             None => {
                 for _x in 1..MAX_CONCURRENT_DB_CONNECTIONS {
                     let tuple = (
-                        config["user"].as_str().unwrap().to_string(),
-                        config["password"].as_str().unwrap().to_string(),
+                        config["user"]
+                            .as_str()
+                            .expect("No user key in config file")
+                            .to_string(),
+                        config["password"]
+                            .as_str()
+                            .expect("No password key in config file")
+                            .to_string(),
                     );
                     ret.db_pool.push(Arc::new(Mutex::new(tuple)));
                 }
@@ -80,8 +100,8 @@ impl AppState {
         ret
     }
 
-    pub fn get_main_page(&self) -> &String {
-        &self.main_page
+    pub fn get_main_page(&self) -> String {
+        self.main_page.clone()
     }
 
     /// Returns the server and database name for the wiki, as a tuple
@@ -101,8 +121,14 @@ impl AppState {
     pub fn db_host_and_schema_for_tool_db(&self) -> (String, String) {
         // TESTING
         // ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N
-        let host = self.config["host"].as_str().unwrap().to_string();
-        let schema = self.config["schema"].as_str().unwrap().to_string();
+        let host = self.config["host"]
+            .as_str()
+            .expect("No host key in config file")
+            .to_string();
+        let schema = self.config["schema"]
+            .as_str()
+            .expect("No schema key in config file")
+            .to_string();
         (host, schema)
     }
 
@@ -110,7 +136,7 @@ impl AppState {
     pub fn get_db_mutex(&self) -> &Arc<Mutex<DbUserPass>> {
         // TODO make sure mutex is available
         // TODO make sure mutex is not poisoned
-        &self.db_pool.choose(&mut rand::thread_rng()).unwrap()
+        &self.db_pool.choose(&mut rand::thread_rng()).unwrap() // Safe?
     }
 
     pub fn get_wiki_db_connection(
@@ -299,13 +325,14 @@ impl AppState {
     }
 
     pub fn get_query_from_psid(&self, psid: &String) -> Result<String, String> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder
+        let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder; unwrap safe
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
-        let sql = format!(
-            "SELECT querystring FROM query WHERE id={}",
-            psid.parse::<usize>().unwrap()
-        );
+        let psid = match psid.parse::<usize>() {
+            Ok(psid) => psid,
+            Err(e) => return Err(format!("{:?}", e)),
+        };
+        let sql = format!("SELECT querystring FROM query WHERE id={}", psid);
         let result = match conn.prep_exec(sql, ()) {
             Ok(r) => r,
             Err(e) => {
@@ -315,15 +342,18 @@ impl AppState {
                 ))
             }
         };
-        for row in result {
-            let query: String = my::from_row(row.unwrap());
-            return Ok(query);
+        let ret = result
+            .filter_map(|row_result| row_result.ok())
+            .map(|row| my::from_row::<String>(row))
+            .next();
+        match ret {
+            Some(ret) => Ok(ret),
+            None => Err("No such PSID in the database".to_string()),
         }
-        Err("No such PSID in the database".to_string())
     }
 
     pub fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder
+        let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder; unwrap safe
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
         // Check for existing entry
@@ -333,10 +363,14 @@ impl AppState {
         );
         match conn.prep_exec(sql.0, sql.1) {
             Ok(result) => {
-                for row in result {
-                    let psid: u64 = my::from_row(row.unwrap());
-                    return Ok(psid);
-                }
+                let ret = result
+                    .filter_map(|row_result| row_result.ok())
+                    .map(|row| my::from_row::<u64>(row))
+                    .next();
+                match ret {
+                    Some(ret) => return Ok(ret),
+                    None => {}
+                };
             }
             Err(_) => {}
         }

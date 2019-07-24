@@ -25,6 +25,7 @@ use std::time::{Duration, SystemTime};
 
 pub static PAGE_BATCH_SIZE: usize = 20000;
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct MyResponse {
     pub s: String,
     pub content_type: ContentType,
@@ -156,8 +157,7 @@ impl Platform {
         }
 
         // Collect results
-        // TODO remove option
-        let mut results: HashMap<String, Option<PageList>> = HashMap::new();
+        let mut results: HashMap<String, PageList> = HashMap::new();
         for _ in 0..threads_running {
             let thread_response = rx.recv().expect("Platform::run: Can't receive");
             let data = thread_response.1?;
@@ -168,7 +168,7 @@ impl Platform {
                 }
                 None => {}
             }
-            results.insert(thread_response.0, Some(data));
+            results.insert(thread_response.0, data);
         }
 
         let available_sources = candidate_sources
@@ -179,11 +179,7 @@ impl Platform {
         self.combination = self.get_combination(&available_sources);
         self.result = Some(self.combine_results(&mut results, &self.combination)?);
         self.post_process_result(&available_sources)?;
-        match start_time.elapsed() {
-            Ok(t) => self.query_time = Some(t),
-            _ => {}
-        }
-        //println!("Elapsed:{:?}", &self.query_time);
+        self.query_time = start_time.elapsed().ok();
         Ok(())
     }
 
@@ -1316,16 +1312,12 @@ impl Platform {
 
     fn combine_results(
         &self,
-        results: &mut HashMap<String, Option<PageList>>,
+        results: &mut HashMap<String, PageList>,
         combination: &Combination,
     ) -> Result<PageList, String> {
-        //println!("COMB: {:?}", &combination);
         match combination {
             Combination::Source(s) => match results.get(s) {
-                Some(r) => match r {
-                    Some(x) => Ok(x.to_owned()),
-                    None => Err(format!("No result for source {}", &s)),
-                },
+                Some(r) => Ok(r.to_owned()),
                 None => Err(format!("No result for source {}", &s)),
             },
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
@@ -1482,6 +1474,15 @@ mod tests {
         // [[Count von Count]] vs. [[Magnus Manske]]
         // Manual list on enwiki, minus [[Category:Fictional vampires]]
         check_results_for_psid(10126217, "enwiki", vec![Title::new("Magnus Manske", 0)]);
+    }
+
+    #[test]
+    fn test_source_labels() {
+        check_results_for_psid(
+            10223488,
+            "wikidatawiki",
+            vec![Title::new("Q10995651", 0), Title::new("Q13520818", 0)],
+        );
     }
 
     #[test]

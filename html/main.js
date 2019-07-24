@@ -58,7 +58,7 @@ function deXSS ( s ) {
 
 function getUrlVars () {
 	var vars = {} ;
-	var params = decodeURIComponent ( $('#querystring').text() ) ;
+	var params = $('#querystring').text() ;
 	if ( params == '' ) params = window.location.href.slice(window.location.href.indexOf('?') + 1) ;
 	var hashes = params.split('&');
 	if ( hashes.length >0 && hashes[0] == window.location.href ) hashes.shift() ;
@@ -95,6 +95,8 @@ function setPermalink ( q ) {
 		var r = new RegExp ( key ) ;
 		q = q.replace ( r , '&' ) ;
 	} ) ;
+
+	q = q.replace(/\[/g,'%5B').replace(/\]/g,'%5D');
 	
 	var url = '/?' + q ;
 	var h = _t("query_url") ;
