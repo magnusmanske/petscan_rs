@@ -536,7 +536,7 @@ impl SourceDatabase {
                     if ret.is_empty() {
                         ret.swap_entries(&mut pl2);
                     } else {
-                        ret.union(Some(pl2)).unwrap();
+                        ret.union(Some(pl2), None).unwrap();
                     }
                 }
 

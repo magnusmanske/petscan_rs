@@ -72,6 +72,7 @@ pub struct Platform {
     combination: Combination,
     output_redlinks: bool,
     query_time: Option<Duration>,
+    wiki_by_source: HashMap<String, String>,
 }
 
 impl Platform {
@@ -85,6 +86,7 @@ impl Platform {
             combination: Combination::None,
             output_redlinks: false,
             query_time: None,
+            wiki_by_source: HashMap::new(),
         }
     }
 
@@ -128,7 +130,17 @@ impl Platform {
 
         for source in &mut candidate_sources {
             if source.can_run(&self) {
-                results.insert(source.name(), source.run(&self));
+                let data = source.run(&self);
+                match &data {
+                    Some(data) => match &data.wiki {
+                        Some(wiki) => {
+                            self.wiki_by_source.insert(source.name(), wiki.to_string());
+                        }
+                        None => {}
+                    },
+                    None => {}
+                }
+                results.insert(source.name(), data);
             }
         }
 
@@ -138,7 +150,7 @@ impl Platform {
             .map(|s| s.name())
             .collect();
         self.combination = self.get_combination(&available_sources);
-        self.result = self.combine_results(&mut results, &self.combination);
+        self.result = Some(self.combine_results(&mut results, &self.combination)?);
         self.post_process_result(&available_sources)?;
         self.query_time = Some(start_time.elapsed().unwrap());
         //println!("Elapsed:{:?}", &self.query_time);
@@ -158,7 +170,25 @@ impl Platform {
         if *available_sources != vec!["labels".to_string()] {
             self.process_labels(&mut result)?;
         }
-        //if ( !common_wiki.empty() && pagelist.wiki != common_wiki ) pagelist.convertToWiki ( common_wiki ) ; // TODO
+
+        match self.get_param_default("common_wiki", "auto").as_str() {
+            "auto" => {}
+            "cats" => match self.wiki_by_source.get("categories") {
+                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                None => return Err(format!("categories wiki requested as output, but not set")),
+            },
+            "pagepile" => match self.wiki_by_source.get("pagepile") {
+                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                None => return Err(format!("pagepile wiki requested as output, but not set")),
+            },
+            "manual" => match self.wiki_by_source.get("manual") {
+                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                None => return Err(format!("manual wiki requested as output, but not set")),
+            },
+            "wikidata" => result.convert_to_wiki("wikidata", &self)?,
+            _other => {} // TODO
+        }
+
         if !available_sources.contains(&"categories".to_string()) {
             self.process_missing_database_filters(&mut result);
         }
@@ -176,8 +206,8 @@ impl Platform {
             Some(regexp) => result.regexp_filter(&regexp),
             None => {}
         }
-        self.process_redlinks(&mut result);
-        self.process_creator(&mut result);
+        self.process_redlinks(&mut result)?;
+        self.process_creator(&mut result)?;
 
         // DONE
         self.result = Some(result);
@@ -208,14 +238,14 @@ impl Platform {
         }
     }
 
-    fn process_creator(&mut self, result: &mut PageList) {
+    fn process_creator(&mut self, result: &mut PageList) -> Result<(), String> {
         if result.is_empty() || result.is_wikidata() {
-            return;
+            return Ok(());
         }
         if !self.has_param("show_redlinks")
             && self.get_param_blank("wikidata_item") != "without".to_string()
         {
-            return;
+            return Ok(());
         }
 
         self.output_redlinks = true;
@@ -241,11 +271,12 @@ impl Platform {
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())
             .unwrap();
 
+        let mut error: Option<String> = None;
         batches.iter().for_each(|sql| {
             let result = match conn.prep_exec(&sql.0, &sql.1) {
                 Ok(r) => r,
                 Err(e) => {
-                    println!("ERROR: {:?}", e);
+                    error = Some(format!("{:?}", e));
                     return;
                 }
             };
@@ -259,11 +290,15 @@ impl Platform {
                 }
             }
         });
+        match error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
-    fn process_redlinks(&self, result: &mut PageList) {
+    fn process_redlinks(&self, result: &mut PageList) -> Result<(), String> {
         if result.is_empty() || !self.has_param("show_redlinks") || result.is_wikidata() {
-            return;
+            return Ok(());
         }
         let ns0_only = self.has_param("article_redlinks_only");
         let remove_template_redlinks = self.has_param("remove_template_redlinks");
@@ -286,7 +321,6 @@ impl Platform {
                     sql_batch.to_owned()
                 })
                 .collect::<Vec<SQLtuple>>();
-        //println!("{:?}", &batches);
 
         let mut redlink_counter: HashMap<Title, usize> = HashMap::new();
 
@@ -296,11 +330,12 @@ impl Platform {
             .get_wiki_db_connection(&db_user_pass, &result.wiki.as_ref().unwrap())
             .unwrap();
 
+        let mut error: Option<String> = None;
         batches.iter().for_each(|sql| {
             let result = match conn.prep_exec(&sql.0, &sql.1) {
                 Ok(r) => r,
                 Err(e) => {
-                    println!("ERROR: {:?}", e);
+                    error = Some(format!("{:?}", e));
                     return;
                 }
             };
@@ -320,6 +355,10 @@ impl Platform {
                 }
             }
         });
+        match error {
+            Some(e) => return Err(e),
+            None => {}
+        }
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
@@ -334,6 +373,7 @@ impl Platform {
                 ret
             })
             .collect();
+        Ok(())
     }
 
     fn process_subpages(&self, result: &mut PageList) {
@@ -1208,7 +1248,7 @@ impl Platform {
                     if comb == Combination::None {
                         comb = Combination::Source(source.to_string());
                     } else {
-                        comb = Combination::Union((
+                        comb = Combination::Intersection((
                             Box::new(Combination::Source(source.to_string())),
                             Box::new(comb),
                         ));
@@ -1223,44 +1263,51 @@ impl Platform {
         &self,
         results: &mut HashMap<String, Option<PageList>>,
         combination: &Combination,
-    ) -> Option<PageList> {
+    ) -> Result<PageList, String> {
         //println!("COMB: {:?}", &combination);
         match combination {
             Combination::Source(s) => match results.get(s) {
-                Some(r) => r.to_owned(),
-                None => None,
+                Some(r) => match r {
+                    Some(x) => Ok(x.to_owned()),
+                    None => Err(format!("No result for source {}", &s)),
+                },
+                None => Err(format!("No result for source {}", &s)),
             },
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
                 (Combination::None, c) => self.combine_results(results, c),
                 (c, Combination::None) => self.combine_results(results, c),
                 (c, d) => {
                     let mut r1 = self.combine_results(results, c)?;
-                    let r2 = self.combine_results(results, d);
-                    r1.union(r2).ok()?;
-                    Some(r1)
+                    let r2 = self.combine_results(results, d)?;
+                    r1.union(Some(r2), Some(&self))?;
+                    Ok(r1)
                 }
             },
             Combination::Intersection((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => None,
-                (_c, Combination::None) => None,
+                (Combination::None, _c) => {
+                    Err(format!("Intersection with Combination::None found"))
+                }
+                (_c, Combination::None) => {
+                    Err(format!("Intersection with Combination::None found"))
+                }
                 (c, d) => {
                     let mut r1 = self.combine_results(results, c)?;
-                    let r2 = self.combine_results(results, d);
-                    r1.intersection(r2).ok()?;
-                    Some(r1)
+                    let r2 = self.combine_results(results, d)?;
+                    r1.intersection(Some(r2), Some(&self))?;
+                    Ok(r1)
                 }
             },
             Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => None,
+                (Combination::None, _c) => Err(format!("Not with Combination::None found")),
                 (c, Combination::None) => self.combine_results(results, c),
                 (c, d) => {
                     let mut r1 = self.combine_results(results, c)?;
-                    let r2 = self.combine_results(results, d);
-                    r1.difference(r2).ok()?;
-                    Some(r1)
+                    let r2 = self.combine_results(results, d)?;
+                    r1.difference(Some(r2), Some(&self))?;
+                    Ok(r1)
                 }
             },
-            Combination::None => None,
+            Combination::None => Err(format!("Combination::None found")),
         }
     }
 

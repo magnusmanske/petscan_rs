@@ -408,23 +408,36 @@ impl PageList {
     fn check_before_merging(
         &self,
         pagelist: Option<PageList>,
+        platform: Option<&Platform>,
     ) -> Result<HashSet<PageListEntry>, String> {
         match pagelist {
-            Some(pagelist) => {
-                if self.wiki.is_none() {
-                    return Err("PageList::check_before_merging self.wiki is not set".to_string());
-                }
+            Some(mut pagelist) => {
+                let my_wiki = match &self.wiki {
+                    Some(wiki) => wiki,
+                    None => {
+                        return Err(
+                            "PageList::check_before_merging self.wiki is not set".to_string()
+                        )
+                    }
+                };
                 if pagelist.wiki.is_none() {
                     return Err(
                         "PageList::check_before_merging pagelist.wiki is not set".to_string()
                     );
                 }
                 if self.wiki != pagelist.wiki {
-                    return Err(format!(
-                        "PageList::check_before_merging wikis are not identical: {}/{}",
-                        &self.wiki.as_ref().unwrap(),
-                        &pagelist.wiki.unwrap()
-                    ));
+                    match platform {
+                        Some(platform) => {
+                            pagelist.convert_to_wiki(&my_wiki, platform)?;
+                        }
+                        None => {
+                            return Err(format!(
+                                "PageList::check_before_merging wikis are not identical: {}/{}",
+                                &self.wiki.as_ref().unwrap(),
+                                &pagelist.wiki.unwrap()
+                            ))
+                        }
+                    }
                 }
                 Ok(pagelist.entries)
             }
@@ -432,20 +445,32 @@ impl PageList {
         }
     }
 
-    pub fn union(&mut self, pagelist: Option<PageList>) -> Result<(), String> {
-        let other_entries = self.check_before_merging(pagelist)?;
+    pub fn union(
+        &mut self,
+        pagelist: Option<PageList>,
+        platform: Option<&Platform>,
+    ) -> Result<(), String> {
+        let other_entries = self.check_before_merging(pagelist, platform)?;
         self.entries = self.entries.union(&other_entries).cloned().collect();
         Ok(())
     }
 
-    pub fn intersection(&mut self, pagelist: Option<PageList>) -> Result<(), String> {
-        let other_entries = self.check_before_merging(pagelist)?;
+    pub fn intersection(
+        &mut self,
+        pagelist: Option<PageList>,
+        platform: Option<&Platform>,
+    ) -> Result<(), String> {
+        let other_entries = self.check_before_merging(pagelist, platform)?;
         self.entries = self.entries.intersection(&other_entries).cloned().collect();
         Ok(())
     }
 
-    pub fn difference(&mut self, pagelist: Option<PageList>) -> Result<(), String> {
-        let other_entries = self.check_before_merging(pagelist)?;
+    pub fn difference(
+        &mut self,
+        pagelist: Option<PageList>,
+        platform: Option<&Platform>,
+    ) -> Result<(), String> {
+        let other_entries = self.check_before_merging(pagelist, platform)?;
         self.entries = self.entries.difference(&other_entries).cloned().collect();
         Ok(())
     }
@@ -486,18 +511,6 @@ impl PageList {
             }
         }
         ret
-    }
-
-    pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
-        // Already that wiki?
-        if self.wiki == None || self.wiki == Some(wiki.to_string()) {
-            return Ok(());
-        }
-        self.convert_to_wikidata(platform)?;
-        if wiki != "wikidatawiki" {
-            self.convert_from_wikidata(wiki, platform)?;
-        }
-        Ok(())
     }
 
     pub fn clear_entries(&mut self) {
@@ -730,8 +743,22 @@ impl PageList {
         )
     }
 
+    pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
+        //println!("Converting {} to {}", &self.wiki.as_ref().unwrap(), &wiki);
+
+        // Already that wiki?
+        if self.wiki == None || self.wiki == Some(wiki.to_string()) {
+            return Ok(());
+        }
+        self.convert_to_wikidata(platform)?;
+        if wiki != "wikidatawiki" {
+            self.convert_from_wikidata(wiki, platform)?;
+        }
+        Ok(())
+    }
+
     fn convert_to_wikidata(&mut self, platform: &Platform) -> Result<(), String> {
-        if self.wiki == None || self.wiki == Some("wikidatatwiki".to_string()) {
+        if self.wiki == None || self.wiki == Some("wikidatawiki".to_string()) {
             return Ok(());
         }
 
@@ -752,14 +779,13 @@ impl PageList {
     }
 
     fn convert_from_wikidata(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
-        if self.wiki == None || self.wiki != Some("wikidatatwiki".to_string()) {
+        if self.wiki == None || self.wiki != Some("wikidatawiki".to_string()) {
             return Ok(());
         }
-
         let batches = self.to_sql_batches(PAGE_BATCH_SIZE)
             .iter_mut()
             .map(|sql|{
-                sql.0 = "SELECT ips_site_page FROM wb_items_per_site,page WHERE ips_item_id=substr(page_title,2)*1 AND ".to_owned()+&sql.0+" AND ips_site_id='?'";
+                sql.0 = "SELECT ips_site_page FROM wb_items_per_site,page WHERE ips_item_id=substr(page_title,2)*1 AND ".to_owned()+&sql.0+" AND ips_site_id=?";
                 sql.1.push(wiki.to_string());
                 sql.to_owned()
             })

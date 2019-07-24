@@ -300,10 +300,14 @@ impl DataSource for SourceSparql {
 
     fn run(&mut self, platform: &Platform) -> Option<PageList> {
         let sparql = platform.get_param("sparql")?;
+        //println!("{}", &sparql);
         let api = Api::new("https://www.wikidata.org/w/api.php").ok()?;
         let result = api.sparql_query(sparql.as_str()).ok()?;
+        //println!("{}", &result);
         let first_var = result["head"]["vars"][0].as_str()?;
+        //println!("{}", &first_var);
         let entities = api.entities_from_sparql_result(&result, first_var);
+        //println!("{:?}", &entities);
 
         // TODO letters/namespaces are hardcoded?
         // TODO M for commons?
