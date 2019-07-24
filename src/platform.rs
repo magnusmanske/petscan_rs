@@ -186,7 +186,15 @@ impl Platform {
                 None => return Err(format!("manual wiki requested as output, but not set")),
             },
             "wikidata" => result.convert_to_wiki("wikidata", &self)?,
-            _other => {} // TODO
+            "other" => match self.get_param("common_wiki_other") {
+                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                None => {
+                    return Err(format!(
+                        "Other wiki for output expected, but not given in text field"
+                    ))
+                }
+            },
+            unknown => return Err(format!("Unknown output wiki type '{}'", &unknown)),
         }
 
         if !available_sources.contains(&"categories".to_string()) {

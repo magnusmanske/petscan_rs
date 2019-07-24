@@ -555,11 +555,16 @@ function initializeInterface () {
 			wo.removeClass ( 'is-invalid' ) ;
 			$('#doit').prop('disabled', false)
 		}
+
+		if ( n1 == 'common_wiki_other' ) {
+			$('input:radio[name=common_wiki]')[5].checked = true;
+		}
 	}
 	$('[name="manual_list"]').keyup ( function () {highlightMissingWiki('manual_list','manual_list_wiki')} ) ;
 	$('[name="search_query"]').keyup ( function () {highlightMissingWiki('search_query','search_wiki')} ) ;
 	$('[name="manual_list_wiki"]').keyup ( function () {highlightMissingWiki('manual_list','manual_list_wiki')} ) ;
 	$('[name="search_wiki"]').keyup ( function () {highlightMissingWiki('search_query','search_wiki')} ) ;
+	$('[name="common_wiki_other"]').keyup ( function () {highlightMissingWiki('common_wiki_other','common_wiki_other')} ) ;
 	highlightMissingWiki('manual_list','manual_list_wiki') ;
 	highlightMissingWiki('search_query','search_wiki');
 	
