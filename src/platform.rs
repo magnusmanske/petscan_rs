@@ -4,7 +4,7 @@ use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
 use crate::render::*;
-use crate::wdfist::WDfist;
+use crate::wdfist::*;
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
