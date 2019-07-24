@@ -7,9 +7,12 @@ use crate::render::*;
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
-use regex::Regex;
-use std::time::{Duration, SystemTime};
+use std::sync::mpsc;
+use std::sync::mpsc::channel;
+use std::sync::Mutex;
+use std::thread;
 //use rayon::prelude::*;
+use regex::Regex;
 use rocket::http::ContentType;
 use rocket::http::Status;
 use rocket::response::Responder;
@@ -18,6 +21,7 @@ use rocket::Response;
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 pub static PAGE_BATCH_SIZE: usize = 20000;
 
@@ -109,45 +113,59 @@ impl Platform {
 
     pub fn run(&mut self) -> Result<(), String> {
         let start_time = SystemTime::now();
-        let mut candidate_sources: Vec<Box<dyn DataSource>> = vec![];
-        candidate_sources.push(Box::new(SourceDatabase::new(self.db_params())));
-        candidate_sources.push(Box::new(SourceSparql::new()));
-        candidate_sources.push(Box::new(SourceManual::new()));
-        candidate_sources.push(Box::new(SourcePagePile::new()));
-        candidate_sources.push(Box::new(SourceSearch::new()));
-        candidate_sources.push(Box::new(SourceWikidata::new()));
+        let mut candidate_sources: Vec<Arc<Mutex<Box<dyn DataSource + Send + Sync>>>> = vec![];
+        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceDatabase::new(
+            self.db_params(),
+        )))));
+        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceSparql::new()))));
+        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceManual::new()))));
+        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourcePagePile::new()))));
+        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceSearch::new()))));
+        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceWikidata::new()))));
 
-        if !candidate_sources.iter().any(|source| source.can_run(&self)) {
+        if !candidate_sources
+            .iter()
+            .any(|source| (*source.lock().unwrap()).can_run(&self))
+        {
             candidate_sources = vec![];
-            candidate_sources.push(Box::new(SourceLabels::new()));
-            if !candidate_sources.iter().any(|source| source.can_run(&self)) {
+            candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceLabels::new()))));
+            if !candidate_sources
+                .iter()
+                .any(|source| (*source.lock().unwrap()).can_run(&self))
+            {
                 return Err(format!("No possible data source found in parameters"));
             }
         }
 
-        let mut results: HashMap<String, Option<PageList>> = HashMap::new();
-        // TODO threads
-
-        for source in &mut candidate_sources {
-            if source.can_run(&self) {
-                let data = source.run(&self);
-                match &data {
-                    Some(data) => match &data.wiki {
-                        Some(wiki) => {
-                            self.wiki_by_source.insert(source.name(), wiki.to_string());
-                        }
-                        None => {}
-                    },
-                    None => {}
-                }
-                results.insert(source.name(), data);
+        // Start each source as a thread
+        let (tx, rx) = channel();
+        let mut threads_running: usize = 0;
+        for source in &candidate_sources {
+            if (*source.lock().unwrap()).can_run(&self) {
+                threads_running += 1;
+                let tx = mpsc::Sender::clone(&tx);
+                let ds = source.clone();
+                let mut platform = self.clone();
+                thread::spawn(move || {
+                    let mut ds = ds.lock().unwrap();
+                    let data = ds.run(&mut platform);
+                    tx.send((ds.name(), data))
+                        .expect("Platform::run: Can't send");
+                });
             }
+        }
+
+        // Collect results
+        let mut results: HashMap<String, Option<PageList>> = HashMap::new();
+        for _ in 0..threads_running {
+            let thread_response = rx.recv().expect("Platform::run: Can't receive");
+            results.insert(thread_response.0, thread_response.1);
         }
 
         let available_sources = candidate_sources
             .iter()
-            .filter(|s| s.can_run(&self))
-            .map(|s| s.name())
+            .filter(|s| (*s.lock().unwrap()).can_run(&self))
+            .map(|s| (*s.lock().unwrap()).name())
             .collect();
         self.combination = self.get_combination(&available_sources);
         self.result = Some(self.combine_results(&mut results, &self.combination)?);
