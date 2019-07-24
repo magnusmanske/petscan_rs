@@ -645,6 +645,7 @@ impl Render for RenderHTML {
             &entry.wikidata_label,
             params,
             true,
+            &entry.wikidata_description,
         )
     }
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, params: &RenderParams) -> String {
@@ -655,13 +656,14 @@ impl Render for RenderHTML {
                 &None,
                 params,
                 false,
+                &entry.wikidata_description,
             ),
             None => "".to_string(),
         }
     }
     fn render_user_name(&self, user: &String, params: &RenderParams) -> String {
         let title = Title::new(user, 2);
-        self.render_wikilink(&title, &params.wiki, &None, params, false)
+        self.render_wikilink(&title, &params.wiki, &None, params, false, &None)
     }
     fn render_cell_image(&self, image: &Option<String>, params: &RenderParams) -> String {
         match image {
@@ -699,7 +701,14 @@ impl Render for RenderHTML {
                     let html = "<div class='fileusage'>".to_string()
                         + &fu.wiki().to_owned()
                         + ":"
-                        + &self.render_wikilink(fu.title(), fu.wiki(), &None, params, false)
+                        + &self.render_wikilink(
+                            fu.title(),
+                            fu.wiki(),
+                            &None,
+                            params,
+                            false,
+                            &entry.wikidata_description,
+                        )
                         + "</div>";
                     rows.push(html);
                 }
@@ -772,20 +781,6 @@ impl Render for RenderHTML {
             "<input type='checkbox' class='qcb' q='{}' id='autolist_checkbox_{}' {} />",
             &q, &q, &checked
         )
-        /*
-            string q ;
-            string checked = "checked" ;
-            if ( autolist_creator_mode ) {
-                string el = platform->getExistingLabel ( page.name ) ;
-                if ( !el.empty() ) checked = "" ; // No checkbox check if label/alias exists
-                if ( page.name.find_first_of('(') != string::npos ) checked = "" ; // Names with "(" are unchecked by default
-                sprintf ( tmp , "create_item_%d_%ld" , cnt , now_ish.tv_usec ) ; // Using microtime to get unique checkbox
-                q = tmp ;
-            } else {
-                q = page.name.substr(1) ;
-            }
-            ret += "<td><input type='checkbox' class='qcb' q='"+q+"' id='autolist_checkbox_"+q+"' "+checked+"></td>" ;
-        */
     }
 }
 
@@ -801,6 +796,7 @@ impl RenderHTML {
         alt_label: &Option<String>,
         params: &RenderParams,
         is_page_link: bool,
+        wikidata_description: &Option<String>,
     ) -> String {
         let server = params
             .state
@@ -822,6 +818,15 @@ impl RenderHTML {
             ret += " class='pagelink'";
         }
         ret += &(" target='_blank' href='".to_string() + &url + "'>" + &label + "</a>");
+
+        // TODO properties?
+        if is_page_link && wiki == "wikidatawiki" && title.namespace_id() == 0 {
+            ret += &format!("&nbsp;<small><tt>[{}]</tt></small>", title.pretty());
+            match &wikidata_description {
+                Some(desc) => ret += &format!("<div class='smaller'>{}</div>", &desc),
+                None => {}
+            }
+        }
         ret
     }
 
