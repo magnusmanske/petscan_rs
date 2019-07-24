@@ -1605,4 +1605,9 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_en_categories_sparql_common_wiki_other() {
+        check_results_for_psid(10222976, "frwiki", vec![Title::new("Magnus Manske", 0)]);
+    }
+
 }

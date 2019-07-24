@@ -204,14 +204,15 @@ impl SourceDatabase {
                 return;
             }
         };
-        for row in result {
-            let page_title: String = my::from_row(row.unwrap());
-            if !tmp.contains(&page_title) {
-                new_cats.push(page_title.to_owned());
-                tmp.insert(page_title);
-            }
-        }
-
+        result
+            .filter_map(|row_result| row_result.ok())
+            .for_each(|row| {
+                let page_title: String = my::from_row(row);
+                if !tmp.contains(&page_title) {
+                    new_cats.push(page_title.to_owned());
+                    tmp.insert(page_title);
+                }
+            });
         self.go_depth(conn, tmp, &new_cats, depth - 1);
     }
 
@@ -308,9 +309,15 @@ impl SourceDatabase {
             if !ret.contains_key(&title.namespace_id()) {
                 ret.insert(title.namespace_id(), vec![]);
             }
-            ret.get_mut(&title.namespace_id())
-                .unwrap()
-                .push(title.with_underscores().to_string());
+            match ret.get_mut(&title.namespace_id()) {
+                Some(x) => x.push(title.with_underscores().to_string()),
+                None => {
+                    println!(
+                        "SourceDatabase::group_link_list_by_namespace: No namespace id in {:?}",
+                        &title
+                    );
+                }
+            }
         });
         ret
     }
@@ -537,11 +544,9 @@ impl SourceDatabase {
                     if ret.is_empty() {
                         ret.swap_entries(&mut pl2);
                     } else {
-                        ret.union(Some(pl2), None).unwrap();
+                        ret.union(Some(pl2), None)?;
                     }
                 }
-
-                //data_loaded = true ;
                 return Ok(ret);
             }
             "no_wikidata" => {
@@ -565,7 +570,9 @@ impl SourceDatabase {
                 sql.0 += " WHERE 1=1";
             }
             "pagelist" => {
-                let primary_pagelist = primary_pagelist.unwrap();
+                let primary_pagelist = primary_pagelist.ok_or(format!(
+                    "SourceDatabase::get_pages: pagelist: No primary_pagelist"
+                ))?;
                 ret.wiki = primary_pagelist.wiki.to_owned();
                 if primary_pagelist.is_empty() {
                     // Nothing to do, but that's OK
@@ -844,38 +851,41 @@ impl SourceDatabase {
             }
         }
 
+        let wiki = match &self.params.wiki {
+            Some(wiki) => wiki,
+            None => {
+                return Err(format!(
+                    "SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params"
+                ))
+            }
+        };
+
         //println!("\nSQL:{:?}", &sql);
-
-        let mut pl1 = PageList::new_from_wiki(self.params.wiki.as_ref().unwrap().as_str());
-
         let result = match conn.prep_exec(sql.0.to_owned(), sql.1.to_owned()) {
             Ok(r) => r,
             Err(e) => {
                 return Err(format!("{:?}", &e));
             }
         };
-
         //println!("SQL done");
 
-        let mut had_page: HashSet<usize> = HashSet::new();
-        for row in result {
-            //println!("ROW: {:?}", &row);
-            let (page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count) =
-                my::from_row::<(usize, String, NamespaceID, String, usize, usize)>(row.unwrap());
-            if had_page.contains(&page_id) {
-                continue;
-            }
-            had_page.insert(page_id);
-            let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
-            entry.page_id = Some(page_id);
-            entry.page_bytes = Some(page_bytes);
-            entry.page_timestamp = Some(page_timestamp);
-            if self.params.gather_link_count {
-                entry.link_count = Some(link_count);
-            }
-            pl1.add_entry(entry);
-        }
-        //println!("RESULT: {:?}", &pl1);
+        let entries_tmp = result
+            .filter_map(|row_result| row_result.ok())
+            .map(|row| {
+                let (page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count) =
+                    my::from_row::<(usize, String, NamespaceID, String, usize, usize)>(row);
+                let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
+                entry.page_id = Some(page_id);
+                entry.page_bytes = Some(page_bytes);
+                entry.page_timestamp = Some(page_timestamp);
+                if self.params.gather_link_count {
+                    entry.link_count = Some(link_count);
+                }
+                entry
+            })
+            .collect();
+
+        let mut pl1 = PageList::new_from_vec(wiki, entries_tmp);
         pl1.swap_entries(pages_sublist);
 
         Ok(())
