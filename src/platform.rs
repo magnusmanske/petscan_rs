@@ -1422,7 +1422,7 @@ mod tests {
             .iter()
             .cloned()
             .collect::<Vec<PageListEntry>>();
-        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.len(), expected.len());
         let titles: Vec<Title> = entries.iter().map(|e| e.title()).cloned().collect();
         assert_eq!(titles, expected);
     }
