@@ -1050,7 +1050,7 @@ impl Platform {
             "csv" => RenderTSV::new(","),
             "tsv" => RenderTSV::new("\t"),
             "json" => RenderJSON::new(),
-            // TODO PagePile
+            "pagepile" => RenderPagePile::new(),
             _ => RenderHTML::new(),
         };
         renderer.response(&self, &wiki, pages)
