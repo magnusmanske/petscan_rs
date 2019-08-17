@@ -1286,13 +1286,3 @@ impl RenderPagePile {
         Box::new(Self {})
     }
 }
-
-/*
-string TRenderer::renderPageListPagePile ( TPageList &pagelist ) {
-    
-    int pid = j["pile"]["id"] ;
-    string new_url = "https://tools.wmflabs.org/pagepile/api.php?action=get_data&id=" + ui2s(pid) ;
-    ret = "<html><head><meta http-equiv=\"refresh\" content=\"0; url="+new_url+"\" /></head><BODY><H1>Redirect</H1>The document can be found <A HREF='"+new_url+"'>here</A>.</BODY></html>" ;
-    return ret ;
-}
-*/
