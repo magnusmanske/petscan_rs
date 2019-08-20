@@ -199,6 +199,13 @@ impl AppState {
                     content_type: ContentType::HTML,
                 }
             }
+            Some("json") => {
+                let value = json!({"error":error});
+                MyResponse {
+                s: ::serde_json::to_string(&value).unwrap(),
+                content_type: ContentType::parse_flexible("application/json; charset=utf-8").unwrap(),
+            }
+            }
             _ => MyResponse {
                 s: error.to_string(),
                 content_type: ContentType::Plain,
