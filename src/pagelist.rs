@@ -753,7 +753,7 @@ impl PageList {
     }
 
     pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
-        println!("Converting {} to {}", &self.wiki.as_ref().unwrap(), &wiki);
+        //println!("Converting {} to {}", &self.wiki.as_ref().unwrap(), &wiki);
 
         // Already that wiki?
         if self.wiki == None || self.wiki == Some(wiki.to_string()) {
