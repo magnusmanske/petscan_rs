@@ -1,4 +1,3 @@
-use rayon::prelude::*;
 use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
@@ -9,6 +8,7 @@ use crate::wdfist::*;
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
+use rayon::prelude::*;
 use std::sync::mpsc;
 use std::sync::mpsc::channel;
 use std::sync::Mutex;
@@ -667,9 +667,11 @@ impl Platform {
         let api = self.state.get_api_for_wiki(wiki.to_owned())?;
 
         // Using Wikidata
-        let titles : Vec<String> = result.entries.iter().filter_map(|entry| {
-            entry.title().full_pretty(&api)
-        }).collect();
+        let titles: Vec<String> = result
+            .entries
+            .iter()
+            .filter_map(|entry| entry.title().full_pretty(&api))
+            .collect();
 
         let mut batches: Vec<SQLtuple> = vec![];
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -687,7 +689,6 @@ impl Platform {
             sql.0 = format!("SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='enwiki' and ips_site_page IN ({})", &sql.0);
             batches.push(sql);
         });
-
 
         // Duplicated from Patelist::annotate_batch_results
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
@@ -739,7 +740,7 @@ impl Platform {
                 },
                 None => return,
             };
-            let title = Title::new_from_full(&full_page_title,&api);
+            let title = Title::new_from_full(&full_page_title, &api);
             let tmp_entry = PageListEntry::new(title);
             let mut entry = match result.entries.get(&tmp_entry) {
                 Some(e) => (*e).clone(),
@@ -747,9 +748,9 @@ impl Platform {
             };
 
             //f(row.clone(), &mut entry);
-                //let (ips_site_page,ips_item_id) = my::from_row::<(String, u64)>(*row);
-                let q = "Q".to_string() + &ips_item_id.to_string();
-                entry.wikidata_item = Some(q);
+            //let (ips_site_page,ips_item_id) = my::from_row::<(String, u64)>(*row);
+            let q = "Q".to_string() + &ips_item_id.to_string();
+            entry.wikidata_item = Some(q);
 
             result.add_entry(entry);
         });
@@ -765,7 +766,7 @@ impl Platform {
                 sql.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
-    
+
         result.annotate_batch_results(
             self,
             batches,
@@ -1554,13 +1555,15 @@ mod tests {
     fn test_manual_list_enwiki_min_max_sitelinks() {
         // [[Count von Count]] vs. [[Magnus Manske]]
         check_results_for_psid(10123897, "wikidatawiki", vec![Title::new("Q13520818", 0)]); // Min 15
-        check_results_for_psid(10124667, "wikidatawiki", vec![Title::new("Q12345", 0)]); // Max 15
+        check_results_for_psid(10124667, "wikidatawiki", vec![Title::new("Q12345", 0)]);
+        // Max 15
     }
 
     #[test]
     fn test_manual_list_enwiki_label_filter() {
         // [[Count von Count]] vs. [[Magnus Manske]]
-        check_results_for_psid(10125089, "wikidatawiki", vec![Title::new("Q12345", 0)]); // Label "Count%" in en
+        check_results_for_psid(10125089, "wikidatawiki", vec![Title::new("Q12345", 0)]);
+        // Label "Count%" in en
     }
 
     #[test]
@@ -1715,5 +1718,4 @@ mod tests {
     fn test_en_categories_sparql_common_wiki_other() {
         check_results_for_psid(10222976, "frwiki", vec![Title::new("Magnus Manske", 0)]);
     }
-
 }
