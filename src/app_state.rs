@@ -104,13 +104,20 @@ impl AppState {
         self.main_page.clone()
     }
 
+    fn get_db_server_group(&self) -> &str {
+        match self.config["dbservergroup"].as_str() {
+            Some(s) => s,
+            None => ".web.db.svc.eqiad.wmflabs", // ".analytics.db.svc.eqiad.wmflabs"
+        }
+    }
+
     /// Returns the server and database name for the wiki, as a tuple
     pub fn db_host_and_schema_for_wiki(&self, wiki: &String) -> (String, String) {
         // TESTING
         // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.analytics.db.svc.eqiad.wmflabs:3306 -N
         let host = match self.config["host"].as_str() {
             Some("127.0.0.1") => "127.0.0.1".to_string(),
-            Some(_host) => wiki.to_owned() + ".web.db.svc.eqiad.wmflabs", //".analytics.db.svc.eqiad.wmflabs",
+            Some(_host) => wiki.to_owned() + self.get_db_server_group(),
             None => panic!("No host in config file"),
         };
         let schema = wiki.to_owned() + "_p";

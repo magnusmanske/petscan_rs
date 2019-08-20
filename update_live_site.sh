@@ -1,12 +1,12 @@
 #!/bin/bash
 # Get latest code
-git pull
+#git pull
 
 # Update
-cargo update
+#cargo update
 
 # Build new server binary
-cargo build --release
+#cargo build --release
 
 # Get restart code from config file
 code=`jq -r '.["restart-code"]' config.json`
@@ -16,7 +16,7 @@ url="http://127.0.0.1/?restart=$code"
 
 # Restart server
 curl -s -o /dev/null $url
-sleep 1
+#sleep 1
 #screen -r
 #/usr/sbin/service ./target/release/petscan_rs restart
 
