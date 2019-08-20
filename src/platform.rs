@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
@@ -660,6 +661,103 @@ impl Platform {
             return Ok(());
         }
 
+        let wiki = match result.wiki.clone() {
+            Some(wiki) => wiki.to_string(),
+            None => return Ok(()), // TODO is it OK to just ignore? Error for "no wiki set"?
+        };
+        let api = self.state.get_api_for_wiki(wiki.to_owned())?;
+
+        // Using Wikidata
+        let titles : Vec<String> = result.entries.iter().filter_map(|entry| {
+            entry.title().full_pretty(&api)
+        }).collect();
+
+        let mut batches: Vec<SQLtuple> = vec![];
+        titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+
+            let escaped: Vec<String> = chunk//.to_vec()
+                .iter()
+                .filter_map(|s| match s.trim() {
+                    "" => None,
+                    other => Some(other.to_string()),
+                })
+                .collect();
+            let mut sql = (Platform::get_questionmarks(escaped.len()), escaped);
+
+            //let mut sql = Platform::prep_quote(&chunk.to_vec());
+            sql.0 = format!("SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='enwiki' and ips_site_page IN ({})", &sql.0);
+            batches.push(sql);
+        });
+
+
+        // Duplicated from Patelist::annotate_batch_results
+        let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
+        let error: Mutex<Option<String>> = Mutex::new(None);
+
+        batches.par_iter().for_each(|sql| {
+            // Get DB connection
+            let db_user_pass = self.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+            let mut conn = self
+                .state
+                .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())
+                .unwrap();
+
+            // Run query
+            let result = match conn.prep_exec(&sql.0, &sql.1) {
+                Ok(r) => r,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(format!("ERROR: {:?}", e));
+                    return;
+                }
+            };
+
+            // Add to row list
+            let mut rows_lock = rows.lock().unwrap();
+            result
+                .filter_map(|row| row.ok())
+                .for_each(|row| rows_lock.push(row.clone()));
+        });
+
+        // Check error
+        match &*error.lock().unwrap() {
+            Some(e) => return Err(e.to_string()),
+            None => {}
+        }
+
+        // Rows to entries
+        rows.lock().unwrap().iter().for_each(|row| {
+            let full_page_title = match row.get(0) {
+                Some(title) => match title {
+                    my::Value::Bytes(uv) => String::from_utf8(uv).unwrap(),
+                    _ => return,
+                },
+                None => return,
+            };
+            let ips_item_id = match row.get(1) {
+                Some(title) => match title {
+                    my::Value::Int(i) => i,
+                    _ => return,
+                },
+                None => return,
+            };
+            let title = Title::new_from_full(&full_page_title,&api);
+            let tmp_entry = PageListEntry::new(title);
+            let mut entry = match result.entries.get(&tmp_entry) {
+                Some(e) => (*e).clone(),
+                None => return,
+            };
+
+            //f(row.clone(), &mut entry);
+                //let (ips_site_page,ips_item_id) = my::from_row::<(String, u64)>(*row);
+                let q = "Q".to_string() + &ips_item_id.to_string();
+                entry.wikidata_item = Some(q);
+
+            result.add_entry(entry);
+        });
+        Ok(())
+
+        /*
+        // THIS WOULD BE NICE BUT page_props HAS DAYS OF DATA LAG OR IS FAULTY
         // Batches
         let batches: Vec<SQLtuple> = result.to_sql_batches(PAGE_BATCH_SIZE)
             .iter_mut()
@@ -668,7 +766,7 @@ impl Platform {
                 sql.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
-
+    
         result.annotate_batch_results(
             self,
             batches,
@@ -680,6 +778,7 @@ impl Platform {
                 entry.wikidata_item = Some(pp_value);
             },
         )
+        */
     }
 
     fn process_by_wikidata_item(&mut self, result: &mut PageList) -> Result<(), String> {
