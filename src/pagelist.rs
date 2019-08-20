@@ -30,9 +30,9 @@ impl PageListSort {
     pub fn new_from_params(s: &String, descending: bool) -> Self {
         match s.as_str() {
             "title" => Self::Title(descending),
-            "ns_title" => Self::Title(descending),
-            "size" => Self::Title(descending),
-            "date" => Self::Title(descending),
+            "ns_title" => Self::NsTitle(descending),
+            "size" => Self::Size(descending),
+            "date" => Self::Date(descending),
             "redlinks" => Self::RedlinksCount(descending),
             "incoming_links" => Self::IncomingLinks(descending),
             "filesize" => Self::FileSize(descending),
