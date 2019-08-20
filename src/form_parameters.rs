@@ -29,10 +29,12 @@ impl FormParameters {
         params
             .iter()
             .filter(|(_k, v)| *v == "1")
-            .for_each(|(k, v)| {
+            .for_each(|(k, _v)| {
+                /*
                 if k == "ns" && v == "*" { // Backwards compat
                     ns.insert(0);
                 }
+                */
                 for cap in RE.captures_iter(k) {
                     match cap[1].parse::<usize>() {
                         Ok(ns_num) => {
