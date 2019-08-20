@@ -1114,7 +1114,7 @@ impl Platform {
     }
 
     pub fn get_main_wiki(&self) -> Option<String> {
-        let language = self.get_param_default("lang", &self.get_param_default("language","en")).replace("_", "-");
+        let language = self.get_param_default("language", "en").replace("_", "-");
         let project = self.get_param_default("project", "wikipedia");
         self.get_wiki_for_lagnuage_project(&language, &project)
     }
@@ -1519,7 +1519,7 @@ mod tests {
     fn check_results_for_psid_ext(psid: usize, addendum: &str, wiki: &str, expected: Vec<Title>) {
         let platform = run_psid_ext(psid, addendum).unwrap();
         let result = platform.result.unwrap();
-        assert_eq!(result.wiki(), Some(wiki.to_string()));
+        assert_eq!(*result.wiki(), Some(wiki.to_string()));
         let entries = result
             .entries
             .iter()
@@ -1586,7 +1586,7 @@ mod tests {
         check_results_for_psid(
             10225056,
             "wikidatawiki",
-            vec![Title::new("Q10995651", 0), Title::new("Q13520818", 0)],
+            vec![Title::new("Q13520818", 0),Title::new("Q10995651", 0)],
         );
     }
 

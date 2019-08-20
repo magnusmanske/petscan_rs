@@ -29,7 +29,10 @@ impl FormParameters {
         params
             .iter()
             .filter(|(_k, v)| *v == "1")
-            .for_each(|(k, _v)| {
+            .for_each(|(k, v)| {
+                if k == "ns" && v == "*" { // Backwards compat
+                    ns.insert(0);
+                }
                 for cap in RE.captures_iter(k) {
                     match cap[1].parse::<usize>() {
                         Ok(ns_num) => {
@@ -93,6 +96,10 @@ impl FormParameters {
     }
 
     fn legacy_parameters(&mut self) {
+        if self.has_param("lang") && !self.has_param("language") {
+            let lang = self.params.get("lang").unwrap().to_owned();
+            self.set_param("language", &lang );
+        }
         if self.has_param("comb_subset") {
             self.set_param("combination", "subset");
         }
