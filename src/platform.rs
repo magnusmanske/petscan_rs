@@ -1036,11 +1036,12 @@ impl Platform {
     }
 
     pub fn db_params(&self) -> SourceDatabaseParameters {
-        let depth: u16 = self
+        let depth_signed: i32 = self
             .get_param("depth")
             .unwrap_or("0".to_string())
-            .parse::<u16>()
+            .parse::<i32>()
             .unwrap_or(0);
+        let depth : u16 = if depth_signed < 0 { 999 } else { depth_signed as u16 };
         let ret = SourceDatabaseParameters {
             combine: match self.form_parameters.params.get("combination") {
                 Some(x) => {
@@ -1113,7 +1114,7 @@ impl Platform {
     }
 
     pub fn get_main_wiki(&self) -> Option<String> {
-        let language = self.get_param_default("language", "en").replace("_", "-");
+        let language = self.get_param_default("lang", &self.get_param_default("language","en")).replace("_", "-");
         let project = self.get_param_default("project", "wikipedia");
         self.get_wiki_for_lagnuage_project(&language, &project)
     }

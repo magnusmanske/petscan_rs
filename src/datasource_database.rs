@@ -167,7 +167,14 @@ impl SourceDatabase {
                     None => return None,
                 };
                 let depth = match parts.next() {
-                    Some(depth) => depth.parse::<u16>().ok()?,
+                    Some(depth) => {
+                        let depth_signed = depth.parse::<i32>().ok()? ;
+                        if depth_signed < 0 {
+                            999
+                        } else {
+                            depth_signed as u16
+                        }
+                    },
                     None => default_depth,
                 };
                 Some(SourceDatabaseCatDepth {

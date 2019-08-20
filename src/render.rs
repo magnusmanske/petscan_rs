@@ -1042,7 +1042,10 @@ impl RenderJSON {
                     "nstext":params.api.get_local_namespace_name(entry.title().namespace_id()).unwrap_or("".to_string())
                 });
                 match &entry.wikidata_item {
-                    Some(q) => o["q"] = json!(q),
+                    Some(q) => {
+                        o["q"] = json!(q);
+                        o["metadata"]["wikidata"] = json!(q);
+                    }
                     None => {}
                 }
                 self.add_metadata(&mut o, &entry, header);
