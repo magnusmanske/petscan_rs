@@ -163,7 +163,7 @@ impl Platform {
         for _ in 0..threads_running {
             let thread_response = rx.recv().expect("Platform::run: Can't receive");
             let data = thread_response.1?;
-            match &data.wiki {
+            match data.wiki() {
                 Some(wiki) => {
                     self.wiki_by_source
                         .insert(thread_response.0.to_owned(), wiki.to_string());
@@ -359,7 +359,7 @@ impl Platform {
 
         let mut redlink_counter: HashMap<Title, usize> = HashMap::new();
 
-        let wiki = match &result.wiki {
+        let wiki = match result.wiki() {
             Some(wiki) => wiki.to_owned(),
             None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
         };
@@ -431,7 +431,7 @@ impl Platform {
                 })
                 .collect();
 
-            let wiki = match &result.wiki {
+            let wiki = match result.wiki() {
                 Some(wiki) => wiki.to_owned(),
                 None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
             };
@@ -660,7 +660,7 @@ impl Platform {
             return Ok(());
         }
 
-        let wiki = match result.wiki.clone() {
+        let wiki = match result.wiki().clone() {
             Some(wiki) => wiki.to_string(),
             None => return Ok(()), // TODO is it OK to just ignore? Error for "no wiki set"?
         };
@@ -782,7 +782,7 @@ impl Platform {
     }
 
     fn process_by_wikidata_item(&mut self, result: &mut PageList) -> Result<(), String> {
-        if result.wiki == Some("wikidatawiki".to_string()) {
+        if *result.wiki() == Some("wikidatawiki".to_string()) {
             return Ok(());
         }
         let wdi = self.get_param_default("wikidata_item", "no");
@@ -801,7 +801,7 @@ impl Platform {
 
     fn process_missing_database_filters(&mut self, result: &mut PageList) -> Result<(), String> {
         let mut params = self.db_params();
-        params.wiki = match &result.wiki {
+        params.wiki = match result.wiki() {
             Some(wiki) => Some(wiki.to_string()),
             None => {
                 return Err(format!(
@@ -864,6 +864,7 @@ impl Platform {
         {
             return Ok(());
         }
+        let old_wiki = result.wiki().to_owned() ;
         result.convert_to_wiki("wikidatawiki", &self)?;
         if result.is_empty() {
             return Ok(());
@@ -930,7 +931,13 @@ impl Platform {
         result.process_batch_results(self, batches, &|row: my::Row| {
             let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
             Some(PageListEntry::new(Title::new(&page_title, 0)))
-        })
+        })?;
+
+        match old_wiki {
+            Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+            None => {}
+        }
+        Ok(())
     }
 
     fn filter_wikidata(&mut self, result: &mut PageList) -> Result<(), String> {
@@ -1133,7 +1140,7 @@ impl Platform {
             Some(result) => result,
             None => return Err(format!("Platform::get_response: No result")),
         };
-        let wiki = match &result.wiki {
+        let wiki = match result.wiki() {
             Some(wiki) => wiki,
             None => return Err(format!("Platform::get_response: No wiki in result")),
         };
@@ -1511,7 +1518,7 @@ mod tests {
     fn check_results_for_psid_ext(psid: usize, addendum: &str, wiki: &str, expected: Vec<Title>) {
         let platform = run_psid_ext(psid, addendum).unwrap();
         let result = platform.result.unwrap();
-        assert_eq!(result.wiki, Some(wiki.to_string()));
+        assert_eq!(result.wiki(), Some(wiki.to_string()));
         let entries = result
             .entries
             .iter()

@@ -341,7 +341,7 @@ impl PageListEntry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageList {
-    pub wiki: Option<String>,
+    wiki: Option<String>,
     pub entries: HashSet<PageListEntry>,
 }
 
@@ -362,6 +362,15 @@ impl PageList {
             wiki: Some(wiki.to_string()),
             entries: entries_hashset,
         }
+    }
+
+    pub fn set_wiki(&mut self,wiki: &Option<String>) {
+        println!("NEW WIKI: {:?}",wiki);
+        self.wiki = wiki.to_owned();
+    }
+
+    pub fn wiki(&self) -> &Option<String> {
+        &self.wiki
     }
 
     pub fn get_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {

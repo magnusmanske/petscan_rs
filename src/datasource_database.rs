@@ -388,8 +388,8 @@ impl SourceDatabase {
         // Take wiki from given pagelist
         match primary_pagelist {
             Some(pl) => {
-                if self.params.wiki.is_none() && pl.wiki.is_some() {
-                    self.params.wiki = pl.wiki.to_owned();
+                if self.params.wiki.is_none() && pl.wiki().is_some() {
+                    self.params.wiki = pl.wiki().to_owned();
                 }
             }
             None => {}
@@ -573,7 +573,7 @@ impl SourceDatabase {
                 let primary_pagelist = primary_pagelist.ok_or(format!(
                     "SourceDatabase::get_pages: pagelist: No primary_pagelist"
                 ))?;
-                ret.wiki = primary_pagelist.wiki.to_owned();
+                ret.set_wiki(primary_pagelist.wiki());
                 if primary_pagelist.is_empty() {
                     // Nothing to do, but that's OK
                     return Ok(ret);
@@ -922,7 +922,7 @@ mod tests {
         let state = get_state();
         let result = dbs.get_pages(&state, None).unwrap();
         //println!("{:?}", &result);
-        assert_eq!(result.wiki, Some("enwiki".to_string()));
+        assert_eq!(result.wiki(), Some("enwiki".to_string()));
         assert!(result.entries.len() < 5); // This may change as more articles are written/categories added, please adjust!
         assert!(result
             .entries
