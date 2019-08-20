@@ -34,10 +34,10 @@ impl PageListSort {
             "size" => Self::Title(descending),
             "date" => Self::Title(descending),
             "redlinks" => Self::RedlinksCount(descending),
-            "incoming_links" => Self::Title(descending),
-            "filesize" => Self::Title(descending),
-            "uploaddate" => Self::Title(descending),
-            "random" => Self::Title(descending),
+            "incoming_links" => Self::IncomingLinks(descending),
+            "filesize" => Self::FileSize(descending),
+            "uploaddate" => Self::UploadDate(descending),
+            "random" => Self::Random(descending),
             _ => Self::Default(descending),
         }
     }
