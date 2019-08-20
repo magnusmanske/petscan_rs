@@ -285,7 +285,6 @@ impl Platform {
             return Ok(());
         }
 
-        self.output_redlinks = true;
         let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE)
                 .iter_mut()
