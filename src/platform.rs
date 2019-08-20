@@ -685,8 +685,7 @@ impl Platform {
                 .collect();
             let mut sql = (Platform::get_questionmarks(escaped.len()), escaped);
 
-            //let mut sql = Platform::prep_quote(&chunk.to_vec());
-            sql.0 = format!("SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='enwiki' and ips_site_page IN ({})", &sql.0);
+            sql.0 = format!("SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='{}' and ips_site_page IN ({})", &wiki,&sql.0);
             batches.push(sql);
         });
 
@@ -782,7 +781,7 @@ impl Platform {
     }
 
     fn process_by_wikidata_item(&mut self, result: &mut PageList) -> Result<(), String> {
-        if *result.wiki() == Some("wikidatawiki".to_string()) {
+        if result.is_wikidata() {
             return Ok(());
         }
         let wdi = self.get_param_default("wikidata_item", "no");
@@ -864,7 +863,7 @@ impl Platform {
         {
             return Ok(());
         }
-        let old_wiki = result.wiki().to_owned() ;
+        let old_wiki = result.wiki().to_owned();
         result.convert_to_wiki("wikidatawiki", &self)?;
         if result.is_empty() {
             return Ok(());
@@ -1041,7 +1040,11 @@ impl Platform {
             .unwrap_or("0".to_string())
             .parse::<i32>()
             .unwrap_or(0);
-        let depth : u16 = if depth_signed < 0 { 999 } else { depth_signed as u16 };
+        let depth: u16 = if depth_signed < 0 {
+            999
+        } else {
+            depth_signed as u16
+        };
         let ret = SourceDatabaseParameters {
             combine: match self.form_parameters.params.get("combination") {
                 Some(x) => {
@@ -1586,7 +1589,7 @@ mod tests {
         check_results_for_psid(
             10225056,
             "wikidatawiki",
-            vec![Title::new("Q13520818", 0),Title::new("Q10995651", 0)],
+            vec![Title::new("Q13520818", 0), Title::new("Q10995651", 0)],
         );
     }
 
