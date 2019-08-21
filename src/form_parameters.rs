@@ -109,8 +109,9 @@ impl FormParameters {
     fn legacy_parameters(&mut self) {
         self.fallback("language", "lang");
         self.fallback("categories", "cats");
+
+        // query originally from QuickIntersection
         if self.has_param("max") {
-            // query originally from QuickIntersection
             if self.params.get("format").unwrap_or(&"".to_string()) == "jsonfm" {
                 self.set_param("json-pretty", "1");
             }
@@ -119,11 +120,11 @@ impl FormParameters {
                 None => {}
                 Some(num) => {
                     if num == "*" {
-                        self.ns.insert(0);
+                        self.set_param("ns[0]", "1");
                     } else {
                         match num.parse::<usize>() {
                             Ok(ns_num) => {
-                                self.ns.insert(ns_num);
+                                self.set_param(format!("ns[{}]", ns_num).as_str(), "1");
                             }
                             Err(_) => {}
                         }
@@ -131,6 +132,7 @@ impl FormParameters {
                 }
             }
         }
+
         if self.has_param("comb_subset") {
             self.set_param("combination", "subset");
         }
