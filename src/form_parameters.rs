@@ -109,10 +109,26 @@ impl FormParameters {
     fn legacy_parameters(&mut self) {
         self.fallback("language", "lang");
         self.fallback("categories", "cats");
-        if self.has_param("ns") && self.ns.is_empty() {
-            let value = self.params.get("ns").unwrap().to_owned();
-            if value == "*" {
-                self.ns.insert(0);
+        if self.has_param("max") {
+            // query originally from QuickIntersection
+            if self.params.get("format").unwrap_or(&"".to_string()) == "jsonfm" {
+                self.set_param("json-pretty", "1");
+            }
+            self.set_param("output_compatability", "quick-intersection");
+            match self.params.get("ns") {
+                None => {}
+                Some(num) => {
+                    if num == "*" {
+                        self.ns.insert(0);
+                    } else {
+                        match num.parse::<usize>() {
+                            Ok(ns_num) => {
+                                self.ns.insert(ns_num);
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                }
             }
         }
         if self.has_param("comb_subset") {

@@ -65,7 +65,7 @@ impl RenderParams {
             state: platform.state(),
             row_number: 0,
             json_output_compatability: platform
-                .get_param_default("output_compatability", "quick-intersection"),
+                .get_param_default("output_compatability", "catscan"), // Default; "quick-intersection" ?
             json_callback: platform.get_param_blank("callback"),
             json_sparse: platform.has_param("sparse"),
             json_pretty: platform.has_param("json-pretty"),
