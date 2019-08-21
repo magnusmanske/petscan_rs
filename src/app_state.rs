@@ -18,6 +18,7 @@ use std::{thread, time};
 static MAX_CONCURRENT_DB_CONNECTIONS: u64 = 10;
 static MYSQL_MAX_CONNECTION_ATTEMPTS: u64 = 15;
 static MYSQL_CONNECTION_INITIAL_DELAY_MS: u64 = 100;
+static MYSQL_CONNECTION_MAX_DELAY_MS: u64 = 5000;
 
 pub type DbUserPass = (String, String);
 
@@ -174,6 +175,9 @@ impl AppState {
                     loops_left -= 1;
                     let sleep_ms = time::Duration::from_millis(milliseconds);
                     milliseconds *= 2;
+                    if milliseconds > MYSQL_CONNECTION_MAX_DELAY_MS {
+                        milliseconds = MYSQL_CONNECTION_MAX_DELAY_MS;
+                    }
                     thread::sleep(sleep_ms);
                 }
             }
@@ -200,11 +204,12 @@ impl AppState {
                 }
             }
             Some("json") => {
-                let value = json!({"error":error});
+                let value = json!({ "error": error });
                 MyResponse {
-                s: ::serde_json::to_string(&value).unwrap(),
-                content_type: ContentType::parse_flexible("application/json; charset=utf-8").unwrap(),
-            }
+                    s: ::serde_json::to_string(&value).unwrap(),
+                    content_type: ContentType::parse_flexible("application/json; charset=utf-8")
+                        .unwrap(),
+                }
             }
             _ => MyResponse {
                 s: error.to_string(),
