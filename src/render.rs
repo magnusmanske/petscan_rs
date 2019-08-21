@@ -1069,7 +1069,7 @@ impl RenderJSON {
             Some(duration) => (duration.as_millis() as f32) / (1000 as f32),
             None => 0.0,
         };
-        json!({"n":"result","a":{"query":self.get_query_string(platform)},"querytime_sec":seconds,"*":[{"n":"combination","a":{"type":platform.get_param_default("combination","subset"),"*":entry_data}}]})
+        json!({"n":"result","a":{"query":self.get_query_string(platform),"querytime_sec":seconds},"*":[{"n":"combination","a":{"type":platform.get_param_default("combination","subset"),"*":entry_data}}]})
     }
 
     fn quick_intersection(
