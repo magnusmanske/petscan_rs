@@ -12,7 +12,7 @@ use std::sync::Mutex;
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PageListSort {
     Default(bool),
     Title(bool),
@@ -45,7 +45,7 @@ impl PageListSort {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileUsage {
     title: Title,
     wiki: String,
@@ -364,8 +364,8 @@ impl PageList {
         }
     }
 
-    pub fn set_wiki(&mut self,wiki: &Option<String>) {
-        println!("NEW WIKI: {:?}",wiki);
+    pub fn set_wiki(&mut self, wiki: &Option<String>) {
+        println!("NEW WIKI: {:?}", wiki);
         self.wiki = wiki.to_owned();
     }
 
@@ -830,5 +830,26 @@ impl PageList {
 
     pub fn is_wikidata(&self) -> bool {
         self.wiki == Some("wikidatawiki".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_list_sort() {
+        assert_eq!(
+            PageListSort::new_from_params(&"incoming_links".to_string(), true),
+            PageListSort::IncomingLinks(true)
+        );
+        assert_eq!(
+            PageListSort::new_from_params(&"ns_title".to_string(), false),
+            PageListSort::NsTitle(false)
+        );
+        assert_eq!(
+            PageListSort::new_from_params(&"this is not a sort parameter".to_string(), true),
+            PageListSort::Default(true)
+        );
     }
 }
