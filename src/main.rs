@@ -82,14 +82,22 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
     }
 
     // No "doit" parameter, just display the HTML form with the current query
-    if !form_parameters.params.contains_key("doit") || form_parameters.params.contains_key("norun")
+    if form_parameters
+        .params
+        .get("psid")
+        .unwrap_or(&"html".to_string())
+        == "html"
     {
-        let html = state.get_main_page();
-        let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
-        return MyResponse {
-            s: html,
-            content_type: ContentType::HTML,
-        };
+        if !form_parameters.params.contains_key("doit")
+            || form_parameters.params.contains_key("norun")
+        {
+            let html = state.get_main_page();
+            let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
+            return MyResponse {
+                s: html,
+                content_type: ContentType::HTML,
+            };
+        }
     }
 
     // Actually do something useful!

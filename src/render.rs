@@ -1,13 +1,13 @@
 use crate::app_state::AppState;
 use crate::pagelist::PageListEntry;
 use crate::platform::*;
-use std::collections::HashMap;
 use htmlescape::encode_minimal;
 use mediawiki::api::Api;
 use mediawiki::title::Title;
 use rocket::http::uri::Uri;
 use rocket::http::ContentType;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,6 +15,7 @@ static MAX_HTML_RESULTS: usize = 10000;
 
 //________________________________________________________________________________________________________________________
 
+#[derive(Debug, Clone)]
 pub struct RenderParams {
     wiki: String,
     file_data: bool,
@@ -954,7 +955,7 @@ impl Render for RenderJSON {
                 .iter()
                 .for_each(|k| header.push((k.to_string(), k.to_string())));
         }
-
+        //println!("{:?}", &params);
         let value: Value = match params.json_output_compatability.as_str() {
             "quick-intersection" => self.quick_intersection(platform, entries, &params, &header),
             _ => self.cat_scan(platform, entries, &params, &header), // Default
@@ -1237,8 +1238,7 @@ impl RenderJSON {
 //________________________________________________________________________________________________________________________
 
 /// Renders PagePile
-pub struct RenderPagePile {
-}
+pub struct RenderPagePile {}
 
 impl Render for RenderPagePile {
     fn response(
@@ -1248,28 +1248,45 @@ impl Render for RenderPagePile {
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let api = platform.state().get_api_for_wiki(wiki.to_string())?;
-        let url = "https://tools.wmflabs.org/pagepile/api.php" ;
-        let data : String = entries.iter()
-        .map(|e|format!("{}\t{}",e.title().pretty(),e.title().namespace_id()))
-        .collect::<Vec<String>>()
-        .join("\n");
-        let mut params : HashMap<String,String> = vec![("action","create_pile_with_data"),
-            ("wiki",wiki)].iter().map(|x|(x.0.to_string(),x.1.to_string())).collect();
-        params.insert("data".to_string(),data);
+        let url = "https://tools.wmflabs.org/pagepile/api.php";
+        let data: String = entries
+            .iter()
+            .map(|e| format!("{}\t{}", e.title().pretty(), e.title().namespace_id()))
+            .collect::<Vec<String>>()
+            .join("\n");
+        let mut params: HashMap<String, String> =
+            vec![("action", "create_pile_with_data"), ("wiki", wiki)]
+                .iter()
+                .map(|x| (x.0.to_string(), x.1.to_string()))
+                .collect();
+        params.insert("data".to_string(), data);
 
-        let result = match api.query_raw(url,&params,"POST") {
+        let result = match api.query_raw(url, &params, "POST") {
             Ok(r) => r,
             Err(e) => return Err(format!("PagePile generation failed: {:?}", e)),
         };
-        let json : serde_json::value::Value = match serde_json::from_str(&result){
+        let json: serde_json::value::Value = match serde_json::from_str(&result) {
             Ok(j) => j,
-            Err(e) => return Err(format!("PagePile generation did not return valid JSON: {:?}", e)),
+            Err(e) => {
+                return Err(format!(
+                    "PagePile generation did not return valid JSON: {:?}",
+                    e
+                ))
+            }
         };
         let pagepile_id = match json["pile"]["id"].as_u64() {
             Some(id) => id,
-            None => return Err(format!("PagePile generation did not return a pagepile ID: {:?}", json.clone())),
+            None => {
+                return Err(format!(
+                    "PagePile generation did not return a pagepile ID: {:?}",
+                    json.clone()
+                ))
+            }
         };
-        let url = format!("https://tools.wmflabs.org/pagepile/api.php?action=get_data&id={}",pagepile_id);
+        let url = format!(
+            "https://tools.wmflabs.org/pagepile/api.php?action=get_data&id={}",
+            pagepile_id
+        );
         let html = format!("<html><head><meta http-equiv=\"refresh\" content=\"0; url={}\" /></head><BODY><H1>Redirect</H1>The document can be found <A HREF='{}'>here</A>.</BODY></html>",&url,&url) ;
         Ok(MyResponse {
             s: html,
@@ -1277,11 +1294,21 @@ impl Render for RenderPagePile {
         })
     }
 
-    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {"".to_string()} 
-    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {"".to_string()}
-    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String {"".to_string()}
-    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {"".to_string()}
-    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {"".to_string()}
+    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "".to_string()
+    }
+    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "".to_string()
+    }
+    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String {
+        "".to_string()
+    }
+    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
+        "".to_string()
+    }
+    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        "".to_string()
+    }
 }
 
 impl RenderPagePile {
