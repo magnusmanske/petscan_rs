@@ -130,6 +130,7 @@ function applyParameters () {
 		
 		$('input:radio[name="'+name+'"][value="'+value.replace(/"/g,'&quot;')+'"]').prop('checked', true);
 		
+		$('input[type="hidden"][name="'+name+'"]').val ( deXSS(value) ) ;
 		$('input[type="text"][name="'+name+'"]').val ( deXSS(value) ) ;
 		$('input[type="number"][name="'+name+'"]').val ( parseInt(value) ) ;
 		$('textarea[name="'+name+'"]').val ( deXSS(value.replace(/\+/g,' ')) ) ;
@@ -137,7 +138,18 @@ function applyParameters () {
 		if ( value == '1' || value == 'on' ) $('input[type="checkbox"][name="'+name+'"]').prop('checked', true);
 		
 	} ) ;
-	
+
+	if ( params['doit'] != '' && params['referrer_url'] != '' && params['psid'] != '' ) {
+		var psid = 0 ;
+		$('span[name="psid"]').each ( function () { psid = $(this).text() ; } ) ;
+		if ( psid != 0 ) {
+			let url = params['referrer_url'].replace('{PSID}',psid) ;
+			let name = params['referrer_name'] || url; 
+			$('#referrer').attr({href:url}).text(deXSS(name));
+			$("#referrer_box").show();
+		}
+	}
+
 	function wait2load_ns () {
 		if ( namespaces_loading ) {
 			setTimeout ( wait2load_ns , 100 ) ;
@@ -492,7 +504,6 @@ function initializeInterface () {
 	if ( typeof p.wikidata_no_item != 'undefined' ) p.wikidata_item = 'without' ;
 	if ( typeof p.giu != 'undefined' ) p.file_usage_data = 'on' ;
 	
-
 	params = $.extend ( {} , default_params , p ) ;
 	params.sortby = params.sortby.replace ( / /g , '_' ) ;
 	$('#ores_model_select').val(params.ores_type) ;

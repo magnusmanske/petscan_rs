@@ -134,9 +134,14 @@ function receiveEnglishNamespaceData ( j ) {
   </div>
 </nav>
 
+
 <div class="container mt-2">
 <div class="row">
 <div class="col-md-12">
+
+<div id='referrer_box' class="alert alert-primary" role="alert" style="display:none;">
+	<span tt="referrer"></span> <a id='referrer' href=''class='external'></a>
+</div>
 
 <form id='main_form' method='post' action='/' class='form'>
 
@@ -733,6 +738,9 @@ function receiveEnglishNamespaceData ( j ) {
 
 
 </div>
+
+<input type='hidden' name='referrer_url' value='' />
+<input type='hidden' name='referrer_name' value='' />
 
 
 <input type='hidden' name='interface_language' value='en' />
