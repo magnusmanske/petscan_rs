@@ -65,7 +65,7 @@ impl RenderParams {
             state: platform.state(),
             row_number: 0,
             json_output_compatability: platform
-                .get_param_default("output_compatability", "catscan"),
+                .get_param_default("output_compatability", "quick-intersection"),
             json_callback: platform.get_param_blank("callback"),
             json_sparse: platform.has_param("sparse"),
             json_pretty: platform.has_param("json-pretty"),
@@ -955,7 +955,7 @@ impl Render for RenderJSON {
                 .iter()
                 .for_each(|k| header.push((k.to_string(), k.to_string())));
         }
-        //println!("{:?}", &params);
+
         let value: Value = match params.json_output_compatability.as_str() {
             "quick-intersection" => self.quick_intersection(platform, entries, &params, &header),
             _ => self.cat_scan(platform, entries, &params, &header), // Default

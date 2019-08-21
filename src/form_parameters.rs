@@ -109,6 +109,12 @@ impl FormParameters {
     fn legacy_parameters(&mut self) {
         self.fallback("language", "lang");
         self.fallback("categories", "cats");
+        if self.has_param("ns") && self.ns.is_empty() {
+            let value = self.params.get("ns").unwrap().to_owned();
+            if value == "*" {
+                self.ns.insert(0);
+            }
+        }
         if self.has_param("comb_subset") {
             self.set_param("combination", "subset");
         }
