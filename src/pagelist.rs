@@ -204,10 +204,16 @@ impl PageListEntry {
         &self.title
     }
 
-    pub fn compare(&self, other: &Self, sorter: &PageListSort) -> Ordering {
+    pub fn compare(&self, other: &Self, sorter: &PageListSort, is_wikidata: bool) -> Ordering {
         match sorter {
             PageListSort::Default(d) => self.compare_by_page_id(other, *d),
-            PageListSort::Title(d) => self.compare_by_title(other, *d),
+            PageListSort::Title(d) => {
+                if is_wikidata {
+                    self.compare_by_label(other, *d)
+                } else {
+                    self.compare_by_title(other, *d)
+                }
+            }
             PageListSort::NsTitle(d) => self.compare_by_ns_title(other, *d),
             PageListSort::Size(d) => self.compare_by_size(other, *d),
             PageListSort::IncomingLinks(d) => self.compare_by_incoming(other, *d),
@@ -326,6 +332,18 @@ impl PageListEntry {
         }
     }
 
+    fn compare_by_label(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
+        let l1 = self
+            .wikidata_label
+            .clone()
+            .or_else(|| Some(self.title.pretty().to_owned()));
+        let l2 = other
+            .wikidata_label
+            .clone()
+            .or_else(|| Some(self.title.pretty().to_owned()));
+        self.compare_order(l1.partial_cmp(&l2).unwrap_or(Ordering::Less), descending)
+    }
+
     fn compare_by_title(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
         self.compare_order(
             self.title
@@ -383,7 +401,7 @@ impl PageList {
 
     pub fn get_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {
         let mut ret: Vec<PageListEntry> = self.entries.iter().cloned().collect();
-        ret.par_sort_by(|a, b| a.compare(b, &sorter));
+        ret.par_sort_by(|a, b| a.compare(b, &sorter, self.is_wikidata()));
         ret
     }
 
