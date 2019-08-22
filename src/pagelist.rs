@@ -59,7 +59,7 @@ impl FileUsage {
             return None;
         }
         let wiki = parts.remove(0);
-        let namespace_id = parts.remove(0).parse::<NamespaceID>().unwrap();
+        let namespace_id = parts.remove(0).parse::<NamespaceID>().ok()?;
         let namespace_name = parts.remove(0);
         let page = parts.join(":");
         Some(Self {
@@ -84,7 +84,7 @@ impl FileUsage {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileInfo {
     pub file_usage: Vec<FileUsage>,
     pub img_size: Option<usize>,
@@ -126,7 +126,7 @@ impl FileInfo {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PageCoordinates {
     pub lat: f64,
     pub lon: f64,
@@ -274,13 +274,19 @@ impl PageListEntry {
         }
     }
 
-    // TODO
     fn compare_by_upload_date(
         self: &PageListEntry,
-        _other: &PageListEntry,
-        _descending: bool,
+        other: &PageListEntry,
+        descending: bool,
     ) -> Ordering {
-        Ordering::Equal
+        match (&self.file_info, &other.file_info) {
+            (Some(f1), Some(f2)) => {
+                self.compare_by_opt(&f1.img_timestamp, &f2.img_timestamp, descending)
+            }
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        }
     }
 
     fn compare_by_opt<T: PartialOrd>(
@@ -850,6 +856,62 @@ mod tests {
         assert_eq!(
             PageListSort::new_from_params(&"this is not a sort parameter".to_string(), true),
             PageListSort::Default(true)
+        );
+    }
+
+    #[test]
+    fn file_usage() {
+        // 3 instead of 4 parts
+        assert_eq!(
+            FileUsage::new_from_part(&"the_wiki:7:the_namespace_name".to_string()),
+            None
+        );
+        // String instead of namespace ID
+        assert_eq!(
+            FileUsage::new_from_part(
+                &"the_wiki:the_namespace_id:the_namespace_name:The:page".to_string()
+            ),
+            None
+        );
+        // This should work
+        let fu = FileUsage::new_from_part(&"the_wiki:7:the_namespace_name:The:page".to_string())
+            .unwrap();
+        assert_eq!(fu.wiki(), "the_wiki");
+        assert_eq!(fu.namespace_name(), "the_namespace_name");
+        assert_eq!(*fu.title(), Title::new("The:page", 7));
+    }
+
+    #[test]
+    fn file_info() {
+        let fu = FileUsage::new_from_part(&"the_wiki:7:the_namespace_name:The:page".to_string())
+            .unwrap();
+        let fi = FileInfo::new_from_gil_group(
+            &"|somesuch|the_wiki:7:the_namespace_name:The:page|the_wiki:7:the_namespace_name"
+                .to_string(),
+        );
+        assert_eq!(fi.file_usage, vec![fu]);
+    }
+
+    #[test]
+    fn lat_lon() {
+        assert_eq!(
+            PageCoordinates::new_from_lat_lon(&"something".to_string()),
+            None
+        );
+        assert_eq!(
+            PageCoordinates::new_from_lat_lon(&"-0.1234".to_string()),
+            None
+        );
+        assert_eq!(
+            PageCoordinates::new_from_lat_lon(&"-0.1234,A".to_string()),
+            None
+        );
+        assert_eq!(
+            PageCoordinates::new_from_lat_lon(&"-0.1234,2.345".to_string()),
+            Some(PageCoordinates {
+                lat: -0.1234,
+                lon: 2.345
+            })
         );
     }
 }
