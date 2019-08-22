@@ -558,6 +558,13 @@ impl PageList {
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
         let error: Mutex<Option<String>> = Mutex::new(None);
 
+        let wiki = match self.wiki.as_ref() {
+            Some(wiki) => wiki,
+            None => {
+                return Err(format!("PageList::run_batch_queries: No wiki"));
+            }
+        };
+
         batches.par_iter().for_each(|sql| {
             // Get DB connection
             let db_user_pass = match state.get_db_mutex().lock() {
@@ -565,13 +572,6 @@ impl PageList {
                 Err(e) => {
                     *error.lock().unwrap() =
                         Some(format!("PageList::run_batch_queries: Bad mutex: {:?}", e));
-                    return;
-                }
-            };
-            let wiki = match self.wiki.as_ref() {
-                Some(wiki) => wiki,
-                None => {
-                    *error.lock().unwrap() = Some(format!("PageList::run_batch_queries: No wiki"));
                     return;
                 }
             };
@@ -590,7 +590,10 @@ impl PageList {
             let result = match conn.prep_exec(&sql.0, &sql.1) {
                 Ok(r) => r,
                 Err(e) => {
-                    *error.lock().unwrap() = Some(format!("ERROR: {:?}", e));
+                    *error.lock().unwrap() = Some(format!(
+                        "PageList::run_batch_queries: SQL query error: {:?}",
+                        e
+                    ));
                     return;
                 }
             };

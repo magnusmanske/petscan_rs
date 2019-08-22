@@ -1,9 +1,9 @@
 use crate::app_state::AppState;
+use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 use crate::platform::*;
 use mediawiki::api::Api;
-use mediawiki::title::Title;
 use mysql as my;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -29,7 +29,7 @@ protected :
 
 pub struct WDfist {
     item2files: HashMap<String, HashMap<String, usize>>,
-    items: Vec<Title>,
+    items: Vec<String>,
     files2ignore: HashSet<String>, // Requires normailzed, valid filenames
     form_parameters: Arc<FormParameters>,
     state: Arc<AppState>,
@@ -37,15 +37,15 @@ pub struct WDfist {
 
 impl WDfist {
     pub fn new(platform: &Platform, result: &Option<PageList>) -> Option<Self> {
-        let items: Vec<Title> = match result {
+        let items: Vec<String> = match result {
             Some(pagelist) => {
-                let mut pagelist = pagelist.clone();
-                pagelist.convert_to_wiki("wikidatawiki", platform).ok()?;
+                let mut pagelist = pagelist.clone(); // TODO remove clone()
+                pagelist.convert_to_wiki("wikidatawiki", platform).ok()?; // TODO do this upstream and just check here,
                 pagelist
                     .entries
                     .iter()
                     .filter(|e| e.title().namespace_id() == 0)
-                    .map(|e| e.title().to_owned())
+                    .map(|e| e.title().pretty().to_owned())
                     .collect()
             }
             None => vec![],
@@ -65,9 +65,52 @@ impl WDfist {
             j["status"] = json!("No items from original query");
             return Ok(j);
         }
+
         self.seed_ignore_files()?;
         self.filter_items()?;
+        if self.items.is_empty() {
+            j["status"] = json!("No items qualify");
+            return Ok(j);
+        }
+
+        // Main process
+        if self.bool_param("wdf_langlinks") {
+            self.follow_language_links()?;
+        }
+        if self.bool_param("wdf_coords") {
+            self.follow_coords()?;
+        }
+        if self.bool_param("wdf_search_commons") {
+            self.follow_search_commons()?;
+        }
+        if self.bool_param("wdf_commons_cats") {
+            self.follow_commons_cats()?;
+        }
+
+        self.filter_files()?;
+
+        j["data"] = json!(&self.item2files);
         Ok(j)
+    }
+
+    fn follow_language_links(&mut self) -> Result<(), String> {
+        // TODO
+        Ok(())
+    }
+
+    fn follow_coords(&mut self) -> Result<(), String> {
+        // TODO
+        Ok(())
+    }
+
+    fn follow_search_commons(&mut self) -> Result<(), String> {
+        // TODO
+        Ok(())
+    }
+
+    fn follow_commons_cats(&mut self) -> Result<(), String> {
+        // TODO
+        Ok(())
     }
 
     fn bool_param(&self, key: &str) -> bool {
@@ -143,6 +186,31 @@ impl WDfist {
     }
 
     fn filter_items(&mut self) -> Result<(), String> {
+        // To batches (all items are ns=0)
+        let wdf_only_items_without_p18 = self.bool_param("wdf_only_items_without_p18");
+        let mut batches: Vec<SQLtuple> = vec![];
+        self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+            let mut sql = Platform::prep_quote(&chunk.to_vec());
+            sql.0 = format!("SELECT page_title FROM page WHERE page_namespace=0 AND page_is_redirect=0 AND page_title IN ({})",&sql.0) ;
+            if  wdf_only_items_without_p18 {sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=120 AND pl_title='P18')" ;}
+            sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=0 AND pl_title IN ('Q13406463','Q4167410'))" ; // No list/disambig
+            batches.push(sql);
+        });
+
+        // Run batches
+        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+
+        match rows.lock() {
+            Ok(rows) => {
+                self.items = rows
+                    .iter()
+                    .map(|row| my::from_row::<String>(row.to_owned()))
+                    .collect();
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+
         Ok(())
     }
 
@@ -151,11 +219,20 @@ impl WDfist {
         true // TODO
     }
 
-    // TODO remove pub
-    pub fn filter_files(&mut self) -> Result<(), String> {
-        //self.filter_files_from_ignore_database()?;
-        //self.filter_files_five_or_is_used()?;
+    fn filter_files(&mut self) -> Result<(), String> {
+        self.filter_files_from_ignore_database()?;
+        self.filter_files_five_or_is_used()?;
         self.remove_items_with_no_file_candidates()?;
+        Ok(())
+    }
+
+    fn filter_files_from_ignore_database(&mut self) -> Result<(), String> {
+        // TODO
+        Ok(())
+    }
+
+    fn filter_files_five_or_is_used(&mut self) -> Result<(), String> {
+        // TODO
         Ok(())
     }
 
@@ -167,81 +244,11 @@ impl WDfist {
     fn normalize_filename(&self, filename: &String) -> String {
         filename.trim().replace(" ", "_")
     }
-
-    //fn follow_commons_cats(&mut self) -> Result<(),String> {} // TODO
 }
 
 /*
 
 typedef pair <string,string> t_title_q ;
-
-void TWDFIST::filterItems () {
-    // Chunk item list
-    vector <string> item_batches ;
-    for ( uint64_t cnt = 0 ; cnt < items.size() ; cnt++ ) {
-        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
-        if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
-        item_batches[item_batches.size()-1] += "\"" + items[cnt] + "\"" ;
-    }
-
-    // Check items
-    vector <string> new_items ;
-    new_items.reserve ( items.size() ) ;
-    TWikidataDB wd_db ( "wikidatawiki" , platform );
-    for ( size_t chunk = 0 ; chunk < item_batches.size() ; chunk++ ) {
-        string sql = "SELECT page_title FROM page WHERE page_namespace=0 AND page_is_redirect=0" ;
-        sql += " AND page_title IN (" + item_batches[chunk] + ")" ;
-        if ( wdf_only_items_without_p18 ) sql += " AND NOT EXISTS (SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=120 AND pl_title='P18')" ;
-        sql += " AND NOT EXISTS (SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=0 AND pl_title IN ('Q13406463','Q4167410'))" ; // No list/disambig
-        MYSQL_RES *result = wd_db.getQueryResults ( sql ) ;
-        MYSQL_ROW row;
-        while ((row = mysql_fetch_row(result))) {
-            new_items.push_back ( row[0] ) ;
-        }
-        mysql_free_result(result);
-    }
-    items.swap ( new_items ) ;
-}
-
-
-
-
-
-string TWDFIST::run () {
-
-    // Follow
-    wdf_langlinks = !(platform->getParam("wdf_langlinks","").empty()) ;
-    wdf_coords = !(platform->getParam("wdf_coords","").empty()) ;
-    wdf_search_commons = !(platform->getParam("wdf_search_commons","").empty()) ;
-    wdf_commons_cats = !(platform->getParam("wdf_commons_cats","").empty()) ;
-
-    // Options
-    wdf_only_items_without_p18 = !(platform->getParam("wdf_only_items_without_p18","").empty()) ;
-    wdf_only_files_not_on_wd = !(platform->getParam("wdf_only_files_not_on_wd","").empty()) ;
-    wdf_only_jpeg = !(platform->getParam("wdf_only_jpeg","").empty()) ;
-    wdf_max_five_results = !(platform->getParam("wdf_max_five_results","").empty()) ;
-    wdf_only_page_images = !(platform->getParam("wdf_only_page_images","").empty()) ;
-    wdf_allow_svg = !(platform->getParam("wdf_allow_svg","").empty()) ;
-
-    // Prepare
-    filterItems() ;
-    if ( items.size() == 0 ) {
-        j["status"] = "No items from original query" ;
-        return j.dump() ;
-    }
-
-    // Run followers
-    if ( wdf_langlinks ) followLanguageLinks() ;
-    if ( wdf_coords ) followCoordinates() ;
-    if ( wdf_search_commons ) followSearchCommons() ;
-    if ( wdf_commons_cats ) followCommonsCats() ;
-
-    filterFiles() ;
-
-    j["data"] = q2image ;
-    return j.dump() ;
-}
-
 
 
 void TWDFIST::filterFilesFiveOrIsUsed () {
@@ -529,4 +536,61 @@ void TWDFIST::followSearchCommons () {
 }
 
 
+
+
 */
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use crate::form_parameters::FormParameters;
+    use serde_json::Value;
+    use std::env;
+    use std::fs::File;
+
+    fn get_state() -> Arc<AppState> {
+        let basedir = env::current_dir()
+            .expect("Can't get CWD")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let path = basedir.to_owned() + "/config.json";
+        let file = File::open(path).expect("Can not open config file");
+        let petscan_config: Value =
+            serde_json::from_reader(file).expect("Can not parse JSON from config file");
+        Arc::new(AppState::new_from_config(&petscan_config))
+    }
+
+    fn get_wdfist(params: Vec<(&str, &str)>, items: Vec<&str>) -> WDfist {
+        let form_parameters = FormParameters {
+            params: params
+                .iter()
+                .map(|x| (x.0.to_string(), x.1.to_string()))
+                .collect(),
+            ns: HashSet::new(),
+        };
+        WDfist {
+            item2files: HashMap::new(),
+            items: items.iter().map(|s| s.to_string()).collect(),
+            files2ignore: HashSet::new(),
+            form_parameters: Arc::new(form_parameters),
+            state: get_state(),
+        }
+    }
+
+    #[test]
+    fn test_wdfist_filter_items() {
+        let params: Vec<(&str, &str)> = vec![("wdf_only_items_without_p18", "1")];
+        let items: Vec<&str> = vec![
+            "Q63810120", // Some scientific paper, unlikely to ever get an image, designated survivor of this test
+            "Q13520818", // Magnus Manske, has image
+            "Q37651",    // List item
+            "Q21002367", // Disambig item
+            "Q10000067", // Redirect
+        ];
+        let mut wdfist = get_wdfist(params, items);
+        let _j = wdfist.run().unwrap();
+        assert_eq!(wdfist.items, vec!["Q63810120".to_string()]);
+    }
+}
