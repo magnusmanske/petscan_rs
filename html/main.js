@@ -139,7 +139,7 @@ function applyParameters () {
 		
 	} ) ;
 
-	if ( params['doit'] != '' && params['referrer_url'] != '' && params['psid'] != '' ) {
+	if ( params['doit'] != '' && typeof params['referrer_url'] != 'undefined' && params['referrer_url'] != '' && params['psid'] != '' ) {
 		var psid = 0 ;
 		$('span[name="psid"]').each ( function () { psid = $(this).text() ; } ) ;
 		if ( psid != 0 ) {
