@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub static MIN_IGNORE_DB_FILE_COUNT: usize = 3;
+pub static MAX_FILE_COUNT_IN_RESULT_SET: usize = 5;
 
 /*
 
@@ -232,7 +233,67 @@ impl WDfist {
     }
 
     fn filter_files_five_or_is_used(&mut self) -> Result<(), String> {
-        // TODO
+        // Collect all filenames, and how often they are used in this result set
+        let mut file2count: HashMap<String, usize> = HashMap::new();
+        self.item2files.iter().for_each(|(_item, files)| {
+            files
+                .iter()
+                .for_each(|fc| *file2count.entry(fc.0.to_string()).or_insert(0) += 1);
+        });
+        if file2count.is_empty() {
+            return Ok(());
+        }
+
+        // Get distinct filenames to check
+        let filenames: Vec<String> = file2count
+            .iter()
+            .map(|(file, _count)| file.to_owned())
+            .collect();
+
+        // Create batches
+        let mut batches: Vec<SQLtuple> = vec![];
+        filenames.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+            let mut sql = Platform::prep_quote(&chunk.to_vec());
+            sql.0 = format!(
+                "SELECT DISTINCT il_to FROM imagelinks WHERE il_from_namespace=0 AND il_to IN ({})",
+                &sql.0
+            );
+            batches.push(sql);
+        });
+
+        // Run batches, and get a list of files to remove
+        let pagelist = PageList::new_from_wiki("commonswiki");
+        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+        let mut files_to_remove: Vec<String> = match rows.lock() {
+            Ok(rows) => rows
+                .iter()
+                .map(|row| my::from_row::<String>(row.to_owned()))
+                .collect(),
+            Err(e) => return Err(e.to_string()),
+        };
+
+        // Remove max files returned
+        if self.bool_param("wdf_max_five_results") {
+            files_to_remove.extend(
+                file2count
+                    .iter()
+                    .filter(|(_file, count)| **count >= MAX_FILE_COUNT_IN_RESULT_SET)
+                    .map(|(file, _count)| file.to_owned()),
+            );
+            files_to_remove.sort();
+            files_to_remove.dedup();
+        }
+
+        // Remove the files
+        self.item2files.iter_mut().for_each(|(_item, files)| {
+            files_to_remove.iter().for_each(|filename| {
+                files.remove(filename);
+            });
+        });
+
+        // Remove empty item results
+        self.item2files.retain(|_item, files| !files.is_empty());
+
         Ok(())
     }
 
@@ -579,6 +640,16 @@ mod tests {
         }
     }
 
+    fn set_item2files(wdfist: &mut WDfist, q: &str, files: Vec<(&str, usize)>) {
+        wdfist.item2files.insert(
+            q.to_string(),
+            files
+                .iter()
+                .map(|x| (x.0.to_string(), x.1 as usize))
+                .collect(),
+        );
+    }
+
     #[test]
     fn test_wdfist_filter_items() {
         let params: Vec<(&str, &str)> = vec![("wdf_only_items_without_p18", "1")];
@@ -592,5 +663,36 @@ mod tests {
         let mut wdfist = get_wdfist(params, items);
         let _j = wdfist.run().unwrap();
         assert_eq!(wdfist.items, vec!["Q63810120".to_string()]);
+    }
+
+    #[test]
+    fn test_filter_files_five_or_is_used() {
+        let params: Vec<(&str, &str)> = vec![("wdf_max_five_results", "1")];
+        let mut wdfist = get_wdfist(params, vec![]);
+        set_item2files(&mut wdfist, "Q1", vec![("More_than_5.jpg", 0)]);
+        set_item2files(&mut wdfist, "Q2", vec![("More_than_5.jpg", 0)]);
+        set_item2files(
+            &mut wdfist,
+            "Q3",
+            vec![
+                ("More_than_5.jpg", 0),
+                ("Douglas_adams_portrait_cropped.jpg", 0),
+            ],
+        );
+        set_item2files(&mut wdfist, "Q4", vec![("More_than_5.jpg", 0)]);
+        set_item2files(
+            &mut wdfist,
+            "Q5",
+            vec![
+                ("More_than_5.jpg", 0),
+                ("This_is_a_test_no_such_file_exists.jpg", 0),
+            ],
+        );
+        set_item2files(&mut wdfist, "Q6", vec![("More_than_5.jpg", 0)]);
+        wdfist.filter_files_five_or_is_used().unwrap();
+        assert_eq!(
+            json!(wdfist.item2files),
+            json!({"Q5":{"This_is_a_test_no_such_file_exists.jpg":0}})
+        );
     }
 }
