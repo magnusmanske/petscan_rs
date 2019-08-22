@@ -336,11 +336,15 @@ impl PageListEntry {
         let l1 = self
             .wikidata_label
             .clone()
-            .or_else(|| Some(self.title.pretty().to_owned()));
+            .or_else(|| Some(self.title.pretty().to_owned()))
+            .unwrap()
+            .to_lowercase();
         let l2 = other
             .wikidata_label
             .clone()
-            .or_else(|| Some(self.title.pretty().to_owned()));
+            .or_else(|| Some(self.title.pretty().to_owned()))
+            .unwrap()
+            .to_lowercase();
         self.compare_order(l1.partial_cmp(&l2).unwrap_or(Ordering::Less), descending)
     }
 
