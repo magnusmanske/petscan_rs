@@ -1,3 +1,4 @@
+use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use mediawiki::api::NamespaceID;
@@ -8,6 +9,7 @@ use regex::Regex;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 //________________________________________________________________________________________________________________________
@@ -546,131 +548,38 @@ impl PageList {
         });
     }
 
-    /// Adds/replaces entries based on SQL query batch results.
-    pub fn process_batch_results(
-        &mut self,
-        platform: &Platform,
+    /// Runs batched queries for process_batch_results and annotate_batch_results
+    pub fn run_batch_queries(
+        &self,
+        state: Arc<AppState>,
         batches: Vec<SQLtuple>,
-        f: &dyn Fn(my::Row) -> Option<PageListEntry>,
-    ) -> Result<(), String> {
+    ) -> Result<Mutex<Vec<my::Row>>, String> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
-
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
         let error: Mutex<Option<String>> = Mutex::new(None);
 
         batches.par_iter().for_each(|sql| {
             // Get DB connection
-            let state = platform.state();
             let db_user_pass = match state.get_db_mutex().lock() {
                 Ok(db) => db,
                 Err(e) => {
-                    *error.lock().unwrap() = Some(format!(
-                        "PageList::process_batch_results: Bad mutex: {:?}",
-                        e
-                    ));
+                    *error.lock().unwrap() =
+                        Some(format!("PageList::run_batch_queries: Bad mutex: {:?}", e));
                     return;
                 }
             };
             let wiki = match self.wiki.as_ref() {
                 Some(wiki) => wiki,
                 None => {
-                    *error.lock().unwrap() =
-                        Some(format!("PageList::process_batch_results: No wiki"));
+                    *error.lock().unwrap() = Some(format!("PageList::run_batch_queries: No wiki"));
                     return;
                 }
             };
-            let mut conn = match platform
-                .state()
-                .get_wiki_db_connection(&db_user_pass, &wiki)
-            {
+            let mut conn = match state.get_wiki_db_connection(&db_user_pass, &wiki) {
                 Ok(conn) => conn,
                 Err(e) => {
                     *error.lock().unwrap() = Some(format!(
-                        "PageList::process_batch_results: Can't get wiki db connection: {:?}",
-                        e
-                    ));
-                    return;
-                }
-            };
-
-            // Run query
-            let result = match conn.prep_exec(&sql.0, &sql.1) {
-                Ok(r) => r,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(format!("ERROR: {:?}", e));
-                    return;
-                }
-            };
-
-            // Add to row list
-            let mut rows_lock = rows.lock().unwrap();
-            result
-                .filter_map(|row| row.ok())
-                .for_each(|row| rows_lock.push(row.clone()));
-        });
-
-        // Check error
-        match &*error.lock().unwrap() {
-            Some(e) => return Err(e.to_string()),
-            None => {}
-        }
-
-        // Rows to entries
-        match rows.lock() {
-            Ok(rows) => {
-                rows.iter().for_each(|row| match f(row.to_owned()) {
-                    Some(entry) => self.add_entry(entry),
-                    None => {}
-                });
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-        Ok(())
-    }
-
-    /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
-    pub fn annotate_batch_results(
-        &mut self,
-        platform: &Platform,
-        batches: Vec<SQLtuple>,
-        col_title: usize,
-        col_ns: usize,
-        f: &dyn Fn(my::Row, &mut PageListEntry),
-    ) -> Result<(), String> {
-        // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
-
-        let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
-        let error: Mutex<Option<String>> = Mutex::new(None);
-
-        batches.par_iter().for_each(|sql| {
-            // Get DB connection
-            let state = platform.state();
-            let db_user_pass = match state.get_db_mutex().lock() {
-                Ok(db) => db,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(format!(
-                        "PageList::annotate_batch_results: Bad mutex: {:?}",
-                        e
-                    ));
-                    return;
-                }
-            };
-            let wiki = match self.wiki.as_ref() {
-                Some(wiki) => wiki,
-                None => {
-                    *error.lock().unwrap() =
-                        Some(format!("PageList::annotate_batch_results: No wiki"));
-                    return;
-                }
-            };
-            let mut conn = match platform
-                .state()
-                .get_wiki_db_connection(&db_user_pass, &wiki)
-            {
-                Ok(conn) => conn,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(format!(
-                        "PageList::annotate_batch_results: Can't get wiki db connection: {:?}",
+                        "PageList::run_batch_queries: Can't get wiki db connection: {:?}",
                         e
                     ));
                     return;
@@ -701,6 +610,42 @@ impl PageList {
             },
             Err(e) => return Err(e.to_string()),
         }
+
+        Ok(rows)
+    }
+
+    /// Adds/replaces entries based on SQL query batch results.
+    pub fn process_batch_results(
+        &mut self,
+        state: Arc<AppState>,
+        batches: Vec<SQLtuple>,
+        f: &dyn Fn(my::Row) -> Option<PageListEntry>,
+    ) -> Result<(), String> {
+        let rows = self.run_batch_queries(state, batches)?;
+
+        // Rows to entries
+        match rows.lock() {
+            Ok(rows) => {
+                rows.iter().for_each(|row| match f(row.to_owned()) {
+                    Some(entry) => self.add_entry(entry),
+                    None => {}
+                });
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+        Ok(())
+    }
+
+    /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
+    pub fn annotate_batch_results(
+        &mut self,
+        state: Arc<AppState>,
+        batches: Vec<SQLtuple>,
+        col_title: usize,
+        col_ns: usize,
+        f: &dyn Fn(my::Row, &mut PageListEntry),
+    ) -> Result<(), String> {
+        let rows = self.run_batch_queries(state, batches)?;
 
         // Rows to entries
         match rows.lock() {
@@ -756,7 +701,7 @@ impl PageList {
             .collect::<Vec<SQLtuple>>();
 
         self.annotate_batch_results(
-            platform,
+            platform.state(),
             batches,
             0,
             1,
@@ -815,7 +760,7 @@ impl PageList {
             .collect::<Vec<SQLtuple>>();
 
         self.annotate_batch_results(
-            platform,
+            platform.state(),
             batches,
             0,
             1,
@@ -856,7 +801,7 @@ impl PageList {
             })
             .collect::<Vec<SQLtuple>>();
         self.entries.clear();
-        self.process_batch_results(platform, batches, &|row: my::Row| {
+        self.process_batch_results(platform.state(), batches, &|row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
         })?;
@@ -879,7 +824,7 @@ impl PageList {
 
         self.entries.clear();
         let api = platform.state().get_api_for_wiki(wiki.to_string())?;
-        self.process_batch_results(platform, batches, &|row: my::Row| {
+        self.process_batch_results(platform.state(), batches, &|row: my::Row| {
             let ips_site_page: String = my::from_row(row);
             Some(PageListEntry::new(Title::new_from_full(
                 &ips_site_page,

@@ -9,6 +9,7 @@ use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
 use rayon::prelude::*;
+use serde_json::Value;
 use std::sync::mpsc;
 use std::sync::mpsc::channel;
 use std::sync::Mutex;
@@ -80,6 +81,7 @@ pub struct Platform {
     output_redlinks: bool,
     query_time: Option<Duration>,
     wiki_by_source: HashMap<String, String>,
+    wdfist_result: Option<Value>,
 }
 
 impl Platform {
@@ -94,6 +96,7 @@ impl Platform {
             output_redlinks: false,
             query_time: None,
             wiki_by_source: HashMap::new(),
+            wdfist_result: None,
         }
     }
 
@@ -181,12 +184,20 @@ impl Platform {
         self.combination = self.get_combination(&available_sources);
         self.result = Some(self.combine_results(&mut results, &self.combination)?);
         self.post_process_result(&available_sources)?;
-        self.query_time = start_time.elapsed().ok();
 
         if self.has_param("wdf_main") {
-            let mut wdfist = WDfist::new(&self);
-            self.result = wdfist.run();
+            match WDfist::new(&self, &self.result) {
+                Some(mut wdfist) => {
+                    self.result = None; // Safe space
+                    self.wdfist_result = Some(wdfist.run()?);
+                }
+                None => {
+                    // TODO error
+                }
+            };
         }
+
+        self.query_time = start_time.elapsed().ok();
 
         Ok(())
     }
@@ -516,7 +527,7 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
         result.annotate_batch_results(
-            self,
+            self.state(),
             batches,
             0,
             1,
@@ -585,7 +596,7 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
             result.annotate_batch_results(
-                self,
+                self.state(),
                 batches,
                 0,
                 1,
@@ -611,7 +622,7 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
             result.annotate_batch_results(
-                self,
+                self.state(),
                 batches,
                 0,
                 1,
@@ -788,7 +799,7 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.annotate_batch_results(
-            self,
+            self.state(),
             batches,
             0,
             1,
@@ -858,7 +869,7 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries();
-        result.process_batch_results(self, batches, &|row: my::Row| {
+        result.process_batch_results(self.state(), batches, &|row: my::Row| {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
         })
@@ -948,7 +959,7 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries();
-        result.process_batch_results(self, batches, &|row: my::Row| {
+        result.process_batch_results(self.state(), batches, &|row: my::Row| {
             let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
             Some(PageListEntry::new(Title::new(&page_title, 0)))
         })?;
@@ -1039,7 +1050,7 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries();
-        result.process_batch_results(self, batches, &|row: my::Row| {
+        result.process_batch_results(self.state(), batches, &|row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
         })
@@ -1160,6 +1171,18 @@ impl Platform {
     }
 
     pub fn get_response(&self) -> Result<MyResponse, String> {
+        // Shortcut: WDFIST
+        match &self.wdfist_result {
+            Some(j) => {
+                return Ok(MyResponse {
+                    s: ::serde_json::to_string(&j)
+                        .expect("app_state::render_error can't stringify JSON"),
+                    content_type: ContentType::JSON,
+                })
+            }
+            None => {}
+        }
+
         let result = match &self.result {
             Some(result) => result,
             None => return Err(format!("Platform::get_response: No result")),
@@ -1609,7 +1632,7 @@ mod tests {
         check_results_for_psid(
             10225056,
             "wikidatawiki",
-            vec![Title::new("Q10995651", 0), Title::new("Q13520818", 0)],
+            vec![Title::new("Q13520818", 0), Title::new("Q10995651", 0)],
         );
     }
 

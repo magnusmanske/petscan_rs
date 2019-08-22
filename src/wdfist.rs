@@ -1,21 +1,177 @@
+use crate::app_state::AppState;
+use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 use crate::platform::*;
+use mediawiki::api::Api;
+use mediawiki::title::Title;
+use mysql as my;
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-pub struct WDfist {}
-
-impl WDfist {
-    pub fn new(_platform: &Platform) -> Self {
-        Self {}
-    }
-
-    pub fn run(&mut self) -> Option<PageList> {
-        None
-    }
-}
+pub static MIN_IGNORE_DB_FILE_COUNT: usize = 3;
 
 /*
 
-#define ITEM_BATCH_SIZE 10000
+class TWDFIST {
+public:
+    typedef map <string,int32_t> string2int32 ;
+    TWDFIST ( TPageList *pagelist , TPlatform *platform ) : pagelist(pagelist) , platform(platform) {} ;
+
+protected :
+
+    bool wdf_langlinks , wdf_coords , wdf_search_commons , wdf_commons_cats ;
+    bool wdf_only_items_without_p18 , wdf_only_files_not_on_wd , wdf_only_jpeg , wdf_max_five_results , wdf_only_page_images , wdf_allow_svg ;
+    map <string,uint8_t> files2ignore ;
+    map <string,string2int32 > q2image ;
+} ;
+*/
+
+pub struct WDfist {
+    item2files: HashMap<String, HashMap<String, usize>>,
+    items: Vec<Title>,
+    files2ignore: HashSet<String>, // Requires normailzed, valid filenames
+    form_parameters: Arc<FormParameters>,
+    state: Arc<AppState>,
+}
+
+impl WDfist {
+    pub fn new(platform: &Platform, result: &Option<PageList>) -> Option<Self> {
+        let items: Vec<Title> = match result {
+            Some(pagelist) => {
+                let mut pagelist = pagelist.clone();
+                pagelist.convert_to_wiki("wikidatawiki", platform).ok()?;
+                pagelist
+                    .entries
+                    .iter()
+                    .filter(|e| e.title().namespace_id() == 0)
+                    .map(|e| e.title().to_owned())
+                    .collect()
+            }
+            None => vec![],
+        };
+        Some(Self {
+            item2files: HashMap::new(),
+            items: items,
+            files2ignore: HashSet::new(),
+            form_parameters: platform.form_parameters().clone(),
+            state: platform.state(),
+        })
+    }
+
+    pub fn run(&mut self) -> Result<Value, String> {
+        let mut j = json!({"status":"OK","data":{}});
+        if self.items.is_empty() {
+            j["status"] = json!("No items from original query");
+            return Ok(j);
+        }
+        self.seed_ignore_files()?;
+        self.filter_items()?;
+        Ok(j)
+    }
+
+    fn bool_param(&self, key: &str) -> bool {
+        match self.form_parameters.params.get(key) {
+            Some(v) => !v.trim().is_empty(),
+            None => false,
+        }
+    }
+
+    fn seed_ignore_files(&mut self) -> Result<(), String> {
+        self.seed_ignore_files_from_wiki_page()?;
+        self.seed_ignore_files_from_ignore_database()?;
+        Ok(())
+    }
+
+    fn seed_ignore_files_from_wiki_page(&mut self) -> Result<(), String> {
+        let url_with_ignore_list =
+            "http://www.wikidata.org/w/index.php?title=User:Magnus_Manske/FIST_icons&action=raw";
+        let api = match Api::new("https://www.wikidata.org/w/api.php") {
+            Ok(api) => api,
+            Err(_e) => return Err(format!("Can't open Wikidata API")),
+        };
+        let wikitext = match api.query_raw(url_with_ignore_list, &HashMap::new(), "GET") {
+            Ok(t) => t,
+            Err(e) => {
+                return Err(format!(
+                    "Can't load ignore list from {} : {}",
+                    &url_with_ignore_list, e
+                ))
+            }
+        };
+        // TODO only rows starting with '*'?
+        wikitext.split("\n").for_each(|filename| {
+            let filename = filename.trim_start_matches(|c| c == ' ' || c == '*');
+            let filename = self.normalize_filename(&filename.to_string());
+            if self.is_valid_filename(&filename) {
+                self.files2ignore.insert(filename);
+            }
+        });
+        Ok(())
+    }
+
+    fn seed_ignore_files_from_ignore_database(&mut self) -> Result<(), String> {
+        let state = self.state.clone();
+        let tool_db_user_pass = match state.get_tool_db_user_pass().lock() {
+            Ok(x) => x,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
+        let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone())?;
+
+        let sql = format!("SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={}",MIN_IGNORE_DB_FILE_COUNT);
+        let result = match conn.prep_exec(sql, ()) {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(format!(
+                    "wdfist::seed_ignore_files_from_ignore_database: {:?}",
+                    e
+                ))
+            }
+        };
+
+        result
+            .filter_map(|row_result| row_result.ok())
+            .map(|row| my::from_row::<String>(row))
+            .for_each(|filename| {
+                let filename = self.normalize_filename(&filename.to_string());
+                if self.is_valid_filename(&filename) {
+                    self.files2ignore.insert(filename);
+                }
+            });
+
+        Ok(())
+    }
+
+    fn filter_items(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    // Requires normalized filename
+    fn is_valid_filename(&self, _filename: &String) -> bool {
+        true // TODO
+    }
+
+    // TODO remove pub
+    pub fn filter_files(&mut self) -> Result<(), String> {
+        //self.filter_files_from_ignore_database()?;
+        //self.filter_files_five_or_is_used()?;
+        self.remove_items_with_no_file_candidates()?;
+        Ok(())
+    }
+
+    fn remove_items_with_no_file_candidates(&mut self) -> Result<(), String> {
+        self.item2files.retain(|_item, files| !files.is_empty());
+        Ok(())
+    }
+
+    fn normalize_filename(&self, filename: &String) -> String {
+        filename.trim().replace(" ", "_")
+    }
+
+    //fn follow_commons_cats(&mut self) -> Result<(),String> {} // TODO
+}
+
+/*
 
 typedef pair <string,string> t_title_q ;
 
@@ -23,7 +179,7 @@ void TWDFIST::filterItems () {
     // Chunk item list
     vector <string> item_batches ;
     for ( uint64_t cnt = 0 ; cnt < items.size() ; cnt++ ) {
-        if ( cnt % ITEM_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
+        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
         if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
         item_batches[item_batches.size()-1] += "\"" + items[cnt] + "\"" ;
     }
@@ -47,22 +203,46 @@ void TWDFIST::filterItems () {
     items.swap ( new_items ) ;
 }
 
-void TWDFIST::filterFiles () {
-    filterFilesFromIgnoreDatabase () ;
-    filterFilesFiveOrIsUsed () ;
-    removeItemsWithNoFileCandidates () ;
+
+
+
+
+string TWDFIST::run () {
+
+    // Follow
+    wdf_langlinks = !(platform->getParam("wdf_langlinks","").empty()) ;
+    wdf_coords = !(platform->getParam("wdf_coords","").empty()) ;
+    wdf_search_commons = !(platform->getParam("wdf_search_commons","").empty()) ;
+    wdf_commons_cats = !(platform->getParam("wdf_commons_cats","").empty()) ;
+
+    // Options
+    wdf_only_items_without_p18 = !(platform->getParam("wdf_only_items_without_p18","").empty()) ;
+    wdf_only_files_not_on_wd = !(platform->getParam("wdf_only_files_not_on_wd","").empty()) ;
+    wdf_only_jpeg = !(platform->getParam("wdf_only_jpeg","").empty()) ;
+    wdf_max_five_results = !(platform->getParam("wdf_max_five_results","").empty()) ;
+    wdf_only_page_images = !(platform->getParam("wdf_only_page_images","").empty()) ;
+    wdf_allow_svg = !(platform->getParam("wdf_allow_svg","").empty()) ;
+
+    // Prepare
+    filterItems() ;
+    if ( items.size() == 0 ) {
+        j["status"] = "No items from original query" ;
+        return j.dump() ;
+    }
+
+    // Run followers
+    if ( wdf_langlinks ) followLanguageLinks() ;
+    if ( wdf_coords ) followCoordinates() ;
+    if ( wdf_search_commons ) followSearchCommons() ;
+    if ( wdf_commons_cats ) followCommonsCats() ;
+
+    filterFiles() ;
+
+    j["data"] = q2image ;
+    return j.dump() ;
 }
 
-void TWDFIST::removeItemsWithNoFileCandidates () {
-    // Remove items with no files
-    vector <string> remove_q ;
-    for ( auto qi:q2image ) {
-        if ( qi.second.empty() ) remove_q.push_back ( qi.first ) ;
-    }
-    for ( auto& q:remove_q ) {
-        q2image.erase ( q2image.find(q) ) ;
-    }
-}
+
 
 void TWDFIST::filterFilesFiveOrIsUsed () {
     map <string,uint8_t> remove_files ;
@@ -128,7 +308,7 @@ void TWDFIST::filterFilesFromIgnoreDatabase () {
     vector <string> item_batches ;
     uint64_t cnt = 0 ;
     for ( auto& qi:q2image ) {
-        if ( cnt % ITEM_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
+        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
         if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
         item_batches[item_batches.size()-1] += qi.first.substr(1) ;
         cnt++ ;
@@ -155,17 +335,6 @@ void TWDFIST::filterFilesFromIgnoreDatabase () {
     }
 }
 
-string TWDFIST::normalizeFilename ( string filename ) {
-    string ret = trim ( filename ) ;
-    replace ( ret.begin(), ret.end(), ' ', '_' ) ;
-    json o = ret ;
-    try { // HACK
-        string dummy = o.dump() ;
-    } catch ( ... ) {
-        ret = "" ;
-    }
-    return ret ;
-}
 
 bool TWDFIST::isValidFile ( string file ) { // Requires normalized filename
     if ( file.empty() ) return false ;
@@ -187,45 +356,10 @@ bool TWDFIST::isValidFile ( string file ) { // Requires normalized filename
     if ( file.find("Nuvola_") == 0 ) return false ;
     if ( file.find("Kit_") == 0 ) return false ;
 
-// 	if ( preg_match ( '/\bribbon.jpe{0,1}g/i' , $i ) ) // TODO
+//  if ( preg_match ( '/\bribbon.jpe{0,1}g/i' , $i ) ) // TODO
     if ( file.find("600px_") == 0 && type == "png" ) return false ;
 
     return true ;
-}
-
-void TWDFIST::seedIgnoreFilesFromWikiPage () {
-    // Load wiki list
-    string wikitext = loadTextfromURL ( "http://www.wikidata.org/w/index.php?title=User:Magnus_Manske/FIST_icons&action=raw" ) ;
-    vector <string> rows ;
-    split ( wikitext , rows , '\n' ) ;
-    for ( size_t row = 0 ; row < rows.size() ; row++ ) {
-        string file = rows[row] ;
-        while ( !file.empty() && (file[0]=='*'||file[0]==' ') ) file.erase ( file.begin() , file.begin()+1 ) ;
-        file = normalizeFilename ( trim ( file ) ) ;
-        if ( !isValidFile(file) ) continue ;
-        files2ignore[file] = 1 ;
-    }
-}
-
-void TWDFIST::seedIgnoreFilesFromIgnoreDatabase () {
-    // Load files that were ignored at least three times
-    TWikidataDB wdfist_db ;
-    wdfist_db.setHostDB ( "tools.labsdb" , "s51218__wdfist_p" , true ) ; // HARDCODED publicly readable
-    wdfist_db.doConnect ( true ) ;
-    string sql = "SELECT CONVERT(`file` USING utf8) FROM ignore_files GROUP BY file HAVING count(*)>=3" ;
-    MYSQL_RES *result = wdfist_db.getQueryResults ( sql ) ;
-    MYSQL_ROW row;
-    while ((row = mysql_fetch_row(result))) {
-        string file = normalizeFilename ( row[0] ) ;
-        if ( !isValidFile(file) ) continue ;
-        files2ignore[file] = 1 ;
-    }
-    mysql_free_result(result);
-}
-
-void TWDFIST::seedIgnoreFiles () {
-    seedIgnoreFilesFromWikiPage() ;
-    seedIgnoreFilesFromIgnoreDatabase() ;
 }
 
 void TWDFIST::addFileToQ ( string q , string file ) {
@@ -241,7 +375,7 @@ void TWDFIST::followLanguageLinks () {
     // Chunk item list
     vector <string> item_batches ;
     for ( uint64_t cnt = 0 ; cnt < items.size() ; cnt++ ) {
-        if ( cnt % ITEM_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
+        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
         if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
         item_batches[item_batches.size()-1] += "\"" + items[cnt] + "\"" ;
     }
@@ -320,7 +454,7 @@ void TWDFIST::followCoordinates () {
     // Chunk item list
     vector <string> item_batches ;
     for ( uint64_t cnt = 0 ; cnt < items.size() ; cnt++ ) {
-        if ( cnt % ITEM_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
+        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
         if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
         item_batches[item_batches.size()-1] += "\"" + items[cnt] + "\"" ;
     }
@@ -360,7 +494,7 @@ void TWDFIST::followSearchCommons () {
     // Chunk item list
     vector <string> item_batches ;
     for ( uint64_t cnt = 0 ; cnt < items.size() ; cnt++ ) {
-        if ( cnt % ITEM_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
+        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
         if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
         item_batches[item_batches.size()-1] += "\"" + items[cnt] + "\"" ;
     }
@@ -394,60 +528,5 @@ void TWDFIST::followSearchCommons () {
     }
 }
 
-void TWDFIST::followCommonsCats () {} // TODO
 
-string TWDFIST::run () {
-    // Init JSON output
-    json j ;
-    j["status"] = "OK" ;
-    j["data"] = json::object() ;
-
-    platform->content_type = "application/json; charset=utf-8" ; // Output is always JSON
-    pagelist->convertToWiki ( "wikidatawiki" ) ; // Making sure
-
-    // Convert pagelist into item list, then save space by clearing pagelist
-    items.reserve ( pagelist->size() ) ;
-    for ( auto& i:pagelist->pages ) {
-        if ( i.meta.ns != 0 ) continue ;
-        items.push_back ( i.getNameWithoutNamespace() ) ;
-    }
-    pagelist->clear() ;
-    if ( items.empty() ) { // No items
-        j["status"] = "No items from original query" ;
-        return j.dump() ;
-    }
-
-    // Follow
-    wdf_langlinks = !(platform->getParam("wdf_langlinks","").empty()) ;
-    wdf_coords = !(platform->getParam("wdf_coords","").empty()) ;
-    wdf_search_commons = !(platform->getParam("wdf_search_commons","").empty()) ;
-    wdf_commons_cats = !(platform->getParam("wdf_commons_cats","").empty()) ;
-
-    // Options
-    wdf_only_items_without_p18 = !(platform->getParam("wdf_only_items_without_p18","").empty()) ;
-    wdf_only_files_not_on_wd = !(platform->getParam("wdf_only_files_not_on_wd","").empty()) ;
-    wdf_only_jpeg = !(platform->getParam("wdf_only_jpeg","").empty()) ;
-    wdf_max_five_results = !(platform->getParam("wdf_max_five_results","").empty()) ;
-    wdf_only_page_images = !(platform->getParam("wdf_only_page_images","").empty()) ;
-    wdf_allow_svg = !(platform->getParam("wdf_allow_svg","").empty()) ;
-
-    // Prepare
-    seedIgnoreFiles() ;
-    filterItems() ;
-    if ( items.size() == 0 ) {
-        j["status"] = "No items from original query" ;
-        return j.dump() ;
-    }
-
-    // Run followers
-    if ( wdf_langlinks ) followLanguageLinks() ;
-    if ( wdf_coords ) followCoordinates() ;
-    if ( wdf_search_commons ) followSearchCommons() ;
-    if ( wdf_commons_cats ) followCommonsCats() ;
-
-    filterFiles() ;
-
-    j["data"] = q2image ;
-    return j.dump() ;
-}
 */

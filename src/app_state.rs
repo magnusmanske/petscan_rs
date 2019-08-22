@@ -355,6 +355,10 @@ impl AppState {
         }
     }
 
+    pub fn get_tool_db_user_pass(&self) -> &Arc<Mutex<DbUserPass>> {
+        &self.tool_db_mutex
+    }
+
     pub fn get_query_from_psid(&self, psid: &String) -> Result<String, String> {
         let tool_db_user_pass = match self.tool_db_mutex.lock() {
             Ok(x) => x,
