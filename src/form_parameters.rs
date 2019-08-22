@@ -23,7 +23,8 @@ impl FormParameters {
     /// Extracts namespaces from parameter list
     fn ns_from_params(params: &HashMap<String, String>) -> HashSet<usize> {
         lazy_static! {
-            static ref RE: Regex = Regex::new(r#"^ns\[(\d+)\]$"#).unwrap();
+            static ref RE: Regex =
+                Regex::new(r#"^ns\[(\d+)\]$"#).expect("FormParameters::ns_from_params:RE");
         }
         let mut ns: HashSet<usize> = HashSet::new();
         params
@@ -67,7 +68,12 @@ impl FormParameters {
     pub fn rebase(&mut self, base: &FormParameters) {
         base.params.iter().for_each(|(k, v)| {
             if self.params.contains_key(k) {
-                if self.params.get(k).unwrap().is_empty() {
+                if self
+                    .params
+                    .get(k)
+                    .expect("FormParameters::rebase")
+                    .is_empty()
+                {
                     self.params.insert(k.to_string(), v.to_string());
                 }
             } else {
@@ -101,7 +107,11 @@ impl FormParameters {
             return;
         }
         if !self.has_param(key_primary) || self.params.get(key_primary) == Some(&"".to_string()) {
-            let value = self.params.get(key_fallback).unwrap().to_owned();
+            let value = self
+                .params
+                .get(key_fallback)
+                .expect("FormParameters::fallback")
+                .to_owned();
             self.set_param(key_primary, &value);
         }
     }

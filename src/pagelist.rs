@@ -297,7 +297,7 @@ impl PageListEntry {
     ) -> Ordering {
         self.compare_order(
             match (mine, other) {
-                (Some(a), Some(b)) => a.partial_cmp(&b).unwrap(),
+                (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(Ordering::Less),
                 (Some(_), None) => Ordering::Less,
                 (None, Some(_)) => Ordering::Greater,
                 (None, None) => Ordering::Equal,
@@ -318,7 +318,7 @@ impl PageListEntry {
                 self.title
                     .namespace_id()
                     .partial_cmp(&other.title.namespace_id())
-                    .unwrap(),
+                    .unwrap_or(Ordering::Less),
                 descending,
             )
         }
@@ -329,7 +329,7 @@ impl PageListEntry {
             self.title
                 .pretty()
                 .partial_cmp(other.title.pretty())
-                .unwrap(),
+                .unwrap_or(Ordering::Less),
             descending,
         )
     }
@@ -391,9 +391,12 @@ impl PageList {
             if !ret.contains_key(&entry.title.namespace_id()) {
                 ret.insert(entry.title.namespace_id(), vec![]);
             }
-            ret.get_mut(&entry.title.namespace_id())
-                .unwrap()
-                .push(entry.title.with_underscores().to_string());
+            match ret.get_mut(&entry.title.namespace_id()) {
+                Some(x) => {
+                    x.push(entry.title.with_underscores().to_string());
+                }
+                None => {}
+            }
         });
         ret
     }
@@ -448,8 +451,13 @@ impl PageList {
                         None => {
                             return Err(format!(
                                 "PageList::check_before_merging wikis are not identical: {}/{}",
-                                &self.wiki.as_ref().unwrap(),
-                                &pagelist.wiki.unwrap()
+                                &self
+                                    .wiki
+                                    .as_ref()
+                                    .unwrap_or(&"PageList::check_before_merging:1".to_string()),
+                                &pagelist
+                                    .wiki
+                                    .unwrap_or("PageList::check_before_merging:2".to_string())
                             ))
                         }
                     }
@@ -553,11 +561,37 @@ impl PageList {
         batches.par_iter().for_each(|sql| {
             // Get DB connection
             let state = platform.state();
-            let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-            let mut conn = platform
+            let db_user_pass = match state.get_db_mutex().lock() {
+                Ok(db) => db,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(format!(
+                        "PageList::process_batch_results: Bad mutex: {:?}",
+                        e
+                    ));
+                    return;
+                }
+            };
+            let wiki = match self.wiki.as_ref() {
+                Some(wiki) => wiki,
+                None => {
+                    *error.lock().unwrap() =
+                        Some(format!("PageList::process_batch_results: No wiki"));
+                    return;
+                }
+            };
+            let mut conn = match platform
                 .state()
-                .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
-                .unwrap();
+                .get_wiki_db_connection(&db_user_pass, &wiki)
+            {
+                Ok(conn) => conn,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(format!(
+                        "PageList::process_batch_results: Can't get wiki db connection: {:?}",
+                        e
+                    ));
+                    return;
+                }
+            };
 
             // Run query
             let result = match conn.prep_exec(&sql.0, &sql.1) {
@@ -582,13 +616,15 @@ impl PageList {
         }
 
         // Rows to entries
-        rows.lock()
-            .unwrap()
-            .iter()
-            .for_each(|row| match f(row.to_owned()) {
-                Some(entry) => self.add_entry(entry),
-                None => {}
-            });
+        match rows.lock() {
+            Ok(rows) => {
+                rows.iter().for_each(|row| match f(row.to_owned()) {
+                    Some(entry) => self.add_entry(entry),
+                    None => {}
+                });
+            }
+            Err(e) => return Err(e.to_string()),
+        }
         Ok(())
     }
 
@@ -609,11 +645,37 @@ impl PageList {
         batches.par_iter().for_each(|sql| {
             // Get DB connection
             let state = platform.state();
-            let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-            let mut conn = platform
+            let db_user_pass = match state.get_db_mutex().lock() {
+                Ok(db) => db,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(format!(
+                        "PageList::annotate_batch_results: Bad mutex: {:?}",
+                        e
+                    ));
+                    return;
+                }
+            };
+            let wiki = match self.wiki.as_ref() {
+                Some(wiki) => wiki,
+                None => {
+                    *error.lock().unwrap() =
+                        Some(format!("PageList::annotate_batch_results: No wiki"));
+                    return;
+                }
+            };
+            let mut conn = match platform
                 .state()
-                .get_wiki_db_connection(&db_user_pass, &self.wiki.as_ref().unwrap())
-                .unwrap();
+                .get_wiki_db_connection(&db_user_pass, &wiki)
+            {
+                Ok(conn) => conn,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(format!(
+                        "PageList::annotate_batch_results: Can't get wiki db connection: {:?}",
+                        e
+                    ));
+                    return;
+                }
+            };
 
             // Run query
             let result = match conn.prep_exec(&sql.0, &sql.1) {
@@ -632,37 +694,48 @@ impl PageList {
         });
 
         // Check error
-        match &*error.lock().unwrap() {
-            Some(e) => return Err(e.to_string()),
-            None => {}
+        match error.lock() {
+            Ok(error) => match &*error {
+                Some(e) => return Err(e.to_string()),
+                None => {}
+            },
+            Err(e) => return Err(e.to_string()),
         }
 
         // Rows to entries
-        rows.lock().unwrap().iter().for_each(|row| {
-            let page_title = match row.get(col_title) {
-                Some(title) => match title {
-                    my::Value::Bytes(uv) => String::from_utf8(uv).unwrap(),
-                    _ => return,
-                },
-                None => return,
-            };
-            let namespace_id = match row.get(col_ns) {
-                Some(title) => match title {
-                    my::Value::Int(i) => i,
-                    _ => return,
-                },
-                None => return,
-            };
+        match rows.lock() {
+            Ok(rows) => {
+                rows.iter().for_each(|row| {
+                    let page_title = match row.get(col_title) {
+                        Some(title) => match title {
+                            my::Value::Bytes(uv) => match String::from_utf8(uv) {
+                                Ok(s) => s,
+                                Err(_) => return,
+                            },
+                            _ => return,
+                        },
+                        None => return,
+                    };
+                    let namespace_id = match row.get(col_ns) {
+                        Some(title) => match title {
+                            my::Value::Int(i) => i,
+                            _ => return,
+                        },
+                        None => return,
+                    };
 
-            let tmp_entry = PageListEntry::new(Title::new(&page_title, namespace_id));
-            let mut entry = match self.entries.get(&tmp_entry) {
-                Some(e) => (*e).clone(),
-                None => return,
-            };
+                    let tmp_entry = PageListEntry::new(Title::new(&page_title, namespace_id));
+                    let mut entry = match self.entries.get(&tmp_entry) {
+                        Some(e) => (*e).clone(),
+                        None => return,
+                    };
 
-            f(row.clone(), &mut entry);
-            self.add_entry(entry);
-        });
+                    f(row.clone(), &mut entry);
+                    self.add_entry(entry);
+                });
+            }
+            Err(e) => return Err(e.to_string()),
+        };
         Ok(())
     }
 
@@ -759,8 +832,6 @@ impl PageList {
     }
 
     pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
-        //println!("Converting {} to {}", &self.wiki.as_ref().unwrap(), &wiki);
-
         // Already that wiki?
         if self.wiki == None || self.wiki == Some(wiki.to_string()) {
             return Ok(());

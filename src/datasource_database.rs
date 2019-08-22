@@ -168,13 +168,13 @@ impl SourceDatabase {
                 };
                 let depth = match parts.next() {
                     Some(depth) => {
-                        let depth_signed = depth.parse::<i32>().ok()? ;
+                        let depth_signed = depth.parse::<i32>().ok()?;
                         if depth_signed < 0 {
                             999
                         } else {
                             depth_signed as u16
                         }
-                    },
+                    }
                     None => default_depth,
                 };
                 Some(SourceDatabaseCatDepth {
@@ -411,7 +411,10 @@ impl SourceDatabase {
             Some(wiki) => wiki.to_owned(),
             None => return Err(format!("SourceDatabase::get_pages: No wiki in params")),
         };
-        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let db_user_pass = match state.get_db_mutex().lock() {
+            Ok(db) => db,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
         let mut ret = PageList::new_from_wiki(&wiki);
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
         self.get_talk_namespace_ids(&mut conn);
@@ -858,14 +861,13 @@ impl SourceDatabase {
             }
         }
 
-        let wiki = match &self.params.wiki {
-            Some(wiki) => wiki,
-            None => {
-                return Err(format!(
+        let wiki =
+            match &self.params.wiki {
+                Some(wiki) => wiki,
+                None => return Err(format!(
                     "SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params"
-                ))
-            }
-        };
+                )),
+            };
 
         //println!("\nSQL:{:?}", &sql);
         let result = match conn.prep_exec(sql.0.to_owned(), sql.1.to_owned()) {

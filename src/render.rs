@@ -973,10 +973,9 @@ impl Render for RenderJSON {
             ::serde_json::to_string(&value)
         };
         match output {
-            Ok(_) => {}
+            Ok(o) => out += &o,
             Err(e) => return Err(format!("JSON encoding failed: {:?}", e)),
         };
-        out += &output.unwrap(); // Known to be OK
 
         if !params.json_callback.is_empty() {
             out += ")";

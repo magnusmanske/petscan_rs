@@ -301,7 +301,10 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
         let state = self.state();
-        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let db_user_pass = match state.get_db_mutex().lock() {
+            Ok(db) => db,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
         let mut conn = self
             .state
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
@@ -363,7 +366,10 @@ impl Platform {
             Some(wiki) => wiki.to_owned(),
             None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
         };
-        let db_user_pass = self.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let db_user_pass = match self.state.get_db_mutex().lock() {
+            Ok(db) => db,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
         let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki)?;
 
         let mut error: Option<String> = None;
@@ -435,7 +441,10 @@ impl Platform {
                 Some(wiki) => wiki.to_owned(),
                 None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
             };
-            let db_user_pass = self.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+            let db_user_pass = match self.state.get_db_mutex().lock() {
+                Ok(db) => db,
+                Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+            };
             let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki)?;
 
             let mut error: Option<String> = None;
@@ -695,17 +704,26 @@ impl Platform {
 
         batches.par_iter().for_each(|sql| {
             // Get DB connection
-            let db_user_pass = self.state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
-            let mut conn = self
-                .state
-                .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())
-                .unwrap();
+            let db_user_pass = match self.state.get_db_mutex().lock() {
+                Ok(db) => db,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(format!("Bad mutex: {:?}", e));
+                    return;
+                }
+            };
+            let mut conn = match self.state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string()) {
+                Ok(conn) => conn,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(format!("Bad mutex: {:?}", e));
+                    return;
+                }
+            };
 
             // Run query
             let result = match conn.prep_exec(&sql.0, &sql.1) {
                 Ok(r) => r,
                 Err(e) => {
-                    *error.lock().unwrap() = Some(format!("ERROR: {:?}", e));
+                    *error.lock().unwrap() = Some(format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e));
                     return;
                 }
             };
@@ -727,7 +745,10 @@ impl Platform {
         rows.lock().unwrap().iter().for_each(|row| {
             let full_page_title = match row.get(0) {
                 Some(title) => match title {
-                    my::Value::Bytes(uv) => String::from_utf8(uv).unwrap(),
+                    my::Value::Bytes(uv) => match String::from_utf8(uv) {
+                        Ok(s) => s,
+                        Err(_) => return,
+                    },
                     _ => return,
                 },
                 None => return,
@@ -1034,6 +1055,10 @@ impl Platform {
         }
     }
 
+    fn usize_option_from_param(&self, key: &str) -> Option<usize> {
+        self.get_param(key)?.parse::<usize>().ok()
+    }
+
     pub fn db_params(&self) -> SourceDatabaseParameters {
         let depth_signed: i32 = self
             .get_param("depth")
@@ -1092,18 +1117,10 @@ impl Platform {
                 .get_param("ores_prob_to")
                 .map(|x| x.parse::<f32>().unwrap_or(1.0)),
             redirects: self.get_param_blank("show_redirects"),
-            minlinks: self
-                .get_param("minlinks")
-                .map(|i| i.parse::<usize>().unwrap()), // TODO
-            maxlinks: self
-                .get_param("maxlinks")
-                .map(|i| i.parse::<usize>().unwrap()), // TODO
-            larger: self
-                .get_param("larger")
-                .map(|i| i.parse::<usize>().unwrap()), // TODO
-            smaller: self
-                .get_param("smaller")
-                .map(|i| i.parse::<usize>().unwrap()), // TODO
+            minlinks: self.usize_option_from_param("minlinks"),
+            maxlinks: self.usize_option_from_param("maxlinks"),
+            larger: self.usize_option_from_param("larger"),
+            smaller: self.usize_option_from_param("smaller"),
             wiki: self.get_main_wiki(),
             namespace_ids: self
                 .form_parameters
@@ -1592,7 +1609,7 @@ mod tests {
         check_results_for_psid(
             10225056,
             "wikidatawiki",
-            vec![Title::new("Q13520818", 0), Title::new("Q10995651", 0)],
+            vec![Title::new("Q10995651", 0), Title::new("Q13520818", 0)],
         );
     }
 

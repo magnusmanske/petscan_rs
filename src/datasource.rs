@@ -44,7 +44,10 @@ impl DataSource for SourceLabels {
 
     fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let state = platform.state();
-        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let db_user_pass = match state.get_db_mutex().lock() {
+            Ok(db) => db,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
         let sql = platform.get_label_sql();
         let mut conn = platform
             .state()
@@ -96,7 +99,10 @@ impl DataSource for SourceWikidata {
         }
 
         let state = platform.state();
-        let db_user_pass = state.get_db_mutex().lock().unwrap(); // Force DB connection placeholder
+        let db_user_pass = match state.get_db_mutex().lock() {
+            Ok(db) => db,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
         let mut conn = platform
             .state()
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
@@ -119,13 +125,18 @@ impl DataSource for SourceWikidata {
             Err(e) => return Err(format!("{:?}", e)),
         };
         for row in result {
-            let ips_item_id: usize = my::from_row(row.unwrap());
-            let term_full_entity_id = format!("Q{}", ips_item_id);
-            match Platform::entry_from_entity(&term_full_entity_id) {
-                Some(entry) => {
-                    ret.add_entry(entry);
+            match row {
+                Ok(row_inner) => {
+                    let ips_item_id: usize = my::from_row(row_inner);
+                    let term_full_entity_id = format!("Q{}", ips_item_id);
+                    match Platform::entry_from_entity(&term_full_entity_id) {
+                        Some(entry) => {
+                            ret.add_entry(entry);
+                        }
+                        None => {}
+                    }
                 }
-                None => {}
+                Err(_) => {}
             }
         }
 

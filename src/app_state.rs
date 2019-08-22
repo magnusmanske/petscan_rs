@@ -356,7 +356,10 @@ impl AppState {
     }
 
     pub fn get_query_from_psid(&self, psid: &String) -> Result<String, String> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder; unwrap safe
+        let tool_db_user_pass = match self.tool_db_mutex.lock() {
+            Ok(x) => x,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
         let psid = match psid.parse::<usize>() {
@@ -384,7 +387,10 @@ impl AppState {
     }
 
     pub fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().unwrap(); // Force DB connection placeholder; unwrap safe
+        let tool_db_user_pass = match self.tool_db_mutex.lock() {
+            Ok(x) => x,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
         // Check for existing entry
