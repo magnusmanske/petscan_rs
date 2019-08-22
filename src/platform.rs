@@ -1092,7 +1092,7 @@ impl Platform {
                 }
                 None => "subset".to_string(),
             },
-            only_new_since: self.has_param("only_new_since"),
+            only_new_since: self.has_param("only_new"),
             max_age: self
                 .get_param("max_age")
                 .map(|x| x.parse::<i64>().unwrap_or(0)),
