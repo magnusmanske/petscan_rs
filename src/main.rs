@@ -65,20 +65,22 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
     }
 
     // "psid" parameter? Load, and patch in, existing query
-    if form_parameters.params.contains_key("psid") {
-        let psid = form_parameters.params.get("psid").unwrap().to_string();
-        if !psid.is_empty() {
-            match state.get_query_from_psid(&psid) {
-                Ok(psid_query) => {
-                    let psid_params = match FormParameters::outcome_from_query(&psid_query) {
-                        Ok(pp) => pp,
-                        Err(e) => return state.render_error(e, &form_parameters),
-                    };
-                    form_parameters.rebase(&psid_params);
+    match form_parameters.params.get("psid") {
+        Some(psid) => {
+            if !psid.trim().is_empty() {
+                match state.get_query_from_psid(&psid.to_string()) {
+                    Ok(psid_query) => {
+                        let psid_params = match FormParameters::outcome_from_query(&psid_query) {
+                            Ok(pp) => pp,
+                            Err(e) => return state.render_error(e, &form_parameters),
+                        };
+                        form_parameters.rebase(&psid_params);
+                    }
+                    Err(e) => return state.render_error(e, &form_parameters),
                 }
-                Err(e) => return state.render_error(e, &form_parameters),
             }
         }
+        None => {}
     }
 
     // No "doit" parameter, just display the HTML form with the current query
@@ -139,7 +141,7 @@ fn main() {
     let basedir = env::current_dir()
         .expect("Can't get CWD")
         .to_str()
-        .unwrap()
+        .expect("Can't convert CWD to_str")
         .to_string();
     let path = basedir.to_owned() + "/config.json";
     let file = File::open(&path).expect(format!("Can not open config file at {}", &path).as_str());
@@ -156,7 +158,7 @@ fn main() {
         .log_level(rocket::config::LoggingLevel::Normal) // Critical
         .port(petscan_config["http_port"].as_u64().unwrap_or(80) as u16)
         .finalize()
-        .unwrap();
+        .expect("Can't finalize rocket_config");
 
     rocket::custom(rocket_config)
         .manage(AppState::new_from_config(&petscan_config))

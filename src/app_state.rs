@@ -142,9 +142,21 @@ impl AppState {
 
     /// Returns a random mutex. The mutex value itself contains a user name and password for DB login!
     pub fn get_db_mutex(&self) -> &Arc<Mutex<DbUserPass>> {
-        // TODO make sure mutex is available
-        // TODO make sure mutex is not poisoned
-        &self.db_pool.choose(&mut rand::thread_rng()).unwrap() // Safe?
+        loop {
+            let ret = match self.db_pool.choose(&mut rand::thread_rng()) {
+                Some(db) => db,
+                None => continue,
+            };
+            // make sure mutex is not poisoned
+            if ret.is_poisoned() {
+                continue;
+            }
+            // make sure mutex is available
+            match ret.try_lock() {
+                Ok(_) => return &ret,
+                _ => continue,
+            }
+        }
     }
 
     pub fn get_wiki_db_connection(
@@ -206,9 +218,9 @@ impl AppState {
             Some("json") => {
                 let value = json!({ "error": error });
                 MyResponse {
-                    s: ::serde_json::to_string(&value).unwrap(),
-                    content_type: ContentType::parse_flexible("application/json; charset=utf-8")
-                        .unwrap(),
+                    s: ::serde_json::to_string(&value)
+                        .expect("app_state::render_error can't stringify JSON"),
+                    content_type: ContentType::JSON,
                 }
             }
             _ => MyResponse {
