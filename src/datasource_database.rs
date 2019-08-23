@@ -612,6 +612,7 @@ impl SourceDatabase {
 
                 let nslist = primary_pagelist.group_by_namespace();
                 nslist.iter().for_each(|nsgroup| {
+                    println!("NS{}: {}", nsgroup.0, nsgroup.1.len());
                     sql.0 += " OR (p.page_namespace=";
                     sql.0 += &nsgroup.0.to_string();
                     sql.0 += " AND p.page_title IN (";
@@ -653,6 +654,7 @@ impl SourceDatabase {
         is_before_after_done: &mut bool,
         api: Api,
     ) -> Result<(), String> {
+        /*
         // Namespaces
         if !self.params.namespace_ids.is_empty() {
             sql.0 += " AND p.page_namespace IN(";
@@ -872,7 +874,7 @@ impl SourceDatabase {
                 Platform::append_sql(sql, &mut h);
             }
         }
-
+        */
         let wiki =
             match &self.params.wiki {
                 Some(wiki) => wiki,
@@ -881,14 +883,12 @@ impl SourceDatabase {
                 )),
             };
 
-        //println!("\nSQL:{:?}", &sql);
         let result = match conn.prep_exec(sql.0.to_owned(), sql.1.to_owned()) {
             Ok(r) => r,
             Err(e) => {
                 return Err(format!("{:?}", &e));
             }
         };
-        //println!("SQL done");
 
         let entries_tmp = result
             .filter_map(|row_result| row_result.ok())

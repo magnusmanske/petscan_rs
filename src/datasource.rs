@@ -180,11 +180,11 @@ impl DataSource for SourcePagePile {
         let text = match api.query_raw("https://tools.wmflabs.org/pagepile/api.php", &params, "GET")
         {
             Ok(text) => text,
-            Err(e) => return Err(format!("{:?}", e)),
+            Err(e) => return Err(format!("PagePile: {:?}", e)),
         };
         let v: Value = match serde_json::from_str(&text) {
             Ok(v) => v,
-            Err(e) => return Err(format!("{:?}", e)),
+            Err(e) => return Err(format!("PagePile: {:?}", e)),
         };
         let wiki = v["wiki"]
             .as_str()
@@ -337,7 +337,7 @@ impl DataSource for SourceSparql {
         };
         let result = match api.sparql_query(sparql.as_str()) {
             Ok(result) => result,
-            Err(e) => return Err(format!("{:?}", e)),
+            Err(e) => return Err(format!("SPARQL: {:?}", e)),
         };
         let first_var = result["head"]["vars"][0]
             .as_str()
