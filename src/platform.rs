@@ -214,50 +214,35 @@ impl Platform {
             Some(res) => res.to_owned(),
             None => return Ok(()),
         };
-        println!("1");
 
         // Filter and post-process
         self.filter_wikidata(&mut result)?;
-        println!("2");
         self.process_sitelinks(&mut result)?;
-        println!("3");
         if *available_sources != vec!["labels".to_string()] {
             self.process_labels(&mut result)?;
         }
-        println!("4");
 
         self.convert_to_common_wiki(&mut result)?;
-        println!("5");
 
         if !available_sources.contains(&"categories".to_string()) {
             self.process_missing_database_filters(&mut result)?;
         }
-        println!("6");
         self.process_by_wikidata_item(&mut result)?;
-        println!("7");
         self.process_files(&mut result)?;
-        println!("8");
         self.process_pages(&mut result)?;
-        println!("9");
         self.process_subpages(&mut result)?;
-        println!("10");
 
         let wikidata_label_language = self.get_param_default(
             "wikidata_label_language",
             &self.get_param_default("interface_language", "en"),
         );
-        println!("11");
         result.load_missing_metadata(Some(wikidata_label_language), &self)?;
-        println!("12");
         match self.get_param("regexp_filter") {
             Some(regexp) => result.regexp_filter(&regexp),
             None => {}
         }
-        println!("13");
         self.process_redlinks(&mut result)?;
-        println!("14");
         self.process_creator(&mut result)?;
-        println!("15");
 
         // DONE
         self.result = Some(result);

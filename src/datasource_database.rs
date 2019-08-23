@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::DataSource;
 use crate::datasource::SQLtuple;
 use crate::pagelist::*;
-use crate::platform::Platform;
+use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use chrono::prelude::*;
 use chrono::Duration;
 use core::ops::Sub;
@@ -601,6 +601,54 @@ impl SourceDatabase {
                     return Ok(ret);
                 }
 
+                let nslist = primary_pagelist.group_by_namespace();
+                let mut batches: Vec<SQLtuple> = vec![];
+                nslist.iter().for_each(|nsgroup| {
+                    nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
+                        let titles = titles.to_vec();
+                        let mut sql = Platform::sql_tuple();
+                        sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len ".to_string() ;
+                        sql.0 += link_count_sql;
+                        sql.0 += " FROM page p";
+                        if !is_before_after_done {
+                            is_before_after_done = true;
+                            Platform::append_sql(&mut sql, &mut sql_before_after);
+                        }
+                        sql.0 += " WHERE (0=1)";
+                        sql.0 += " OR (p.page_namespace=";
+                        sql.0 += &nsgroup.0.to_string();
+                        sql.0 += " AND p.page_title IN (";
+                        Platform::append_sql(&mut sql, &mut Platform::prep_quote(&titles));
+                        sql.0 += "))";
+                        batches.push(sql);
+                    });
+                });
+
+                let wiki = match &primary_pagelist.wiki() {
+                    Some(wiki) => wiki,
+                    None => return Err(format!("No wiki 12345")),
+                };
+
+                for mut sql in &mut batches {
+                    let mut pl2 = PageList::new_from_wiki(&wiki.clone());
+                    self.get_pages_for_primary(
+                        &mut conn,
+                        &primary.to_string(),
+                        &mut sql,
+                        &mut sql_before_after,
+                        &mut pl2,
+                        &mut is_before_after_done,
+                        state.get_api_for_wiki(wiki.clone())?,
+                    )?;
+                    if ret.is_empty() {
+                        ret.swap_entries(&mut pl2);
+                    } else {
+                        ret.union(Some(pl2), None)?;
+                    }
+                }
+                return Ok(ret);
+
+                /*
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len ".to_string() ;
                 sql.0 += link_count_sql;
                 sql.0 += " FROM page p";
@@ -619,6 +667,7 @@ impl SourceDatabase {
                     Platform::append_sql(&mut sql, &mut Platform::prep_quote(nsgroup.1));
                     sql.0 += "))";
                 });
+                */
             }
             other => {
                 return Err(format!(
@@ -654,7 +703,6 @@ impl SourceDatabase {
         is_before_after_done: &mut bool,
         api: Api,
     ) -> Result<(), String> {
-        /*
         // Namespaces
         if !self.params.namespace_ids.is_empty() {
             sql.0 += " AND p.page_namespace IN(";
@@ -874,7 +922,7 @@ impl SourceDatabase {
                 Platform::append_sql(sql, &mut h);
             }
         }
-        */
+
         let wiki =
             match &self.params.wiki {
                 Some(wiki) => wiki,
