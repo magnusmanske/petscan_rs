@@ -1183,11 +1183,9 @@ impl Platform {
         // Shortcut: WDFIST
         match &self.wdfist_result {
             Some(j) => {
-                return Ok(MyResponse {
-                    s: ::serde_json::to_string(&j)
-                        .expect("app_state::render_error can't stringify WDfist JSON"),
-                    content_type: ContentType::JSON,
-                })
+                return Ok(self
+                    .state
+                    .output_json(j, self.form_parameters.params.get("callback")));
             }
             None => {}
         }

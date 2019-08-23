@@ -395,7 +395,6 @@ impl PageList {
     }
 
     pub fn set_wiki(&mut self, wiki: &Option<String>) {
-        println!("NEW WIKI: {:?}", wiki);
         self.wiki = wiki.to_owned();
     }
 

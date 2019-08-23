@@ -191,9 +191,9 @@ impl SourceDatabase {
         tmp: &mut HashSet<String>,
         cats: &Vec<String>,
         depth: u16,
-    ) {
+    ) -> Result<(), String> {
         if depth == 0 || cats.is_empty() {
-            return;
+            return Ok(());
         }
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         cats.iter().for_each(|c| {
@@ -206,10 +206,7 @@ impl SourceDatabase {
         let mut new_cats: Vec<String> = vec![];
         let result = match conn.prep_exec(sql.0, sql.1) {
             Ok(r) => r,
-            Err(e) => {
-                println!("ERROR: {:?}", e);
-                return;
-            }
+            Err(e) => return Err(format!("datasource_database::go_depth: {:?}", e)),
         };
         result
             .filter_map(|row_result| row_result.ok())
@@ -220,7 +217,8 @@ impl SourceDatabase {
                     tmp.insert(page_title);
                 }
             });
-        self.go_depth(conn, tmp, &new_cats, depth - 1);
+        self.go_depth(conn, tmp, &new_cats, depth - 1)?;
+        Ok(())
     }
 
     fn get_categories_in_tree(
@@ -228,24 +226,38 @@ impl SourceDatabase {
         conn: &mut my::Conn,
         title: &String,
         depth: u16,
-    ) -> Vec<String> {
+    ) -> Result<Vec<String>, String> {
         let mut tmp: HashSet<String> = HashSet::new();
         let title = Title::spaces_to_underscores(&Title::first_letter_uppercase(title));
         tmp.insert(title.to_owned());
-        self.go_depth(conn, &mut tmp, &vec![title], depth);
-        tmp.par_iter().cloned().collect::<Vec<String>>()
+        self.go_depth(conn, &mut tmp, &vec![title], depth)?;
+        Ok(tmp.par_iter().cloned().collect::<Vec<String>>())
     }
 
     pub fn parse_category_list(
         &self,
         conn: &mut my::Conn,
         input: &Vec<SourceDatabaseCatDepth>,
-    ) -> Vec<Vec<String>> {
-        input
+    ) -> Result<Vec<Vec<String>>, String> {
+        let mut error: Option<String> = None;
+        let ret = input
             .iter()
-            .map(|i| self.get_categories_in_tree(conn, &i.name, i.depth))
+            .filter_map(
+                |i| match self.get_categories_in_tree(conn, &i.name, i.depth) {
+                    Ok(res) => Some(res),
+                    Err(e) => {
+                        error = Some(e.to_string());
+                        None
+                    }
+                },
+            )
             .filter(|x| !x.is_empty())
-            .collect()
+            .collect();
+
+        match error {
+            Some(e) => Err(e),
+            None => Ok(ret),
+        }
     }
 
     fn get_talk_namespace_ids(&mut self, conn: &mut my::Conn) {
@@ -422,11 +434,11 @@ impl SourceDatabase {
         self.cat_pos = self.parse_category_list(
             &mut conn,
             &self.parse_category_depth(&self.params.cat_pos, self.params.depth),
-        );
+        )?;
         self.cat_neg = self.parse_category_list(
             &mut conn,
             &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
-        );
+        )?;
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();

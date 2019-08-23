@@ -217,15 +217,33 @@ impl AppState {
             }
             Some("json") => {
                 let value = json!({ "error": error });
-                MyResponse {
-                    s: ::serde_json::to_string(&value)
-                        .expect("app_state::render_error can't stringify JSON"),
-                    content_type: ContentType::JSON,
-                }
+                self.output_json(&value, form_parameters.params.get("callback"))
             }
             _ => MyResponse {
                 s: error.to_string(),
                 content_type: ContentType::Plain,
+            },
+        }
+    }
+
+    pub fn output_json(&self, value: &Value, callback: Option<&String>) -> MyResponse {
+        match callback {
+            Some(callback) => {
+                let mut text = callback.to_owned();
+                text += "(";
+                text += &::serde_json::to_string(&value)
+                    .expect("app_state::output_json can't stringify JSON [1]");
+                text += ")";
+                MyResponse {
+                    s: text,
+                    content_type: ContentType::parse_flexible("application/javascript")
+                        .expect("AppState::output_json: can't parse application/javascript"),
+                }
+            }
+            None => MyResponse {
+                s: ::serde_json::to_string(&value)
+                    .expect("app_state::output_json can't stringify JSON [2]"),
+                content_type: ContentType::JSON,
             },
         }
     }
