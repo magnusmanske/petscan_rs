@@ -186,6 +186,15 @@ impl Platform {
         self.post_process_result(&available_sources)?;
 
         if self.has_param("wdf_main") {
+            let mut pagelist = match self.result.as_ref() {
+                Some(res) => res.to_owned(),
+                None => return Err(format!("No result set for WDfist")),
+            };
+            match pagelist.convert_to_wiki("wikidatawiki", self).ok() {
+                Some(_) => {}
+                None => return Err(format!("Failed to convert result to Wikidata for WDfist")),
+            }
+            self.result = Some(pagelist);
             match WDfist::new(&self, &self.result) {
                 Some(mut wdfist) => {
                     self.result = None; // Safe space
@@ -1632,7 +1641,7 @@ mod tests {
         check_results_for_psid(
             10225056,
             "wikidatawiki",
-            vec![Title::new("Q13520818", 0), Title::new("Q10995651", 0)],
+            vec![Title::new("Q10995651", 0), Title::new("Q13520818", 0)],
         );
     }
 

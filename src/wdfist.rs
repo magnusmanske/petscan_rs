@@ -5,28 +5,17 @@ use crate::pagelist::PageList;
 use crate::platform::*;
 use mediawiki::api::Api;
 use mysql as my;
+use rayon::prelude::*;
+use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 pub static MIN_IGNORE_DB_FILE_COUNT: usize = 3;
 pub static MAX_FILE_COUNT_IN_RESULT_SET: usize = 5;
-
-/*
-
-class TWDFIST {
-public:
-    typedef map <string,int32_t> string2int32 ;
-    TWDFIST ( TPageList *pagelist , TPlatform *platform ) : pagelist(pagelist) , platform(platform) {} ;
-
-protected :
-
-    bool wdf_langlinks , wdf_coords , wdf_search_commons , wdf_commons_cats ;
-    bool wdf_only_items_without_p18 , wdf_only_files_not_on_wd , wdf_only_jpeg , wdf_max_five_results , wdf_only_page_images , wdf_allow_svg ;
-    map <string,uint8_t> files2ignore ;
-    map <string,string2int32 > q2image ;
-} ;
-*/
+pub static NEARBY_FILES_RADIUS_IN_METERS: usize = 100;
+pub static MAX_WIKI_API_THREADS: usize = 10;
 
 pub struct WDfist {
     item2files: HashMap<String, HashMap<String, usize>>,
@@ -34,14 +23,17 @@ pub struct WDfist {
     files2ignore: HashSet<String>, // Requires normailzed, valid filenames
     form_parameters: Arc<FormParameters>,
     state: Arc<AppState>,
+    wdf_allow_svg: bool,
+    wdf_only_jpeg: bool,
 }
 
 impl WDfist {
     pub fn new(platform: &Platform, result: &Option<PageList>) -> Option<Self> {
         let items: Vec<String> = match result {
             Some(pagelist) => {
-                let mut pagelist = pagelist.clone(); // TODO remove clone()
-                pagelist.convert_to_wiki("wikidatawiki", platform).ok()?; // TODO do this upstream and just check here,
+                if !pagelist.is_wikidata() {
+                    return None;
+                }
                 pagelist
                     .entries
                     .iter()
@@ -57,11 +49,15 @@ impl WDfist {
             files2ignore: HashSet::new(),
             form_parameters: platform.form_parameters().clone(),
             state: platform.state(),
+            wdf_allow_svg: false,
+            wdf_only_jpeg: false,
         })
     }
 
     pub fn run(&mut self) -> Result<Value, String> {
         let mut j = json!({"status":"OK","data":{}});
+        self.wdf_allow_svg = self.bool_param("wdf_allow_svg");
+        self.wdf_only_jpeg = self.bool_param("wdf_only_jpeg");
         if self.items.is_empty() {
             j["status"] = json!("No items from original query");
             return Ok(j);
@@ -94,13 +90,257 @@ impl WDfist {
         Ok(j)
     }
 
+    fn get_language_links(&self) -> Result<HashMap<String, Vec<(String, String)>>, String> {
+        // Prepare batches to get item/wiki/title triples
+        let mut batches: Vec<SQLtuple> = vec![];
+        self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+            let mut sql = Platform::prep_quote(&chunk.to_vec());
+            sql.0 = format!("SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN ({})",&sql.0) ;
+            sql.1 = sql.1.iter().map(|q|q[1..].to_string()).collect();
+            batches.push(sql);
+        });
+
+        // Run batches
+        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+
+        // Collect pages and items, per wiki
+        let mut wiki2title_q: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        match rows.lock() {
+            Ok(rows) => {
+                rows.iter()
+                    .map(|row| my::from_row::<(u64, String, String)>(row.to_owned()))
+                    .for_each(|(item_id, wiki, page)| {
+                        if wiki == "wikidatawiki" {
+                            return;
+                        }
+                        let q = format!("Q{}", item_id);
+                        let page = page.replace(" ", "_");
+                        if !wiki2title_q.contains_key(&wiki) {
+                            wiki2title_q.insert(wiki.to_owned(), vec![]);
+                        }
+                        match wiki2title_q.get_mut(&wiki) {
+                            Some(ref mut title_q) => {
+                                title_q.push((page, q));
+                            }
+                            None => {}
+                        }
+                    });
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+        Ok(wiki2title_q)
+    }
+
+    fn filter_page_images(
+        &self,
+        wiki: &String,
+        page_file: Vec<(String, String)>,
+    ) -> Result<Vec<(String, String)>, String> {
+        if !self.bool_param("wdf_only_page_images") {
+            return Ok(page_file);
+        }
+
+        // Prepare batches
+        let mut batches: Vec<SQLtuple> = vec![];
+        let mut titles: Vec<String> = page_file
+            .iter()
+            .map(|(page, _file)| page.to_string())
+            .collect();
+        titles.sort();
+        titles.dedup();
+        titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+            let mut sql = Platform::prep_quote(&chunk.to_vec());
+            sql.0 = format!("SELECT page_title,pp_value FROM page,page_props WHERE page_id=pp_page AND page_namespace=0 AND pp_propname='page_image_free' AND page_title IN ({})",&sql.0) ;
+            batches.push(sql);
+        });
+
+        // Run batches
+        let pagelist = PageList::new_from_wiki(wiki);
+        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+        let ret: Vec<(String, String)> = match rows.lock() {
+            Ok(rows) => rows
+                .iter()
+                .map(|row| my::from_row::<(String, String)>(row.to_owned()))
+                .filter(|(page, image)| page_file.contains(&(page.to_owned(), image.to_owned())))
+                .collect(),
+            Err(e) => return Err(e.to_string()),
+        };
+
+        Ok(ret)
+    }
+
     fn follow_language_links(&mut self) -> Result<(), String> {
-        // TODO
+        let error: Mutex<Option<String>> = Mutex::new(None);
+        let add_item_file: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(vec![]));
+        let wiki2title_q = self.get_language_links()?;
+        wiki2title_q.par_iter().for_each(|(wiki, title_q)|{
+            // Prepare batches
+            let page2q: HashMap<String, String> = title_q
+                .iter()
+                .map(|(title, q)| (title.to_string(), q.to_string()))
+                .collect();
+            let titles: Vec<String> = page2q.iter().map(|(title, _q)| title.to_string()).collect();
+            let mut batches: Vec<SQLtuple> = vec![];
+            titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+                let mut sql = Platform::prep_quote(&chunk.to_vec());
+                sql.0 = format!("SELECT DISTINCT gil_page_title AS page,gil_to AS image FROM page,globalimagelinks WHERE gil_wiki='{}' AND gil_page_title IN ({})",wiki,&sql.0) ;
+                sql.0 += " AND gil_page_namespace_id=0 AND page_namespace=6 and page_title=gil_to AND page_is_redirect=0" ;
+                sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks where page_id=cl_from and cl_to='Crop_for_Wikidata')" ; // To-be-cropped
+                batches.push(sql);
+            });
+
+            // Run batches
+            let pagelist = PageList::new_from_wiki("commonswiki");
+            let rows = match pagelist.run_batch_queries(self.state.clone(), batches) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(e.to_string());
+                    return;
+                }
+            };
+
+            // Collect pages and items, per wiki
+            let page_file: Vec<(String, String)> = match rows.lock() {
+                Ok(rows) => rows
+                    .iter()
+                    .map(|row| my::from_row::<(String, String)>(row.to_owned()))
+                    .collect(),
+                Err(e) => {
+                    *error.lock().unwrap() = Some(e.to_string());
+                    return;
+                }
+            };
+            let page_file = match self.filter_page_images(wiki, page_file) {
+                Ok(page_file) => page_file,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(e.to_string());
+                    return;
+                }
+            };
+            page_file
+                .iter()
+                .for_each(|(page, file)| match page2q.get(page) {
+                    Some(q) => {
+                        add_item_file.lock().unwrap().push((q.to_string(),file.to_string()));
+                    }
+                    None => {}
+                });
+        });
+
+        // Check error
+        match error.lock() {
+            Ok(error) => match &*error {
+                Some(e) => return Err(e.to_string()),
+                None => {}
+            },
+            Err(e) => return Err(e.to_string()),
+        }
+
+        // Add files
+        add_item_file
+            .lock()
+            .unwrap()
+            .iter()
+            .for_each(|(q, file)| self.add_file_to_item(q, file));
+
         Ok(())
     }
 
     fn follow_coords(&mut self) -> Result<(), String> {
-        // TODO
+        // Prepare batches
+        let mut batches: Vec<SQLtuple> = vec![];
+        self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+            let mut sql = Platform::prep_quote(&chunk.to_vec());
+            sql.0 = format!("SELECT page_title,gt_lat,gt_lon FROM geo_tags,page WHERE page_namespace=0 AND page_id=gt_page_id AND gt_globe='earth' AND gt_primary=1 AND page_title IN ({})",&sql.0) ;
+            batches.push(sql);
+        });
+
+        // Run batches
+        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+
+        // Process results
+        let page_coords: Vec<(String, f64, f64)> = match rows.lock() {
+            Ok(rows) => rows
+                .iter()
+                .map(|row| my::from_row::<(String, f64, f64)>(row.to_owned()))
+                .collect(),
+            Err(e) => return Err(e.to_string()),
+        };
+
+        // Get nearby files
+        let error: Mutex<Option<String>> = Mutex::new(None);
+        let add_item_file: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(vec![]));
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(MAX_WIKI_API_THREADS)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            page_coords.par_iter().for_each(|(q, lat, lon)| {
+                let api = match Api::new("https://commons.wikimedia.org/w/api.php") {
+                    Ok(api) => api,
+                    Err(_) => {
+                        *error.lock().unwrap() = Some(format!("Can't get Commons API"));
+                        return;
+                    }
+                };
+                let params = api.params_into(&vec![
+                    ("action", "query"),
+                    ("list", "geosearch"),
+                    ("gscoord", format!("{}|{}", lat, lon).as_str()),
+                    (
+                        "gsradius",
+                        format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
+                    ),
+                    ("gslimit", "50"),
+                    ("gsnamespace", "6"),
+                ]);
+                let result = match api.get_query_api_json(&params) {
+                    Ok(j) => j,
+                    Err(_) => {
+                        //*error.lock().unwrap() = Some(format!("No result from Commons query {:?}", &params));
+                        return;
+                    }
+                };
+                let images = match result["query"]["geosearch"].as_array() {
+                    Some(a) => a,
+                    None => {
+                        //*error.lock().unwrap() = Some(format!("query/geosearch is not an array"));
+                        return;
+                    }
+                };
+                let mut item_file: Vec<(String, String)> = images
+                    .iter()
+                    .filter_map(|j| match j["title"].as_str() {
+                        Some(filename) => {
+                            let filename = filename[5..].to_string(); // Remove leading "File:"
+                            let filename = self.normalize_filename(&filename);
+                            Some((q.to_string(), filename))
+                        }
+                        None => None,
+                    })
+                    .collect();
+                add_item_file.lock().unwrap().append(&mut item_file);
+            });
+        });
+
+        // Check error
+        match error.lock() {
+            Ok(error) => match &*error {
+                Some(e) => return Err(e.to_string()),
+                None => {}
+            },
+            Err(e) => return Err(e.to_string()),
+        }
+
+        // Add files
+        add_item_file
+            .lock()
+            .unwrap()
+            .iter()
+            .for_each(|(q, file)| self.add_file_to_item(q, file));
+
         Ok(())
     }
 
@@ -215,11 +455,6 @@ impl WDfist {
         Ok(())
     }
 
-    // Requires normalized filename
-    fn is_valid_filename(&self, _filename: &String) -> bool {
-        true // TODO
-    }
-
     fn filter_files(&mut self) -> Result<(), String> {
         self.filter_files_from_ignore_database()?;
         self.filter_files_five_or_is_used()?;
@@ -228,8 +463,65 @@ impl WDfist {
     }
 
     fn filter_files_from_ignore_database(&mut self) -> Result<(), String> {
-        // TODO
-        Ok(())
+        // Prepare batches
+        let mut batches: Vec<SQLtuple> = vec![];
+        let items: Vec<String> = self
+            .item2files
+            .iter()
+            .map(|(q, _files)| q[1..].to_string())
+            .collect();
+        items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+            let mut sql = Platform::prep_quote(&chunk.to_vec());
+            sql.0 = format!(
+                "SELECT concat('Q',q),CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files WHERE q IN ({})",
+                &sql.0
+            );
+            batches.push(sql);
+        });
+
+        // Prepare
+        let state = self.state.clone();
+        let tool_db_user_pass = match state.get_tool_db_user_pass().lock() {
+            Ok(x) => x,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
+        let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone())?;
+
+        // Run batches sequentially
+        let mut error: Option<String> = None;
+        batches.iter().for_each(|sql| {
+            let result = match conn.prep_exec(&sql.0, &sql.1) {
+                Ok(r) => r,
+                Err(e) => {
+                    error = Some(format!(
+                        "wdfist::filter_files_from_ignore_database: {:?}",
+                        e
+                    ));
+                    return;
+                }
+            };
+
+            result
+                .filter_map(|row_result| row_result.ok())
+                .map(|row| my::from_row::<(String, String)>(row))
+                .for_each(|(item, filename)| {
+                    let filename = self.normalize_filename(&filename.to_string());
+                    match self.item2files.get_mut(&item) {
+                        Some(ref mut files) => {
+                            files.remove(&filename);
+                            if files.is_empty() {
+                                self.item2files.remove(&item);
+                            }
+                        }
+                        None => return, // Odd
+                    }
+                });
+        });
+
+        match error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     fn filter_files_five_or_is_used(&mut self) -> Result<(), String> {
@@ -305,6 +597,68 @@ impl WDfist {
     fn normalize_filename(&self, filename: &String) -> String {
         filename.trim().replace(" ", "_")
     }
+
+    // Requires normalized filename
+    fn is_valid_filename(&self, filename: &String) -> bool {
+        lazy_static! {
+            static ref RE_FILETYPE: Regex = Regex::new(r#"^(.+)\.([^.]+)$"#)
+                .expect("WDfist::is_valid_filename RE_FILETYPE is invalid");
+            static ref RE_KEY_PHRASES: Regex =
+                Regex::new(r#"(Flag_of_|Crystal_Clear_|Nuvola_|Kit_)"#)
+                    .expect("WDfist::is_valid_filename RE_KEY_PHRASES is invalid");
+            static ref RE_KEY_PHRASES_PNG: Regex = Regex::new(r#"(600px_)"#)
+                .expect("WDfist::is_valid_filename RE_KEY_PHRASES_PNG is invalid");
+        }
+
+        if filename.is_empty() {
+            return false;
+        }
+        if self.files2ignore.contains(filename) {
+            return false;
+        }
+
+        // Only one result, but...
+        for cap in RE_FILETYPE.captures_iter(filename) {
+            let filetype = cap[2].to_lowercase();
+            if self.wdf_only_jpeg && filetype != "jpg" && filetype != "jpeg" {
+                return false;
+            }
+            match filetype.as_str() {
+                "svg" => return self.wdf_allow_svg,
+                "pdf" | "gif" => return false,
+                _ => {}
+            };
+            if RE_KEY_PHRASES.is_match(filename) {
+                return false;
+            }
+            if filetype == "png" && RE_KEY_PHRASES_PNG.is_match(filename) {
+                return false;
+            }
+            return true;
+        }
+        false
+    }
+
+    fn add_file_to_item(&mut self, item: &String, filename: &String) {
+        if !self.is_valid_filename(filename) {
+            return;
+        }
+        match self.item2files.get_mut(item) {
+            Some(ref mut files) => match files.get_mut(filename) {
+                Some(ref mut file2count) => {
+                    **file2count += 1;
+                }
+                None => {
+                    files.insert(filename.to_string(), 1);
+                }
+            },
+            None => {
+                let mut file_entry: HashMap<String, usize> = HashMap::new();
+                file_entry.insert(filename.to_string(), 1);
+                self.item2files.insert(item.to_string(), file_entry);
+            }
+        }
+    }
 }
 
 /*
@@ -312,251 +666,8 @@ impl WDfist {
 typedef pair <string,string> t_title_q ;
 
 
-void TWDFIST::filterFilesFiveOrIsUsed () {
-    map <string,uint8_t> remove_files ;
-
-    // Get distinct files and their usage count
-    map <string,uint64_t> file2count ;
-    for ( auto& qi:q2image ) {
-        for ( auto& fc:qi.second ) {
-            if ( file2count.find(fc.first) == file2count.end() ) file2count[fc.first] = 1 ;
-            else file2count[fc.first]++ ;
-        }
-    }
-
-    if ( file2count.size() == 0 ) return ; // No files, no problem
-
-    // Remove files that are already used on Wikidata
-    if ( wdf_only_files_not_on_wd ) {
-        TWikidataDB wd_db ( "wikidatawiki" , platform );
-        vector <string> parts ;
-        parts.push_back ( "" ) ;
-        for ( auto& fc:file2count ) {
-            if ( parts[parts.size()-1].size() > 500000 ) parts.push_back ( "" ) ; // String length limit
-            if ( !parts[parts.size()-1].empty() ) parts[parts.size()-1] += "," ;
-            parts[parts.size()-1] += "\"" + wd_db.escape(fc.first) + "\"" ;
-        }
-        for ( auto& part:parts ) {
-            if ( part.empty() ) continue ;
-            string sql = "SELECT il_to FROM imagelinks WHERE il_from_namespace=0 AND il_to IN (" + part + ")" ;
-            MYSQL_RES *result = wd_db.getQueryResults ( sql ) ;
-            MYSQL_ROW row;
-            while ((row = mysql_fetch_row(result))) {
-                remove_files[row[0]] = 1 ;
-            }
-            mysql_free_result(result);
-        }
-    }
-
-    // Remove files that are in at least five items
-    if ( wdf_max_five_results ) {
-        for ( auto& fc:file2count ) {
-            if ( fc.second < 5 ) continue ;
-            remove_files[fc.first] = 1 ;
-        }
-    }
 
 
-    if ( remove_files.size() == 0 ) return ; // Nothing to remove
-
-    // Remove files
-    for ( auto& qi:q2image ) {
-        string q = qi.first ;
-        string2int32 new_files ;
-        for ( auto& fc:qi.second ) {
-            if ( remove_files.find(fc.first) != remove_files.end() ) continue ;
-            new_files[fc.first] = fc.second ;
-        }
-        qi.second.swap ( new_files ) ;
-    }
-}
-
-void TWDFIST::filterFilesFromIgnoreDatabase () {
-    // Chunk item list
-    vector <string> item_batches ;
-    uint64_t cnt = 0 ;
-    for ( auto& qi:q2image ) {
-        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
-        if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
-        item_batches[item_batches.size()-1] += qi.first.substr(1) ;
-        cnt++ ;
-    }
-
-    // Get files to avoid, per item, from the database
-    TWikidataDB wdfist_db ;
-    wdfist_db.setHostDB ( "tools.labsdb" , "s51218__wdfist_p" , true ) ; // HARDCODED publicly readable
-    wdfist_db.doConnect ( true ) ;
-    for ( auto &s:item_batches ) {
-        string sql = "SELECT q,file FROM ignore_files WHERE q IN (" + s + ")" ;
-        MYSQL_RES *result = wdfist_db.getQueryResults ( sql ) ;
-        MYSQL_ROW row;
-        while ((row = mysql_fetch_row(result))) {
-            string q = "Q" + string(row[0]) ;
-            if ( q2image.find(q) == q2image.end() ) continue ; // Paranoia
-            string file = normalizeFilename ( row[1] ) ;
-            if ( !isValidFile(file) ) continue ;
-            auto f = q2image[q].find(file) ;
-            if ( f == q2image[q].end() ) continue ;
-            q2image[q].erase ( f ) ;
-        }
-        mysql_free_result(result);
-    }
-}
-
-
-bool TWDFIST::isValidFile ( string file ) { // Requires normalized filename
-    if ( file.empty() ) return false ;
-
-    // Check files2ignore
-    if ( files2ignore.find(file) != files2ignore.end() ) return false ;
-
-    // Check type
-    size_t dot = file.find_last_of ( "." ) ;
-    string type = file.substr ( dot+1 ) ;
-    std::transform(type.begin(), type.end(), type.begin(), ::tolower);
-    if ( wdf_only_jpeg && type!="jpg" && type!="jpeg" ) return false ;
-    if ( type == "svg" && !wdf_allow_svg ) return false ;
-    if ( type == "pdf" || type == "gif" ) return false ;
-
-    // Check key phrases
-    if ( file.find("Flag_of_") == 0 ) return false ;
-    if ( file.find("Crystal_Clear_") == 0 ) return false ;
-    if ( file.find("Nuvola_") == 0 ) return false ;
-    if ( file.find("Kit_") == 0 ) return false ;
-
-//  if ( preg_match ( '/\bribbon.jpe{0,1}g/i' , $i ) ) // TODO
-    if ( file.find("600px_") == 0 && type == "png" ) return false ;
-
-    return true ;
-}
-
-void TWDFIST::addFileToQ ( string q , string file ) {
-    if ( !isValidFile ( file ) ) return ;
-    if ( q2image.find(q) == q2image.end() ) q2image[q] = string2int32 () ;
-    if ( q2image[q].find(file) == q2image[q].end() ) q2image[q][file] = 1 ;
-    else q2image[q][file]++ ;
-}
-
-
-
-void TWDFIST::followLanguageLinks () {
-    // Chunk item list
-    vector <string> item_batches ;
-    for ( uint64_t cnt = 0 ; cnt < items.size() ; cnt++ ) {
-        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
-        if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
-        item_batches[item_batches.size()-1] += "\"" + items[cnt] + "\"" ;
-    }
-
-    // Get sitelinks
-    map <string,vector <t_title_q> > titles_by_wiki ;
-    TWikidataDB wd_db ( "wikidatawiki" , platform );
-    for ( uint64_t x = 0 ; x < item_batches.size() ; x++ ) {
-        string item_ids ;
-        item_ids.reserve ( item_batches[x].size() ) ;
-        for ( uint64_t p = 0 ; p < item_batches[x].size() ; p++ ) {
-            if ( item_batches[x][p] != 'Q' ) item_ids += item_batches[x][p] ;
-        }
-        string sql = "SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN (" + item_ids + ")" ;
-        MYSQL_RES *result = wd_db.getQueryResults ( sql ) ;
-        MYSQL_ROW row;
-        while ((row = mysql_fetch_row(result))) {
-            string wiki = row[1] ;
-            if ( wiki == "wikidatawiki" ) continue ; // Not relevant
-            string q = "Q" + string(row[0]) ;
-            string title = row[2] ;
-            replace ( title.begin(), title.end(), ' ', '_' ) ;
-            titles_by_wiki[wiki].push_back ( t_title_q ( title , q ) ) ;
-        }
-        mysql_free_result(result);
-    }
-
-    // Get images for sitelinks from globalimagelinks
-    TWikidataDB commons_db ( "commonswiki" , platform );
-    for ( auto& wp:titles_by_wiki ) {
-        string wiki = wp.first ;
-        vector <string> parts ;
-        map <string,string> title2q ;
-        parts.push_back ( "" ) ;
-        for ( auto& tq:wp.second ) {
-            if ( parts[parts.size()-1].size() > 500000 ) parts.push_back ( "" ) ; // String length limit
-            if ( !parts[parts.size()-1].empty() ) parts[parts.size()-1] += "," ;
-            parts[parts.size()-1] += "\"" + commons_db.escape(tq.first) + "\"" ;
-            title2q[tq.first] = tq.second ;
-        }
-
-        for ( auto& part:parts ) {
-            if ( part.empty() ) continue ;
-
-            // Page images
-            map <string,string> title2file ;
-            if ( 1 ) {
-                string sql = "SELECT DISTINCT gil_page_title AS page,gil_to AS image FROM page,globalimagelinks WHERE gil_wiki='" + wiki + "' AND gil_page_namespace_id=0" ;
-                sql += " AND gil_page_title IN (" + part + ") AND page_namespace=6 and page_title=gil_to AND page_is_redirect=0" ;
-                sql += " AND NOT EXISTS (SELECT * FROM categorylinks where page_id=cl_from and cl_to='Crop_for_Wikidata')" ; // To-be-cropped
-                MYSQL_RES *result = commons_db.getQueryResults ( sql ) ;
-                MYSQL_ROW row;
-                while ((row = mysql_fetch_row(result))) {
-                    string title = row[0] ;
-                    string file = normalizeFilename ( row[1] ) ;
-                    if ( wdf_only_page_images ) {
-                        if ( title2file.find(title) == title2file.end() ) continue ; // Page has no page image
-                        if ( title2file[title] != file ) continue ;
-                    }
-                    if ( title2q.find(title) == title2q.end() ) {
-                        cout << "Not found : " << title << endl ;
-                        continue ;
-                    }
-                    string q = title2q[title] ;
-                    addFileToQ ( q , file ) ;
-                }
-                mysql_free_result(result);
-            }
-        }
-
-    }
-
-}
-
-void TWDFIST::followCoordinates () {
-    // Chunk item list
-    vector <string> item_batches ;
-    for ( uint64_t cnt = 0 ; cnt < items.size() ; cnt++ ) {
-        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
-        if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
-        item_batches[item_batches.size()-1] += "\"" + items[cnt] + "\"" ;
-    }
-
-    // Get coordinates
-    map <string,pair <string,string>> q2coord ;
-    TWikidataDB wd_db ( "wikidatawiki" , platform );
-    for ( auto& batch:item_batches ) {
-        string sql = "SELECT page_title,gt_lat,gt_lon FROM geo_tags,page WHERE page_namespace=0 AND page_id=gt_page_id AND gt_globe='earth' AND gt_primary=1 AND page_title IN (" + batch + ")" ;
-        MYSQL_RES *result = wd_db.getQueryResults ( sql ) ;
-        MYSQL_ROW row;
-        while ((row = mysql_fetch_row(result))) {
-            q2coord[row[0]] = pair <string,string> ( row[1] , row[2] ) ;
-        }
-        mysql_free_result(result);
-    }
-
-    // Run queries
-    string radius = "100" ; // meters
-    for ( auto& qc:q2coord ) {
-        string q = qc.first ;
-        string lat = qc.second.first ;
-        string lon = qc.second.second ;
-        string url = "https://commons.wikimedia.org/w/api.php?action=query&list=geosearch&gscoord="+lat+"|"+lon+"&gsradius="+radius+"&gslimit=50&gsnamespace=6&format=json" ;
-        json j ;
-        loadJSONfromURL ( url , j ) ;
-        for ( uint32_t i = 0 ; i < j["query"]["geosearch"].size() ; i++ ) {
-            string file = j["query"]["geosearch"][i]["title"] ;
-            file = file.substr ( 5 ) ;
-            file = normalizeFilename ( file ) ;
-            addFileToQ ( q , file ) ;
-        }
-    }
-}
 
 void TWDFIST::followSearchCommons () {
     // Chunk item list
@@ -637,6 +748,8 @@ mod tests {
             files2ignore: HashSet::new(),
             form_parameters: Arc::new(form_parameters),
             state: get_state(),
+            wdf_allow_svg: false,
+            wdf_only_jpeg: false,
         }
     }
 
@@ -694,5 +807,97 @@ mod tests {
             json!(wdfist.item2files),
             json!({"Q5":{"This_is_a_test_no_such_file_exists.jpg":0}})
         );
+    }
+
+    #[test]
+    fn test_filter_files_from_ignore_database() {
+        let params: Vec<(&str, &str)> = vec![("wdf_max_five_results", "1")];
+        let mut wdfist = get_wdfist(params, vec![]);
+        set_item2files(&mut wdfist, "Q3182779", vec![("Wisden_1878.jpg", 0)]); // Should get removed entirely
+        set_item2files(
+            &mut wdfist,
+            "Q6264259",
+            vec![
+                ("Roedean.JPG", 0),
+                ("Designated_survivor.jpg", 0),
+                (
+                    "Brighton_War_Memorial,_Old_Steine,_Brighton_(IoE_Code_480999).jpg",
+                    0,
+                ),
+            ],
+        );
+        wdfist.filter_files_from_ignore_database().unwrap();
+        assert_eq!(
+            json!(wdfist.item2files),
+            json!({"Q6264259":{"Designated_survivor.jpg":0}})
+        );
+    }
+
+    #[test]
+    fn test_is_valid_filename() {
+        let params: Vec<(&str, &str)> = vec![];
+        let mut wdfist = get_wdfist(params, vec![]);
+        assert!(wdfist.is_valid_filename(&"foobar.jpg".to_string()));
+        assert!(!wdfist.is_valid_filename(&"foobar.GIF".to_string()));
+        assert!(!wdfist.is_valid_filename(&"foobar.pdf".to_string()));
+        assert!(wdfist.is_valid_filename(&"some_600px_bs.jpg".to_string()));
+        assert!(!wdfist.is_valid_filename(&"some_600px_bs.png".to_string()));
+        assert!(!wdfist.is_valid_filename(&"Flag_of_foobar.jpg".to_string()));
+        assert!(!wdfist.is_valid_filename(&"fooCrystal_Clear_bar.jpg".to_string()));
+        assert!(!wdfist.is_valid_filename(&"fooNuvola_bar.jpg".to_string()));
+        assert!(!wdfist.is_valid_filename(&"fooKit_bar.jpg".to_string()));
+        wdfist.wdf_allow_svg = true;
+        assert!(wdfist.is_valid_filename(&"foobar.svg".to_string()));
+        wdfist.wdf_allow_svg = false;
+        assert!(!wdfist.is_valid_filename(&"foobar.svg".to_string()));
+    }
+
+    #[test]
+    fn test_follow_language_links() {
+        let params: Vec<(&str, &str)> = vec![];
+        let mut wdfist = get_wdfist(params, vec!["Q1481"]);
+
+        // All files
+        wdfist.wdf_allow_svg = true;
+        wdfist.follow_language_links().unwrap();
+        assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
+        assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() > 90);
+
+        // No SVG
+        wdfist.item2files.clear();
+        wdfist.wdf_allow_svg = false;
+        wdfist.follow_language_links().unwrap();
+        assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
+        assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() < 50);
+        assert!(wdfist
+            .item2files
+            .get(&"Q1481".to_string())
+            .unwrap()
+            .contains_key(&"Felsburg.jpg".to_string()));
+
+        // Page images
+        let params: Vec<(&str, &str)> = vec![("wdf_only_page_images", "1")];
+        let mut wdfist = get_wdfist(params, vec!["Q1481"]);
+        wdfist.follow_language_links().unwrap();
+        assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
+        assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() < 50);
+        assert!(wdfist
+            .item2files
+            .get(&"Q1481".to_string())
+            .unwrap()
+            .contains_key(&"Felsberg_(Hessen).jpg".to_string()));
+    }
+
+    #[test]
+    fn test_follow_coords() {
+        let params: Vec<(&str, &str)> = vec![];
+        let mut wdfist = get_wdfist(params, vec!["Q350"]);
+        wdfist.follow_coords().unwrap();
+        assert!(wdfist.item2files.get(&"Q350".to_string()).unwrap().len() > 40);
+        assert!(wdfist
+            .item2files
+            .get(&"Q350".to_string())
+            .unwrap()
+            .contains_key(&"Cambridge_Wikidata_dinner.jpg".to_string()));
     }
 }
