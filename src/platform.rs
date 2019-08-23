@@ -26,7 +26,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-pub static PAGE_BATCH_SIZE: usize = 20000;
+pub static PAGE_BATCH_SIZE: usize = 200;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MyResponse {
@@ -130,13 +130,13 @@ impl Platform {
         candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceWikidata::new()))));
 
         if !candidate_sources
-            .iter()
+            .par_iter()
             .any(|source| (*source.lock().unwrap()).can_run(&self))
         {
             candidate_sources = vec![];
             candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceLabels::new()))));
             if !candidate_sources
-                .iter()
+                .par_iter()
                 .any(|source| (*source.lock().unwrap()).can_run(&self))
             {
                 return Err(format!("No possible data source found in parameters"));
@@ -177,7 +177,7 @@ impl Platform {
         }
 
         let available_sources = candidate_sources
-            .iter()
+            .par_iter()
             .filter(|s| (*s.lock().unwrap()).can_run(&self))
             .map(|s| (*s.lock().unwrap()).name())
             .collect();
@@ -307,7 +307,7 @@ impl Platform {
 
         let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE)
-                .iter_mut()
+                .par_iter_mut()
                 .map(|mut sql_batch| {
                     sql_batch.0 = "SELECT DISTINCT term_text FROM wb_terms WHERE term_entity_type='item' AND term_type IN ('label','alias') AND term_text IN (".to_string() ;
                     sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
@@ -363,7 +363,7 @@ impl Platform {
 
         let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE/20) // ???
-                .iter_mut()
+                .par_iter_mut()
                 .map(|mut sql_batch| {
                     let mut sql = "SELECT pl_title,pl_namespace,(SELECT COUNT(*) FROM page p1 WHERE p1.page_title=pl0.pl_title AND p1.page_namespace=pl0.pl_namespace) AS cnt from page p0,pagelinks pl0 WHERE pl_from=p0.page_id AND ".to_string() ;
                     sql += &sql_batch.0 ;
@@ -428,7 +428,7 @@ impl Platform {
             .unwrap_or(1);
         redlink_counter.retain(|_, &mut v| v >= min_redlinks);
         result.entries = redlink_counter
-            .iter()
+            .par_iter()
             .map(|(k, redlink_count)| {
                 let mut ret = PageListEntry::new(k.to_owned());
                 ret.redlink_count = Some(*redlink_count);
@@ -448,7 +448,7 @@ impl Platform {
         if add_subpages {
             let title_ns: Vec<(String, NamespaceID)> = result
                 .entries
-                .iter()
+                .par_iter()
                 .map(|entry| {
                     (
                         entry.title().with_underscores().to_owned(),
@@ -521,7 +521,7 @@ impl Platform {
 
         let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE)
-                .iter_mut()
+                .par_iter_mut()
                 .map(|mut sql_batch| {
                     let mut sql ="SELECT page_title,page_namespace".to_string();
                     if add_image {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname IN ('page_image','page_image_free') LIMIT 1) AS image" ;}
@@ -592,7 +592,7 @@ impl Platform {
         if file_usage {
             let batches: Vec<SQLtuple> = result
                 .to_sql_batches_namespace(PAGE_BATCH_SIZE,6)
-                .iter_mut()
+                .par_iter_mut()
                 .map(|mut sql_batch| {
                     let tmp = Platform::prep_quote(&sql_batch.1);
                     sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
@@ -620,7 +620,7 @@ impl Platform {
         if file_data {
             let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE)
-                .iter_mut()
+                .par_iter_mut()
                 .map(|mut sql_batch| {
                     let tmp = Platform::prep_quote(&sql_batch.1);
                     sql_batch.0 = "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN (".to_string() ;
@@ -698,7 +698,7 @@ impl Platform {
         // Using Wikidata
         let titles: Vec<String> = result
             .entries
-            .iter()
+            .par_iter()
             .filter_map(|entry| entry.title().full_pretty(&api))
             .collect();
 
@@ -706,7 +706,7 @@ impl Platform {
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
 
             let escaped: Vec<String> = chunk//.to_vec()
-                .iter()
+                .par_iter()
                 .filter_map(|s| match s.trim() {
                     "" => None,
                     other => Some(other.to_string()),
@@ -868,7 +868,7 @@ impl Platform {
         // Batches
         let batches: Vec<SQLtuple> = result
             .to_sql_batches(PAGE_BATCH_SIZE)
-            .iter_mut()
+            .par_iter_mut()
             .map(|sql_batch| {
                 let tmp = Platform::prep_quote(&sql_batch.1);
                 sql_batch.0 = sql.0.to_owned() + &tmp.0 + ")";
@@ -959,7 +959,7 @@ impl Platform {
         // Batches
         let batches: Vec<SQLtuple> = result
             .to_sql_batches(PAGE_BATCH_SIZE)
-            .iter_mut()
+            .par_iter_mut()
             .map(|sql_batch| {
                 sql_batch.0 = sql.0.to_owned() + &sql_batch.0 + &sql_post;
                 sql_batch.1.splice(..0, sql.1.to_owned());
@@ -1145,7 +1145,7 @@ impl Platform {
             namespace_ids: self
                 .form_parameters
                 .ns
-                .iter()
+                .par_iter()
                 .cloned()
                 .collect::<Vec<usize>>(),
             use_new_category_mode: true,
@@ -1249,7 +1249,7 @@ impl Platform {
     /// Returns a tuple with a string containing comma-separated question marks, and the (non-empty) Vec elements
     pub fn prep_quote(strings: &Vec<String>) -> SQLtuple {
         let escaped: Vec<String> = strings
-            .iter()
+            .par_iter()
             .filter_map(|s| match s.trim() {
                 "" => None,
                 other => Some(other.to_string()),
@@ -1280,7 +1280,7 @@ impl Platform {
             types.push("description");
         }
         if !types.is_empty() {
-            let mut tmp = Self::prep_quote(&types.iter().map(|s| s.to_string()).collect());
+            let mut tmp = Self::prep_quote(&types.par_iter().map(|s| s.to_string()).collect());
             ret.0 += &(" AND ".to_owned() + part2 + &" IN (".to_owned() + &tmp.0 + ")");
             ret.1.append(&mut tmp.1);
         }

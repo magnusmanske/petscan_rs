@@ -29,20 +29,22 @@ pub struct WDfist {
 
 impl WDfist {
     pub fn new(platform: &Platform, result: &Option<PageList>) -> Option<Self> {
-        let items: Vec<String> = match result {
+        let mut items: Vec<String> = match result {
             Some(pagelist) => {
                 if !pagelist.is_wikidata() {
                     return None;
                 }
                 pagelist
                     .entries
-                    .iter()
+                    .par_iter()
                     .filter(|e| e.title().namespace_id() == 0)
                     .map(|e| e.title().pretty().to_owned())
                     .collect()
             }
             None => vec![],
         };
+        items.sort();
+        items.dedup();
         Some(Self {
             item2files: HashMap::new(),
             items: items,
@@ -96,7 +98,7 @@ impl WDfist {
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = Platform::prep_quote(&chunk.to_vec());
             sql.0 = format!("SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN ({})",&sql.0) ;
-            sql.1 = sql.1.iter().map(|q|q[1..].to_string()).collect();
+            sql.1 = sql.1.par_iter().map(|q|q[1..].to_string()).collect();
             batches.push(sql);
         });
 
@@ -144,7 +146,7 @@ impl WDfist {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         let mut titles: Vec<String> = page_file
-            .iter()
+            .par_iter()
             .map(|(page, _file)| page.to_string())
             .collect();
         titles.sort();
@@ -160,7 +162,7 @@ impl WDfist {
         let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
         let ret: Vec<(String, String)> = match rows.lock() {
             Ok(rows) => rows
-                .iter()
+                .par_iter()
                 .map(|row| my::from_row::<(String, String)>(row.to_owned()))
                 .filter(|(page, image)| page_file.contains(&(page.to_owned(), image.to_owned())))
                 .collect(),
@@ -177,10 +179,10 @@ impl WDfist {
         wiki2title_q.par_iter().for_each(|(wiki, title_q)|{
             // Prepare batches
             let page2q: HashMap<String, String> = title_q
-                .iter()
+                .par_iter()
                 .map(|(title, q)| (title.to_string(), q.to_string()))
                 .collect();
-            let titles: Vec<String> = page2q.iter().map(|(title, _q)| title.to_string()).collect();
+            let titles: Vec<String> = page2q.par_iter().map(|(title, _q)| title.to_string()).collect();
             let mut batches: Vec<SQLtuple> = vec![];
             titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
                 let mut sql = Platform::prep_quote(&chunk.to_vec());
@@ -203,7 +205,7 @@ impl WDfist {
             // Collect pages and items, per wiki
             let page_file: Vec<(String, String)> = match rows.lock() {
                 Ok(rows) => rows
-                    .iter()
+                    .par_iter()
                     .map(|row| my::from_row::<(String, String)>(row.to_owned()))
                     .collect(),
                 Err(e) => {
@@ -219,7 +221,7 @@ impl WDfist {
                 }
             };
             page_file
-                .iter()
+                .par_iter()
                 .for_each(|(page, file)| match page2q.get(page) {
                     Some(q) => {
                         add_item_file.lock().unwrap().push((q.to_string(),file.to_string()));
@@ -263,7 +265,7 @@ impl WDfist {
         // Process results
         let page_coords: Vec<(String, f64, f64)> = match rows.lock() {
             Ok(rows) => rows
-                .iter()
+                .par_iter()
                 .map(|row| my::from_row::<(String, f64, f64)>(row.to_owned()))
                 .collect(),
             Err(e) => return Err(e.to_string()),
@@ -311,7 +313,7 @@ impl WDfist {
                     }
                 };
                 let mut item_file: Vec<(String, String)> = images
-                    .iter()
+                    .par_iter()
                     .filter_map(|j| match j["title"].as_str() {
                         Some(filename) => {
                             let filename = filename[5..].to_string(); // Remove leading "File:"
@@ -360,7 +362,7 @@ impl WDfist {
         // Process results
         let item2label: Vec<(String, String)> = match rows.lock() {
             Ok(rows) => rows
-                .iter()
+                .par_iter()
                 .map(|row| my::from_row::<(String, String)>(row.to_owned()))
                 .collect(),
             Err(e) => return Err(e.to_string()),
@@ -403,7 +405,7 @@ impl WDfist {
                     }
                 };
                 let mut item_file: Vec<(String, String)> = images
-                    .iter()
+                    .par_iter()
                     .filter_map(|j| match j["title"].as_str() {
                         Some(filename) => {
                             let filename = filename[5..].to_string(); // Remove leading "File:"
@@ -532,7 +534,7 @@ impl WDfist {
         match rows.lock() {
             Ok(rows) => {
                 self.items = rows
-                    .iter()
+                    .par_iter()
                     .map(|row| my::from_row::<String>(row.to_owned()))
                     .collect();
             }
@@ -550,11 +552,15 @@ impl WDfist {
     }
 
     fn filter_files_from_ignore_database(&mut self) -> Result<(), String> {
+        if self.items.is_empty() {
+            return Ok(());
+        }
+
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         let items: Vec<String> = self
             .item2files
-            .iter()
+            .par_iter()
             .map(|(q, _files)| q[1..].to_string())
             .collect();
         items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -612,6 +618,10 @@ impl WDfist {
     }
 
     fn filter_files_five_or_is_used(&mut self) -> Result<(), String> {
+        if self.item2files.is_empty() {
+            return Ok(());
+        }
+
         // Collect all filenames, and how often they are used in this result set
         let mut file2count: HashMap<String, usize> = HashMap::new();
         self.item2files.iter().for_each(|(_item, files)| {
@@ -623,33 +633,37 @@ impl WDfist {
             return Ok(());
         }
 
-        // Get distinct filenames to check
-        let filenames: Vec<String> = file2count
-            .iter()
-            .map(|(file, _count)| file.to_owned())
-            .collect();
+        let mut files_to_remove: Vec<String> = vec![];
 
-        // Create batches
-        let mut batches: Vec<SQLtuple> = vec![];
-        filenames.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(&chunk.to_vec());
-            sql.0 = format!(
-                "SELECT DISTINCT il_to FROM imagelinks WHERE il_from_namespace=0 AND il_to IN ({})",
-                &sql.0
-            );
-            batches.push(sql);
-        });
+        if self.bool_param("wdf_only_files_not_on_wd") {
+            // Get distinct filenames to check
+            let filenames: Vec<String> = file2count
+                .par_iter()
+                .map(|(file, _count)| file.to_owned())
+                .collect();
 
-        // Run batches, and get a list of files to remove
-        let pagelist = PageList::new_from_wiki("commonswiki");
-        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
-        let mut files_to_remove: Vec<String> = match rows.lock() {
-            Ok(rows) => rows
-                .iter()
-                .map(|row| my::from_row::<String>(row.to_owned()))
-                .collect(),
-            Err(e) => return Err(e.to_string()),
-        };
+            // Create batches
+            let mut batches: Vec<SQLtuple> = vec![];
+            filenames.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+                let mut sql = Platform::prep_quote(&chunk.to_vec());
+                sql.0 = format!(
+                    "SELECT DISTINCT il_to FROM imagelinks WHERE il_from_namespace=0 AND il_to IN ({})",
+                    &sql.0
+                );
+                batches.push(sql);
+            });
+
+            // Run batches, and get a list of files to remove
+            let pagelist = PageList::new_from_wiki("wikidatawiki");
+            let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+            files_to_remove = match rows.lock() {
+                Ok(rows) => rows
+                    .par_iter()
+                    .map(|row| my::from_row::<String>(row.to_owned()))
+                    .collect(),
+                Err(e) => return Err(e.to_string()),
+            };
+        }
 
         // Remove max files returned
         if self.bool_param("wdf_max_five_results") {
@@ -773,14 +787,14 @@ mod tests {
     fn get_wdfist(params: Vec<(&str, &str)>, items: Vec<&str>) -> WDfist {
         let form_parameters = FormParameters {
             params: params
-                .iter()
+                .par_iter()
                 .map(|x| (x.0.to_string(), x.1.to_string()))
                 .collect(),
             ns: HashSet::new(),
         };
         WDfist {
             item2files: HashMap::new(),
-            items: items.iter().map(|s| s.to_string()).collect(),
+            items: items.par_iter().map(|s| s.to_string()).collect(),
             files2ignore: HashSet::new(),
             form_parameters: Arc::new(form_parameters),
             state: get_state(),
@@ -793,7 +807,7 @@ mod tests {
         wdfist.item2files.insert(
             q.to_string(),
             files
-                .iter()
+                .par_iter()
                 .map(|x| (x.0.to_string(), x.1 as usize))
                 .collect(),
         );
@@ -816,7 +830,10 @@ mod tests {
 
     #[test]
     fn test_filter_files_five_or_is_used() {
-        let params: Vec<(&str, &str)> = vec![("wdf_max_five_results", "1")];
+        let params: Vec<(&str, &str)> = vec![
+            ("wdf_max_five_results", "1"),
+            ("wdf_only_files_not_on_wd", "1"),
+        ];
         let mut wdfist = get_wdfist(params, vec![]);
         set_item2files(&mut wdfist, "Q1", vec![("More_than_5.jpg", 0)]);
         set_item2files(&mut wdfist, "Q2", vec![("More_than_5.jpg", 0)]);

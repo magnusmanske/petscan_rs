@@ -403,7 +403,7 @@ impl PageList {
     }
 
     pub fn get_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {
-        let mut ret: Vec<PageListEntry> = self.entries.iter().cloned().collect();
+        let mut ret: Vec<PageListEntry> = self.entries.par_iter().cloned().collect();
         ret.par_sort_by(|a, b| a.compare(b, &sorter, self.is_wikidata()));
         ret
     }
@@ -776,7 +776,7 @@ impl PageList {
             .map(|mut sql_batch| {
                 // entity_type and namespace_id are "database safe"
                 sql_batch.0 = format!("SELECT term_full_entity_id,{} AS dummy_namespace,term_text,term_type FROM wb_terms WHERE term_entity_type='{}' AND term_language=? AND term_full_entity_id IN (",namespace_id,&entity_type);
-                sql_batch.0 += &sql_batch.1.iter().map(|_|"?").collect::<Vec<&str>>().join(",") ;
+                sql_batch.0 += &sql_batch.1.par_iter().map(|_|"?").collect::<Vec<&str>>().join(",") ;
                 sql_batch.0 += ")" ;
                 sql_batch.1.insert(0,wikidata_language.to_string());
                 sql_batch.to_owned()
@@ -818,7 +818,7 @@ impl PageList {
         }
 
         let batches: Vec<SQLtuple> = self.to_sql_batches(PAGE_BATCH_SIZE)
-            .iter_mut()
+            .par_iter_mut()
             .map(|sql|{
                 sql.0 = "SELECT pp_value FROM page_props,page WHERE page_id=pp_page AND pp_propname='wikibase_item' AND ".to_owned()+&sql.0;
                 sql.to_owned()
@@ -838,7 +838,7 @@ impl PageList {
             return Ok(());
         }
         let batches = self.to_sql_batches(PAGE_BATCH_SIZE)
-            .iter_mut()
+            .par_iter_mut()
             .map(|sql|{
                 sql.0 = "SELECT ips_site_page FROM wb_items_per_site,page WHERE ips_item_id=substr(page_title,2)*1 AND ".to_owned()+&sql.0+" AND ips_site_id=?";
                 sql.1.push(wiki.to_string());
