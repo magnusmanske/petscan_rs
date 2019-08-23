@@ -1185,7 +1185,7 @@ impl Platform {
             Some(j) => {
                 return Ok(MyResponse {
                     s: ::serde_json::to_string(&j)
-                        .expect("app_state::render_error can't stringify JSON"),
+                        .expect("app_state::render_error can't stringify WDfist JSON"),
                     content_type: ContentType::JSON,
                 })
             }
@@ -1573,13 +1573,16 @@ mod tests {
 
     fn check_results_for_psid_ext(psid: usize, addendum: &str, wiki: &str, expected: Vec<Title>) {
         let platform = run_psid_ext(psid, addendum).unwrap();
-        let result = platform.result.unwrap();
+        let result = platform.result.clone().unwrap();
         assert_eq!(*result.wiki(), Some(wiki.to_string()));
-        let entries = result
-            .entries
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+
+        // Sort/crop results
+        let mut entries = result.get_sorted_vec(PageListSort::new_from_params(
+            &platform.get_param_blank("sortby"),
+            platform.get_param_blank("sortorder") == "descending".to_string(),
+        ));
+        platform.apply_results_limit(&mut entries);
+
         assert_eq!(entries.len(), expected.len());
         let titles: Vec<Title> = entries.iter().map(|e| e.title()).cloned().collect();
         assert_eq!(titles, expected);
@@ -1641,7 +1644,7 @@ mod tests {
         check_results_for_psid(
             10225056,
             "wikidatawiki",
-            vec![Title::new("Q10995651", 0), Title::new("Q13520818", 0)],
+            vec![Title::new("Q13520818", 0), Title::new("Q10995651", 0)],
         );
     }
 

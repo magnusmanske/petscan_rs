@@ -345,7 +345,94 @@ impl WDfist {
     }
 
     fn follow_search_commons(&mut self) -> Result<(), String> {
-        // TODO
+        // Prepare batches
+        let mut batches: Vec<SQLtuple> = vec![];
+        self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+            let mut sql = Platform::prep_quote(&chunk.to_vec());
+            sql.0 = format!("SELECT term_full_entity_id,term_text FROM wb_terms WHERE term_entity_type='item' AND term_language='en' AND term_type='label' AND term_full_entity_id IN ({})",&sql.0) ;
+            batches.push(sql);
+        });
+
+        // Run batches
+        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+
+        // Process results
+        let item2label: Vec<(String, String)> = match rows.lock() {
+            Ok(rows) => rows
+                .iter()
+                .map(|row| my::from_row::<(String, String)>(row.to_owned()))
+                .collect(),
+            Err(e) => return Err(e.to_string()),
+        };
+
+        // Get search results
+        let error: Mutex<Option<String>> = Mutex::new(None);
+        let add_item_file: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(vec![]));
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(MAX_WIKI_API_THREADS)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            item2label.par_iter().for_each(|(q, label)| {
+                let api = match Api::new("https://commons.wikimedia.org/w/api.php") {
+                    Ok(api) => api,
+                    Err(_) => {
+                        *error.lock().unwrap() = Some(format!("Can't get Commons API"));
+                        return;
+                    }
+                };
+                let params = api.params_into(&vec![
+                    ("action", "query"),
+                    ("list", "search"),
+                    ("srnamespace", "6"),
+                    ("srsearch", label.as_str()),
+                ]);
+                let result = match api.get_query_api_json(&params) {
+                    Ok(j) => j,
+                    Err(_) => {
+                        //*error.lock().unwrap() = Some(format!("No result from Commons query {:?}", &params));
+                        return;
+                    }
+                };
+                let images = match result["query"]["search"].as_array() {
+                    Some(a) => a,
+                    None => {
+                        //*error.lock().unwrap() = Some(format!("query/geosearch is not an array"));
+                        return;
+                    }
+                };
+                let mut item_file: Vec<(String, String)> = images
+                    .iter()
+                    .filter_map(|j| match j["title"].as_str() {
+                        Some(filename) => {
+                            let filename = filename[5..].to_string(); // Remove leading "File:"
+                            let filename = self.normalize_filename(&filename);
+                            Some((q.to_string(), filename))
+                        }
+                        None => None,
+                    })
+                    .collect();
+                add_item_file.lock().unwrap().append(&mut item_file);
+            });
+        });
+
+        // Check error
+        match error.lock() {
+            Ok(error) => match &*error {
+                Some(e) => return Err(e.to_string()),
+                None => {}
+            },
+            Err(e) => return Err(e.to_string()),
+        }
+
+        // Add files
+        add_item_file
+            .lock()
+            .unwrap()
+            .iter()
+            .for_each(|(q, file)| self.add_file_to_item(q, file));
+
         Ok(())
     }
 
@@ -661,57 +748,6 @@ impl WDfist {
     }
 }
 
-/*
-
-typedef pair <string,string> t_title_q ;
-
-
-
-
-
-void TWDFIST::followSearchCommons () {
-    // Chunk item list
-    vector <string> item_batches ;
-    for ( uint64_t cnt = 0 ; cnt < items.size() ; cnt++ ) {
-        if ( cnt % PAGE_BATCH_SIZE == 0 ) item_batches.push_back ( "" ) ;
-        if ( !item_batches[item_batches.size()-1].empty() ) item_batches[item_batches.size()-1] += "," ;
-        item_batches[item_batches.size()-1] += "\"" + items[cnt] + "\"" ;
-    }
-
-    // Get strings
-    map <string,string> q2label ;
-    TWikidataDB wd_db ( "wikidatawiki" , platform );
-    for ( auto& batch:item_batches ) {
-        string sql = "SELECT term_entity_id,term_text FROM wb_terms WHERE term_entity_type='item' AND term_language='en' AND term_type='label' AND term_full_entity_id IN (" + batch + ")" ;
-        MYSQL_RES *result = wd_db.getQueryResults ( sql ) ;
-        MYSQL_ROW row;
-        while ((row = mysql_fetch_row(result))) {
-            q2label[row[0]] = row[1] ;
-        }
-        mysql_free_result(result);
-    }
-
-    // Run search
-    for ( auto& ql:q2label ) {
-        string q = ql.first ;
-        string label = ql.second ;
-        string url = "https://commons.wikimedia.org/w/api.php?action=query&list=search&srnamespace=6&format=json&srsearch=" + urlencode(label) ;
-        json j ;
-        loadJSONfromURL ( url , j ) ;
-        for ( uint32_t i = 0 ; i < j["query"]["search"].size() ; i++ ) {
-            string file = j["query"]["search"][i]["title"] ;
-            file = file.substr ( 5 ) ;
-            file = normalizeFilename ( file ) ;
-            addFileToQ ( q , file ) ;
-        }
-    }
-}
-
-
-
-
-*/
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -899,5 +935,25 @@ mod tests {
             .get(&"Q350".to_string())
             .unwrap()
             .contains_key(&"Cambridge_Wikidata_dinner.jpg".to_string()));
+    }
+
+    #[test]
+    fn test_follow_search_commons() {
+        let params: Vec<(&str, &str)> = vec![];
+        let mut wdfist = get_wdfist(params, vec!["Q66711783"]);
+        wdfist.follow_search_commons().unwrap();
+        assert!(
+            wdfist
+                .item2files
+                .get(&"Q66711783".to_string())
+                .unwrap()
+                .len()
+                > 5
+        );
+        assert!(wdfist
+            .item2files
+            .get(&"Q66711783".to_string())
+            .unwrap()
+            .contains_key(&"Walter_Rueth.jpg".to_string()));
     }
 }
