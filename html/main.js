@@ -96,7 +96,7 @@ function setPermalink ( q ) {
 		q = q.replace ( r , '&' ) ;
 	} ) ;
 
-	q = q.replace(/\[/g,'%5B').replace(/\]/g,'%5D');
+	q = q.replace(/\[/g,'%5B').replace(/\]/g,'%5D').replace(/\|/g,'%7C');
 	
 	var url = '/?' + q ;
 	var h = _t("query_url") ;
