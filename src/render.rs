@@ -674,7 +674,7 @@ impl Render for RenderHTML {
                     Ok(url) => url,
                     _ => return "".to_string(),
                 };
-                let file = Uri::percent_encode(img);
+                let file = self.escape_attribute(img);
                 let url = format!("{}/wiki/File:{}", &server_url, &file);
                 let src = format!(
                     "{}/wiki/Special:Redirect/file/{}?width={}",
@@ -789,6 +789,15 @@ impl RenderHTML {
         Box::new(Self {})
     }
 
+    fn escape_attribute(&self, s: &String) -> String {
+        Uri::percent_encode(s)
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
+            .to_string()
+    }
+
     fn render_wikilink(
         &self,
         title: &Title,
@@ -810,7 +819,7 @@ impl RenderHTML {
             Some(ft) => ft,
             None => format!("{:?}", title),
         };
-        let url = server + "/wiki/" + &Uri::percent_encode(&full_title);
+        let url = server + "/wiki/" + &self.escape_attribute(&full_title);
         let label = match alt_label {
             Some(label) => label.to_string(),
             None => match is_page_link {
