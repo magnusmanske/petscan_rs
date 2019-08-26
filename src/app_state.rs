@@ -7,6 +7,7 @@ use mediawiki::api::Api;
 use mysql as my;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
+use regex::Regex;
 use rocket::http::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -116,12 +117,23 @@ impl AppState {
     pub fn db_host_and_schema_for_wiki(&self, wiki: &String) -> (String, String) {
         // TESTING
         // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.analytics.db.svc.eqiad.wmflabs:3306 -N
+        lazy_static! {
+            static ref REMOVE_WIKI: Regex = Regex::new(r"wiki$")
+                .expect("AppState::get_url_for_wiki_from_site: Regex is invalid");
+        }
+        /*
+        .or_else(|| {
+            let wiki = REMOVE_WIKI.replace(wiki, "").to_string();
+            let ret = self.get_value_from_site_matrix_entry(&wiki, site, "dbname", "url");
+            ret.map(|s| REMOVE_WIKI.replace(&s.to_string(), "").to_string())
+        })*/
+
         let host = match self.config["host"].as_str() {
             Some("127.0.0.1") => "127.0.0.1".to_string(),
             Some(_host) => wiki.to_owned() + self.get_db_server_group(),
             None => panic!("No host in config file"),
         };
-        let schema = wiki.to_owned() + "_p";
+        let schema = REMOVE_WIKI.replace(&wiki.to_string(), "").to_string() + "_p";
         (host, schema)
     }
 
