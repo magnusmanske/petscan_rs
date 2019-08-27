@@ -133,7 +133,7 @@ impl AppState {
             Some(_host) => wiki.to_owned() + self.get_db_server_group(),
             None => panic!("No host in config file"),
         };
-        let schema = REMOVE_WIKI.replace(&wiki.to_string(), "").to_string() + "_p";
+        let schema = wiki.to_string() + "_p";
         (host, schema)
     }
 
