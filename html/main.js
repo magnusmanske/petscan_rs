@@ -561,7 +561,7 @@ function initializeInterface () {
 		var text = o.val() ;
 		var wiki = wo.val() ;
 //		var wop = $(wo.parents("div.input-group").get(0)) ;
-		if ( $.trim(text) != '' && !wiki.match(/wiki\s*$/) && !wiki.match(/source\s*$/) ) { //$.trim(wiki) == '' ) {
+		if ( $.trim(text) != '' && !wiki.match(/(wiki|source|quote)\s*$/) ) { //$.trim(wiki) == '' ) {
 			wo.addClass ( 'is-invalid' ) ;
 			$('#doit').prop('disabled', true)
 		} else {
