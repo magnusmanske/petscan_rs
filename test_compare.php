@@ -52,8 +52,8 @@ function compare_values($jo,$jn) {
 }
 
 function compare_results($psid) {
-	$url_orig = "https://petscan.wmflabs.org/?psid={$psid}&format=json";
-	$url_new = "https://petscan-dev.wmflabs.org/?psid={$psid}&format=json";
+	$url_orig = "https://petscan1.wmflabs.org/?psid={$psid}&format=json";
+	$url_new = "https://petscan.wmflabs.org/?psid={$psid}&format=json";
 	//print "{$url_orig} | {$url_new}\n" ;
 	$jo = json_decode(file_get_contents($url_orig));
 	$jn = json_decode(file_get_contents($url_new));
