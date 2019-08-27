@@ -156,7 +156,7 @@ impl Platform {
                     let mut ds = ds.lock().unwrap();
                     let data = ds.run(&platform);
                     tx.send((ds.name(), data))
-                        .expect("Platform::run: Can't send");
+                        .expect("Platform::run: Can't send data to thread");
                 });
             }
         }
@@ -164,7 +164,9 @@ impl Platform {
         // Collect results
         let mut results: HashMap<String, PageList> = HashMap::new();
         for _ in 0..threads_running {
-            let thread_response = rx.recv().expect("Platform::run: Can't receive");
+            let thread_response = rx.recv().or(Err(format!(
+                "Platform::run: Can't receive data from thread"
+            )))?;
             let data = thread_response.1?;
             match data.wiki() {
                 Some(wiki) => {
@@ -255,6 +257,7 @@ impl Platform {
     }
 
     fn convert_to_common_wiki(&mut self, result: &mut PageList) -> Result<(), String> {
+        // Find best wiki to convert to
         match self.get_param_default("common_wiki", "auto").as_str() {
             "auto" => {}
             "cats" => match self.wiki_by_source.get("categories") {
@@ -267,7 +270,15 @@ impl Platform {
             },
             "manual" => match self.wiki_by_source.get("manual") {
                 Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                None => return Err(format!("manual wiki requested as output, but not set")),
+                None => {
+                    // Backwards compatability hack
+                    match self.get_param("common_wiki_other") {
+                        Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                        None => {
+                            return Err(format!("manual wiki requested as output, but not set"))
+                        }
+                    }
+                }
             },
             "wikidata" => result.convert_to_wiki("wikidatawiki", &self)?,
             "other" => match self.get_param("common_wiki_other") {

@@ -98,6 +98,13 @@ impl FormParameters {
         self.params.contains_key(&key.to_string())
     }
 
+    fn has_param_with_value(&self, key: &str) -> bool {
+        match self.params.get(&key.to_string()) {
+            Some(s) => !s.trim().is_empty(),
+            None => false,
+        }
+    }
+
     fn set_param(&mut self, key: &str, value: &str) {
         self.params.insert(key.to_string(), value.to_string());
     }
@@ -119,6 +126,21 @@ impl FormParameters {
     fn legacy_parameters(&mut self) {
         self.fallback("language", "lang");
         self.fallback("categories", "cats");
+
+        // Old hack using manual wiki with no pages as "common wiki"
+        if self.has_param_with_value("manual_list_wiki")
+            && !self.has_param_with_value("manual_list")
+            && !self.has_param_with_value("common_wiki_other")
+        {
+            match self.params.get("manual_list_wiki") {
+                Some(wiki) => {
+                    let wiki = wiki.to_owned();
+                    self.set_param(&"common_wiki_other".to_string(), &wiki);
+                    self.set_param(&"manual_list_wiki".to_string(), &"".to_string());
+                }
+                None => {}
+            }
+        }
 
         // query originally from QuickIntersection
         if self.has_param("max") {
