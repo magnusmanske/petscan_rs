@@ -10,9 +10,8 @@ use mediawiki::api::{Api, NamespaceID};
 use mediawiki::title::Title;
 use mysql as my;
 use rayon::prelude::*;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 /*
 use serde_json::value::Value;
 */
@@ -188,36 +187,48 @@ impl SourceDatabase {
     fn go_depth(
         &self,
         conn: &mut my::Conn,
-        tmp: &mut HashSet<String>,
+        categories_done: Arc<Mutex<HashSet<String>>>,
         cats: &Vec<String>,
         depth: u16,
     ) -> Result<(), String> {
         if depth == 0 || cats.is_empty() {
             return Ok(());
         }
-        let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
-        cats.iter().for_each(|c| {
-            tmp.insert(c.to_string());
-        });
-        Platform::append_sql(&mut sql, &mut Platform::prep_quote(cats));
-        sql.0 += ")";
-        //println!("{:?}", sql);
 
+        let error = Arc::new(Mutex::new(None));
         let mut new_cats: Vec<String> = vec![];
-        let result = match conn.prep_exec(sql.0, sql.1) {
-            Ok(r) => r,
-            Err(e) => return Err(format!("datasource_database::go_depth: {:?}", e)),
-        };
-        result
-            .filter_map(|row_result| row_result.ok())
-            .for_each(|row| {
-                let page_title: String = my::from_row(row);
-                if !tmp.contains(&page_title) {
-                    new_cats.push(page_title.to_owned());
-                    tmp.insert(page_title);
-                }
-            });
-        self.go_depth(conn, tmp, &new_cats, depth - 1)?;
+        cats.chunks(PAGE_BATCH_SIZE)
+            .for_each(|categories_batch| {
+                let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
+                categories_batch.iter().for_each(|c| {
+                    (*categories_done.lock().unwrap()).insert(c.to_string());
+                });
+                Platform::append_sql(&mut sql, &mut Platform::prep_quote(&categories_batch.to_vec()));
+                sql.0 += ")";
+                //println!("{:?}",&sql);
+
+                let result = match conn.prep_exec(sql.0, sql.1) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        *error.lock().unwrap() = Some(format!("datasource_database::go_depth: {:?}", e));
+                        return
+                    }
+                };
+                result
+                    .filter_map(|row_result| row_result.ok())
+                    .for_each(|row| {
+                        let page_title: String = my::from_row(row);
+                        if !(*categories_done.lock().unwrap()).contains(&page_title) {
+                            new_cats.push(page_title.to_owned());
+                            (*categories_done.lock().unwrap()).insert(page_title);
+                        }
+                    });
+                });
+        match &*error.lock().unwrap() {
+            Some(e) => return Err(e.to_string()),
+            None => {}
+        }
+        self.go_depth(conn, categories_done, &new_cats, depth - 1)?;
         Ok(())
     }
 
@@ -227,10 +238,11 @@ impl SourceDatabase {
         title: &String,
         depth: u16,
     ) -> Result<Vec<String>, String> {
-        let mut tmp: HashSet<String> = HashSet::new();
+        let categories_done = Arc::new(Mutex::new(HashSet::new()));
         let title = Title::spaces_to_underscores(&Title::first_letter_uppercase(title));
-        tmp.insert(title.to_owned());
-        self.go_depth(conn, &mut tmp, &vec![title], depth)?;
+        (*categories_done.lock().unwrap()).insert(title.to_owned());
+        self.go_depth(conn, categories_done.clone(), &vec![title], depth)?;
+        let tmp = categories_done.lock().unwrap();
         Ok(tmp.par_iter().cloned().collect::<Vec<String>>())
     }
 
