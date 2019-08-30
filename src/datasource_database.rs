@@ -199,6 +199,7 @@ impl SourceDatabase {
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         categories_batch.iter().for_each(|c| {
+            // Don't par_iter, already in pool!
             (*categories_done.lock().unwrap()).insert(c.to_string());
         });
         Platform::append_sql(
@@ -209,8 +210,11 @@ impl SourceDatabase {
 
         let result = match conn.prep_exec(sql.0, sql.1) {
             Ok(r) => r,
-            Err(e) => return Err(format!("datasource_database::go_depth: {:?}", e)),
+            Err(e) => {
+                return Err(format!("datasource_database::go_depth: {:?}", e));
+            }
         };
+
         result
             .filter_map(|row_result| row_result.ok())
             .for_each(|row| {
@@ -228,10 +232,10 @@ impl SourceDatabase {
         state: &Arc<AppState>,
         wiki: &String,
         categories_done: Arc<Mutex<HashSet<String>>>,
-        cats: &Vec<String>,
+        categories_to_check: &Vec<String>,
         depth: u16,
     ) -> Result<(), String> {
-        if depth == 0 || cats.is_empty() {
+        if depth == 0 || categories_to_check.is_empty() {
             return Ok(());
         }
 
@@ -240,12 +244,13 @@ impl SourceDatabase {
         let new_categories = Arc::new(Mutex::new(new_categories));
 
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(5) // TODO To check
+            .num_threads(5) // TODO More? Less?
             .build()
             .unwrap();
         pool.install(|| {
-            cats.par_iter()
-                .chunks(5000) // TODO PAGE_BATCH_SIZE
+            categories_to_check
+                .par_iter()
+                .chunks(PAGE_BATCH_SIZE)
                 .for_each(|categories_batch| {
                     let categories_batch: Vec<String> =
                         categories_batch.par_iter().map(|s| s.to_string()).collect();
@@ -267,6 +272,7 @@ impl SourceDatabase {
             None => {}
         }
         let new_categories = new_categories.lock().unwrap();
+
         self.go_depth(state, wiki, categories_done, &new_categories, depth - 1)?;
         Ok(())
     }
@@ -292,14 +298,15 @@ impl SourceDatabase {
         wiki: &String,
         input: &Vec<SourceDatabaseCatDepth>,
     ) -> Result<Vec<Vec<String>>, String> {
-        let mut error: Option<String> = None;
+        let error: Option<String> = None;
+        let error = Arc::new(Mutex::new(error));
         let ret = input
-            .iter()
+            .par_iter()
             .filter_map(
                 |i| match self.get_categories_in_tree(state, wiki, &i.name, i.depth) {
                     Ok(res) => Some(res),
                     Err(e) => {
-                        error = Some(e.to_string());
+                        *error.lock().unwrap() = Some(e.to_string());
                         None
                     }
                 },
@@ -307,21 +314,24 @@ impl SourceDatabase {
             .filter(|x| !x.is_empty())
             .collect();
 
-        match error {
-            Some(e) => Err(e),
+        let ret = match &*error.lock().unwrap() {
+            Some(e) => Err(e.to_string()),
             None => Ok(ret),
-        }
+        };
+        ret
     }
 
-    fn get_talk_namespace_ids(&mut self, conn: &mut my::Conn) {
+    fn get_talk_namespace_ids(&mut self, conn: &mut my::Conn) -> Result<(), String> {
         let mut sql = Platform::sql_tuple();
         sql.0 =
             "SELECT DISTINCT page_namespace FROM page WHERE MOD(page_namespace,2)=1".to_string();
         let result = match conn.prep_exec(sql.0, sql.1) {
             Ok(r) => r,
             Err(e) => {
-                println!("ERROR: {:?}", e);
-                return;
+                return Err(format!(
+                    "datasource_database::get_talk_namespace_ids: {:?}",
+                    e
+                ))
             }
         };
 
@@ -331,6 +341,7 @@ impl SourceDatabase {
             .map(|id| id.to_string())
             .collect::<Vec<String>>()
             .join(",");
+        Ok(())
     }
 
     pub fn template_subquery(
@@ -497,7 +508,7 @@ impl SourceDatabase {
         };
         let mut ret = PageList::new_from_wiki(&wiki);
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
-        self.get_talk_namespace_ids(&mut conn);
+        self.get_talk_namespace_ids(&mut conn)?;
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
@@ -599,7 +610,10 @@ impl SourceDatabase {
                                     tmp.insert(s.to_string());
                                 });
                             });
-                            let tmp = tmp.iter().map(|s| s.to_owned()).collect::<Vec<String>>();
+                            let tmp = tmp
+                                .par_iter()
+                                .map(|s| s.to_owned())
+                                .collect::<Vec<String>>();
                             sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
                             sql.0 += link_count_sql;
                             sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
@@ -758,7 +772,7 @@ impl SourceDatabase {
             sql.0 += &self
                 .params
                 .namespace_ids
-                .iter()
+                .par_iter()
                 .map(|ns| ns.to_string())
                 .collect::<Vec<String>>()
                 .join(",");
