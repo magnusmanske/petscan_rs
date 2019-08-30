@@ -81,7 +81,7 @@ function setPermalink ( q ) {
 	$('span[name="psid"]').each ( function () { psid = $(this).text() ; } ) ;
 
 	q = q.replace ( /&{0,1}doit=[^&]*&{0,1}/ , '&' ) ; // Removing auto-run
-	
+
 	// Removing empty parameters
 	var lq ;
 	do {
@@ -96,8 +96,8 @@ function setPermalink ( q ) {
 		q = q.replace ( r , '&' ) ;
 	} ) ;
 
-	q = q.replace(/\[/g,'%5B').replace(/\]/g,'%5D').replace(/\|/g,'%7C');
-	
+	q = q.replace(/\[/g,'%5B').replace(/\]/g,'%5D').replace(/\|/g,'%7C').replace(/\n/g,'%0A');
+
 	var url = '/?' + q ;
 	var h = _t("query_url") ;
 	if ( typeof h == 'undefined' ) return ;
