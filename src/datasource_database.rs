@@ -184,6 +184,39 @@ impl SourceDatabase {
             .collect()
     }
 
+    fn go_depth_batch(
+        &self,
+        conn: &mut my::Conn,
+        categories_batch: &Vec<String>,
+        categories_done: Arc<Mutex<HashSet<String>>>,
+        new_categories: Arc<Mutex<Vec<String>>>,
+    ) -> Result<(), String> {
+        let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
+        categories_batch.iter().for_each(|c| {
+            (*categories_done.lock().unwrap()).insert(c.to_string());
+        });
+        Platform::append_sql(
+            &mut sql,
+            &mut Platform::prep_quote(&categories_batch.to_vec()),
+        );
+        sql.0 += ")";
+
+        let result = match conn.prep_exec(sql.0, sql.1) {
+            Ok(r) => r,
+            Err(e) => return Err(format!("datasource_database::go_depth: {:?}", e)),
+        };
+        result
+            .filter_map(|row_result| row_result.ok())
+            .for_each(|row| {
+                let page_title: String = my::from_row(row);
+                if !(*categories_done.lock().unwrap()).contains(&page_title) {
+                    (*new_categories.lock().unwrap()).push(page_title.to_owned());
+                    (*categories_done.lock().unwrap()).insert(page_title);
+                }
+            });
+        Ok(())
+    }
+
     fn go_depth(
         &self,
         conn: &mut my::Conn,
@@ -196,39 +229,25 @@ impl SourceDatabase {
         }
 
         let error = Arc::new(Mutex::new(None));
-        let mut new_cats: Vec<String> = vec![];
-        cats.chunks(PAGE_BATCH_SIZE)
-            .for_each(|categories_batch| {
-                let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
-                categories_batch.iter().for_each(|c| {
-                    (*categories_done.lock().unwrap()).insert(c.to_string());
-                });
-                Platform::append_sql(&mut sql, &mut Platform::prep_quote(&categories_batch.to_vec()));
-                sql.0 += ")";
-                //println!("{:?}",&sql);
-
-                let result = match conn.prep_exec(sql.0, sql.1) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        *error.lock().unwrap() = Some(format!("datasource_database::go_depth: {:?}", e));
-                        return
-                    }
-                };
-                result
-                    .filter_map(|row_result| row_result.ok())
-                    .for_each(|row| {
-                        let page_title: String = my::from_row(row);
-                        if !(*categories_done.lock().unwrap()).contains(&page_title) {
-                            new_cats.push(page_title.to_owned());
-                            (*categories_done.lock().unwrap()).insert(page_title);
-                        }
-                    });
-                });
+        let new_categories: Vec<String> = vec![];
+        let new_categories = Arc::new(Mutex::new(new_categories));
+        cats.chunks(PAGE_BATCH_SIZE).for_each(|categories_batch| {
+            match self.go_depth_batch(
+                conn,
+                &categories_batch.to_vec(),
+                categories_done.clone(),
+                new_categories.clone(),
+            ) {
+                Ok(_) => {} // OK
+                Err(e) => *error.lock().unwrap() = Some(e),
+            }
+        });
         match &*error.lock().unwrap() {
             Some(e) => return Err(e.to_string()),
             None => {}
         }
-        self.go_depth(conn, categories_done, &new_cats, depth - 1)?;
+        let new_categories = new_categories.lock().unwrap();
+        self.go_depth(conn, categories_done, &new_categories, depth - 1)?;
         Ok(())
     }
 
