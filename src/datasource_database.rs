@@ -186,11 +186,17 @@ impl SourceDatabase {
 
     fn go_depth_batch(
         &self,
-        conn: &mut my::Conn,
+        state: &Arc<AppState>,
+        wiki: &String,
         categories_batch: &Vec<String>,
         categories_done: Arc<Mutex<HashSet<String>>>,
         new_categories: Arc<Mutex<Vec<String>>>,
     ) -> Result<(), String> {
+        let db_user_pass = match state.get_db_mutex().lock() {
+            Ok(db) => db,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         categories_batch.iter().for_each(|c| {
             (*categories_done.lock().unwrap()).insert(c.to_string());
@@ -219,7 +225,8 @@ impl SourceDatabase {
 
     fn go_depth(
         &self,
-        conn: &mut my::Conn,
+        state: &Arc<AppState>,
+        wiki: &String,
         categories_done: Arc<Mutex<HashSet<String>>>,
         cats: &Vec<String>,
         depth: u16,
@@ -231,50 +238,65 @@ impl SourceDatabase {
         let error = Arc::new(Mutex::new(None));
         let new_categories: Vec<String> = vec![];
         let new_categories = Arc::new(Mutex::new(new_categories));
-        cats.chunks(PAGE_BATCH_SIZE).for_each(|categories_batch| {
-            match self.go_depth_batch(
-                conn,
-                &categories_batch.to_vec(),
-                categories_done.clone(),
-                new_categories.clone(),
-            ) {
-                Ok(_) => {} // OK
-                Err(e) => *error.lock().unwrap() = Some(e),
-            }
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(5) // TODO To check
+            .build()
+            .unwrap();
+        pool.install(|| {
+            cats.par_iter()
+                .chunks(5000) // TODO PAGE_BATCH_SIZE
+                .for_each(|categories_batch| {
+                    let categories_batch: Vec<String> =
+                        categories_batch.par_iter().map(|s| s.to_string()).collect();
+                    match self.go_depth_batch(
+                        state,
+                        wiki,
+                        &categories_batch,
+                        categories_done.clone(),
+                        new_categories.clone(),
+                    ) {
+                        Ok(_) => {} // OK
+                        Err(e) => *error.lock().unwrap() = Some(e),
+                    }
+                });
         });
+
         match &*error.lock().unwrap() {
             Some(e) => return Err(e.to_string()),
             None => {}
         }
         let new_categories = new_categories.lock().unwrap();
-        self.go_depth(conn, categories_done, &new_categories, depth - 1)?;
+        self.go_depth(state, wiki, categories_done, &new_categories, depth - 1)?;
         Ok(())
     }
 
     fn get_categories_in_tree(
         &self,
-        conn: &mut my::Conn,
+        state: &Arc<AppState>,
+        wiki: &String,
         title: &String,
         depth: u16,
     ) -> Result<Vec<String>, String> {
         let categories_done = Arc::new(Mutex::new(HashSet::new()));
         let title = Title::spaces_to_underscores(&Title::first_letter_uppercase(title));
         (*categories_done.lock().unwrap()).insert(title.to_owned());
-        self.go_depth(conn, categories_done.clone(), &vec![title], depth)?;
+        self.go_depth(state, wiki, categories_done.clone(), &vec![title], depth)?;
         let tmp = categories_done.lock().unwrap();
         Ok(tmp.par_iter().cloned().collect::<Vec<String>>())
     }
 
     pub fn parse_category_list(
         &self,
-        conn: &mut my::Conn,
+        state: &Arc<AppState>,
+        wiki: &String,
         input: &Vec<SourceDatabaseCatDepth>,
     ) -> Result<Vec<Vec<String>>, String> {
         let mut error: Option<String> = None;
         let ret = input
             .iter()
             .filter_map(
-                |i| match self.get_categories_in_tree(conn, &i.name, i.depth) {
+                |i| match self.get_categories_in_tree(state, wiki, &i.name, i.depth) {
                     Ok(res) => Some(res),
                     Err(e) => {
                         error = Some(e.to_string());
@@ -454,6 +476,21 @@ impl SourceDatabase {
             Some(wiki) => wiki.to_owned(),
             None => return Err(format!("SourceDatabase::get_pages: No wiki in params")),
         };
+
+        // Get positive categories serial list
+        self.cat_pos = self.parse_category_list(
+            &state,
+            &wiki,
+            &self.parse_category_depth(&self.params.cat_pos, self.params.depth),
+        )?;
+
+        // Get negative categories serial list
+        self.cat_neg = self.parse_category_list(
+            &state,
+            &wiki,
+            &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
+        )?;
+
         let db_user_pass = match state.get_db_mutex().lock() {
             Ok(db) => db,
             Err(e) => return Err(format!("Bad mutex: {:?}", e)),
@@ -461,15 +498,6 @@ impl SourceDatabase {
         let mut ret = PageList::new_from_wiki(&wiki);
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
         self.get_talk_namespace_ids(&mut conn);
-
-        self.cat_pos = self.parse_category_list(
-            &mut conn,
-            &self.parse_category_depth(&self.params.cat_pos, self.params.depth),
-        )?;
-        self.cat_neg = self.parse_category_list(
-            &mut conn,
-            &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
-        )?;
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
