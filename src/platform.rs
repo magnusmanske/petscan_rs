@@ -428,13 +428,13 @@ impl Platform {
                         return;
                     }
                 };
+                let mut redlink_counter = redlink_counter.lock().unwrap();
                 for row in result {
                     match row {
                         Ok(row) => {
                             let (page_title, namespace_id, _count) =
                                 my::from_row::<(String, NamespaceID, u8)>(row);
                             let title = Title::new(&page_title, namespace_id);
-                            let mut redlink_counter = redlink_counter.lock().unwrap();
                             let new_value = match &redlink_counter.get(&title) {
                                 Some(x) => *x + 1,
                                 None => 1,
