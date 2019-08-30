@@ -389,45 +389,67 @@ impl Platform {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-        let mut redlink_counter: HashMap<Title, usize> = HashMap::new();
+        let redlink_counter: HashMap<Title, usize> = HashMap::new();
+        let redlink_counter = Arc::new(Mutex::new(redlink_counter));
 
         let wiki = match result.wiki() {
             Some(wiki) => wiki.to_owned(),
             None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
         };
-        let db_user_pass = match self.state.get_db_mutex().lock() {
-            Ok(db) => db,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
-        let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki)?;
 
-        let mut error: Option<String> = None;
-        batches.iter().for_each(|sql| {
-            let result = match conn.prep_exec(&sql.0, &sql.1) {
-                Ok(r) => r,
-                Err(e) => {
-                    error = Some(format!("{:?}", e));
-                    return;
-                }
-            };
-            for row in result {
-                match row {
-                    Ok(row) => {
-                        let (page_title, namespace_id, _count) =
-                            my::from_row::<(String, NamespaceID, u8)>(row);
-                        let title = Title::new(&page_title, namespace_id);
-                        let new_value = match &redlink_counter.get(&title) {
-                            Some(x) => *x + 1,
-                            None => 1,
-                        };
-                        redlink_counter.insert(title, new_value);
+        let error: Option<String> = None;
+        let error = Arc::new(Mutex::new(error));
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(5) // TODO More? Less?
+            .build()
+            .unwrap();
+        pool.install(|| {
+            batches.par_iter().for_each(|sql| {
+                let db_user_pass = match self.state.get_db_mutex().lock() {
+                    Ok(db) => db,
+                    Err(e) => {
+                        *error.lock().unwrap() = Some(format!("Bad mutex: {:?}", e));
+                        return;
                     }
-                    _ => {} // Ignore error
+                };
+                let mut conn = match self.state.get_wiki_db_connection(&db_user_pass, &wiki) {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        *error.lock().unwrap() = Some(format!("Bad mutex: {:?}", e));
+                        return;
+                    }
+                };
+
+                let result = match conn.prep_exec(&sql.0, &sql.1) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        *error.lock().unwrap() = Some(format!("{:?}", e));
+                        return;
+                    }
+                };
+                for row in result {
+                    match row {
+                        Ok(row) => {
+                            let (page_title, namespace_id, _count) =
+                                my::from_row::<(String, NamespaceID, u8)>(row);
+                            let title = Title::new(&page_title, namespace_id);
+                            let mut redlink_counter = redlink_counter.lock().unwrap();
+                            let new_value = match &redlink_counter.get(&title) {
+                                Some(x) => *x + 1,
+                                None => 1,
+                            };
+                            redlink_counter.insert(title, new_value);
+                        }
+                        _ => {} // Ignore error
+                    }
                 }
-            }
+            });
         });
+
+        let error = &*error.lock().unwrap();
         match error {
-            Some(e) => return Err(e),
+            Some(e) => return Err(e.to_string()),
             None => {}
         }
 
@@ -435,6 +457,7 @@ impl Platform {
             .get_param_default("min_redlink_count", "1")
             .parse::<usize>()
             .unwrap_or(1);
+        let mut redlink_counter = redlink_counter.lock().unwrap();
         redlink_counter.retain(|_, &mut v| v >= min_redlinks);
         result.entries = redlink_counter
             .par_iter()
