@@ -481,7 +481,7 @@ impl SourceDatabase {
             None => {}
         }
 
-        if !before.is_empty() || after.is_empty() {
+        if before.is_empty() && after.is_empty() {
             is_before_after_done = true;
         } else {
             sql_before_after.0 = " INNER JOIN (revision r) on r.rev_page=p.page_id".to_string();
