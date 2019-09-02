@@ -12,11 +12,8 @@ use mysql as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-/*
-use serde_json::value::Value;
-*/
 
-static MAX_CATEGORY_BATCH_SIZE: usize = 50000;
+static MAX_CATEGORY_BATCH_SIZE: usize = 10000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
@@ -244,10 +241,14 @@ impl SourceDatabase {
         let new_categories: Vec<String> = vec![];
         let new_categories = Arc::new(Mutex::new(new_categories));
 
-        let pool = rayon::ThreadPoolBuilder::new()
+        let pool = match rayon::ThreadPoolBuilder::new()
             .num_threads(5) // TODO More? Less?
             .build()
-            .unwrap();
+        {
+            Ok(pool) => pool,
+            Err(e) => return Err(e.to_string()),
+        };
+
         pool.install(|| {
             categories_to_check
                 .par_iter()

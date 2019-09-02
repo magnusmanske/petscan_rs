@@ -226,7 +226,7 @@ impl Platform {
             num.unwrap_or(0),
             label,
         );
-        println!("{}", _out); // TODO deactivate for production
+        //println!("{}", _out); // TODO deactivate for production
     }
 
     fn post_process_result(&mut self, available_sources: &Vec<String>) -> Result<(), String> {
@@ -1112,8 +1112,6 @@ impl Platform {
                 _ => {}
             }
         }
-
-        println!("{:?}", &sql_post); // TODO deactivate for production
 
         // Batches
         let batches: Vec<SQLtuple> = result
