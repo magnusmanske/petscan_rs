@@ -1,5 +1,6 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 
+extern crate chrono;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]

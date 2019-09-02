@@ -5,6 +5,7 @@ use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
 use crate::render::*;
 use crate::wdfist::*;
+use chrono::Local;
 use mediawiki::api::NamespaceID;
 use mediawiki::title::Title;
 use mysql as my;
@@ -118,6 +119,7 @@ impl Platform {
     }
 
     pub fn run(&mut self) -> Result<(), String> {
+        Platform::profile("begin run", None);
         let start_time = SystemTime::now();
         let mut candidate_sources: Vec<Arc<Mutex<Box<dyn DataSource + Send + Sync>>>> = vec![];
         candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceDatabase::new(
@@ -144,6 +146,7 @@ impl Platform {
         }
 
         // Start each source as a thread
+        Platform::profile("begin threads 1", None);
         let (tx, rx) = channel();
         let mut threads_running: usize = 0;
         for source in &candidate_sources {
@@ -177,6 +180,7 @@ impl Platform {
             }
             results.insert(thread_response.0, data);
         }
+        Platform::profile("end threads 1", None);
 
         let available_sources = candidate_sources
             .par_iter()
@@ -184,8 +188,11 @@ impl Platform {
             .map(|s| (*s.lock().unwrap()).name())
             .collect();
         self.combination = self.get_combination(&available_sources);
+        Platform::profile("before combine_results", None);
         self.result = Some(self.combine_results(&mut results, &self.combination)?);
+        Platform::profile("after combine_results", None);
         self.post_process_result(&available_sources)?;
+        Platform::profile("after post_process_result", None);
 
         if self.has_param("wdf_main") {
             let mut pagelist = match self.result.as_ref() {
@@ -207,44 +214,69 @@ impl Platform {
         }
 
         self.query_time = start_time.elapsed().ok();
+        Platform::profile("after run", None);
 
         Ok(())
     }
 
+    pub fn profile(label: &str, num: Option<usize>) {
+        let _out = format!(
+            "{} [{}]: {}",
+            Local::now().format("%Y-%m-%d %H:%M:%S"),
+            num.unwrap_or(0),
+            label,
+        );
+        println!("{}", _out); // TODO deactivate for production
+    }
+
     fn post_process_result(&mut self, available_sources: &Vec<String>) -> Result<(), String> {
+        Platform::profile("post_process_result begin", None);
         let mut result = match self.result.as_ref() {
             Some(res) => res.to_owned(),
             None => return Ok(()),
         };
 
         // Filter and post-process
+        Platform::profile("before filter_wikidata", Some(result.len()));
         self.filter_wikidata(&mut result)?;
+        Platform::profile("after filter_wikidata", Some(result.len()));
         self.process_sitelinks(&mut result)?;
+        Platform::profile("after process_sitelinks", None);
         if *available_sources != vec!["labels".to_string()] {
             self.process_labels(&mut result)?;
+            Platform::profile("after process_labels", Some(result.len()));
         }
 
         self.convert_to_common_wiki(&mut result)?;
+        Platform::profile("after convert_to_common_wiki", Some(result.len()));
 
         if !available_sources.contains(&"categories".to_string()) {
             self.process_missing_database_filters(&mut result)?;
+            Platform::profile("after process_missing_database_filters", Some(result.len()));
         }
         self.process_by_wikidata_item(&mut result)?;
+        Platform::profile("after process_by_wikidata_item", Some(result.len()));
         self.process_files(&mut result)?;
+        Platform::profile("after process_files", Some(result.len()));
         self.process_pages(&mut result)?;
+        Platform::profile("after process_pages", Some(result.len()));
         self.process_subpages(&mut result)?;
+        Platform::profile("after process_subpages", Some(result.len()));
 
         let wikidata_label_language = self.get_param_default(
             "wikidata_label_language",
             &self.get_param_default("interface_language", "en"),
         );
         result.load_missing_metadata(Some(wikidata_label_language), &self)?;
+        Platform::profile("after load_missing_metadata", Some(result.len()));
         match self.get_param("regexp_filter") {
             Some(regexp) => result.regexp_filter(&regexp),
             None => {}
         }
         self.process_redlinks(&mut result)?;
+        Platform::profile("after process_redlinks", Some(result.len()));
         self.process_creator(&mut result)?;
+        Platform::profile("after process_creator", Some(result.len()));
 
         // DONE
         self.result = Some(result);
@@ -1026,7 +1058,9 @@ impl Platform {
         if list.is_empty() && !no_statements && !no_sitelinks {
             return Ok(());
         }
+        Platform::profile("before filter_wikidata:convert_to_wiki", Some(result.len()));
         result.convert_to_wiki("wikidatawiki", &self)?;
+        Platform::profile("after filter_wikidata:convert_to_wiki", Some(result.len()));
         if result.is_empty() {
             return Ok(());
         }
@@ -1078,6 +1112,8 @@ impl Platform {
                 _ => {}
             }
         }
+
+        println!("{:?}", &sql_post); // TODO deactivate for production
 
         // Batches
         let batches: Vec<SQLtuple> = result

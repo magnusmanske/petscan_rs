@@ -154,7 +154,15 @@ impl AppState {
 
     /// Returns a random mutex. The mutex value itself contains a user name and password for DB login!
     pub fn get_db_mutex(&self) -> &Arc<Mutex<DbUserPass>> {
+        let ten_millis = time::Duration::from_millis(500); // 0.5 sec
+        let mut countdown: usize = self.db_pool.len() * 2;
         loop {
+            // Slow down if free mutex proves hard to find
+            countdown -= 1;
+            if countdown == 0 {
+                countdown = self.db_pool.len() * 2;
+                thread::sleep(ten_millis);
+            }
             let ret = match self.db_pool.choose(&mut rand::thread_rng()) {
                 Some(db) => db,
                 None => continue,

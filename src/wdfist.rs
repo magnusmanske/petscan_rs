@@ -43,7 +43,7 @@ impl WDfist {
             }
             None => vec![],
         };
-        items.sort();
+        items.par_sort();
         items.dedup();
         Some(Self {
             item2files: HashMap::new(),
@@ -149,7 +149,7 @@ impl WDfist {
             .par_iter()
             .map(|(page, _file)| page.to_string())
             .collect();
-        titles.sort();
+        titles.par_sort();
         titles.dedup();
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = Platform::prep_quote(&chunk.to_vec());
@@ -673,7 +673,7 @@ impl WDfist {
                     .filter(|(_file, count)| **count >= MAX_FILE_COUNT_IN_RESULT_SET)
                     .map(|(file, _count)| file.to_owned()),
             );
-            files_to_remove.sort();
+            files_to_remove.par_sort();
             files_to_remove.dedup();
         }
 

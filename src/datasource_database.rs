@@ -238,6 +238,7 @@ impl SourceDatabase {
         if depth == 0 || categories_to_check.is_empty() {
             return Ok(());
         }
+        Platform::profile("DSDB::do_depth begin", Some(categories_to_check.len()));
 
         let error = Arc::new(Mutex::new(None));
         let new_categories: Vec<String> = vec![];
@@ -272,6 +273,13 @@ impl SourceDatabase {
             None => {}
         }
         let new_categories = new_categories.lock().unwrap();
+
+        Platform::profile("DSDB::do_depth new categories", Some(new_categories.len()));
+
+        Platform::profile(
+            "DSDB::do_depth end, categories done",
+            Some(categories_done.lock().unwrap().len()),
+        );
 
         self.go_depth(state, wiki, categories_done, &new_categories, depth - 1)?;
         Ok(())
@@ -579,7 +587,13 @@ impl SourceDatabase {
                     vec![self.cat_pos.to_owned()]
                 };
 
-                for category_batch in category_batches {
+                Platform::profile(
+                    "DSDB::get_pages [primary:categories] BATCHES begin",
+                    Some(category_batches.len()),
+                );
+                let error = Arc::new(Mutex::new(None));
+                let ret = Arc::new(Mutex::new(ret));
+                category_batches.par_iter().for_each(|category_batch| {
                     let mut sql = Platform::sql_tuple();
                     match self.params.combine.as_str() {
                         "subset" => {
@@ -627,21 +641,48 @@ impl SourceDatabase {
                     sql.0 += " INNER JOIN (page p";
                     sql.0 += ") ON p.page_id=cl0.cl_from";
                     let mut pl2 = PageList::new_from_wiki(&wiki.clone());
-                    self.get_pages_for_primary(
-                        &mut conn,
+                    let api = match state.get_api_for_wiki(wiki.clone()) {
+                        Ok(api) => api,
+                        Err(e) => {
+                            *error.lock().unwrap() = Some(e.to_string());
+                            return ;
+                        }
+                    };
+                    match self.get_pages_for_primary_new_connection(
+                        state,
+                        &wiki,
                         &primary.to_string(),
                         &mut sql,
-                        &mut sql_before_after,
+                        &mut sql_before_after.clone(),
                         &mut pl2,
-                        &mut is_before_after_done,
-                        state.get_api_for_wiki(wiki.clone())?,
-                    )?;
+                        &mut is_before_after_done.clone(),
+                        api,
+                    ) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            *error.lock().unwrap() = Some(e.to_string());
+                            return ;
+                        }
+                    }
+                    let mut ret = ret.lock().unwrap();
                     if ret.is_empty() {
                         ret.swap_entries(&mut pl2);
                     } else {
-                        ret.union(Some(pl2), None)?;
+                        ret.union(Some(pl2), None).unwrap();
                     }
+                    Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE",None);
+                });
+
+                match &*error.lock().unwrap() {
+                    Some(e) => return Err(e.to_string()),
+                    None => {}
                 }
+                let lock = Arc::try_unwrap(ret).expect("Lock still has multiple owners");
+                let ret = lock.into_inner().expect("Mutex cannot be locked");
+                Platform::profile(
+                    "DSDB::get_pages [primary:categories] RESULTS end",
+                    Some(ret.len()),
+                );
                 return Ok(ret);
             }
             "no_wikidata" => {
@@ -754,6 +795,33 @@ impl SourceDatabase {
             state.get_api_for_wiki(wiki.clone())?,
         )?;
         Ok(ret)
+    }
+
+    fn get_pages_for_primary_new_connection(
+        &self,
+        state: &Arc<AppState>,
+        wiki: &String,
+        primary: &String,
+        sql: &mut SQLtuple,
+        sql_before_after: &mut SQLtuple,
+        pages_sublist: &mut PageList,
+        is_before_after_done: &mut bool,
+        api: Api,
+    ) -> Result<(), String> {
+        let db_user_pass = match state.get_db_mutex().lock() {
+            Ok(db) => db,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
+        self.get_pages_for_primary(
+            &mut conn,
+            primary,
+            sql,
+            sql_before_after,
+            pages_sublist,
+            is_before_after_done,
+            api,
+        )
     }
 
     fn get_pages_for_primary(
