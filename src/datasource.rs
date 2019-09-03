@@ -5,6 +5,7 @@ use mediawiki::title::Title;
 use mysql as my;
 use rayon::prelude::*;
 use serde_json::value::Value;
+use std::time;
 
 /*
 let _no_sitelinks = platform.form_parameters().wpiu_no_sitelinks.is_some();
@@ -168,9 +169,12 @@ impl DataSource for SourcePagePile {
         let pagepile = platform
             .get_param("pagepile")
             .ok_or(format!("Missing parameter 'pagepile'"))?;
-        let api = platform
-            .state()
-            .get_api_for_wiki("wikidatawiki".to_string())?; // Just because we need query_raw
+        let timeout = Some(time::Duration::from_secs(240));
+        let builder = reqwest::ClientBuilder::new().timeout(timeout);
+        let api = match Api::new_from_builder("https://www.wikidata.org/w/api.php", builder) {
+            Ok(api) => api,
+            Err(e) => return Err(format!("{:?}", e)),
+        };
         let params = api.params_into(&vec![
             ("id", &pagepile.to_string()),
             ("action", "get_data"),
@@ -334,13 +338,15 @@ impl DataSource for SourceSparql {
         let sparql = platform
             .get_param("sparql")
             .ok_or(format!("Missing parameter 'sparql'"))?;
-        let api = match Api::new("https://www.wikidata.org/w/api.php") {
+        let timeout = Some(time::Duration::from_secs(120));
+        let builder = reqwest::ClientBuilder::new().timeout(timeout);
+        let api = match Api::new_from_builder("https://www.wikidata.org/w/api.php", builder) {
             Ok(api) => api,
-            Err(e) => return Err(format!("{:?}", e)),
+            Err(e) => return Err(format!("SourceSparql::run:1 {:?}", e)),
         };
         let result = match api.sparql_query(sparql.as_str()) {
             Ok(result) => result,
-            Err(e) => return Err(format!("SPARQL: {:?}", e)),
+            Err(e) => return Err(format!("SourceSparql::run:2 {:?}", e)),
         };
         let first_var = result["head"]["vars"][0]
             .as_str()

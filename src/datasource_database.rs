@@ -13,7 +13,7 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-static MAX_CATEGORY_BATCH_SIZE: usize = 10000;
+static MAX_CATEGORY_BATCH_SIZE: usize = 5000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
@@ -594,85 +594,96 @@ impl SourceDatabase {
                 );
                 let error = Arc::new(Mutex::new(None));
                 let ret = Arc::new(Mutex::new(ret));
-                category_batches.par_iter().for_each(|category_batch| {
-                    let mut sql = Platform::sql_tuple();
-                    match self.params.combine.as_str() {
-                        "subset" => {
-                            sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
-                            sql.0 += link_count_sql;
-                            sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
-                            //println!("\nSTART:\n{:?}", &sql);
-                            Platform::append_sql(
-                                &mut sql,
-                                &mut Platform::prep_quote(&category_batch[0].to_owned()),
-                            );
-                            sql.0 += ")) cl0";
-                            //println!("\nAPPENDED:\n{:?}", &sql);
-                            for a in 1..category_batch.len() {
-                                sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
+
+                let pool = match rayon::ThreadPoolBuilder::new()
+                    .num_threads(10) // TODO More? Less?
+                    .build()
+                {
+                    Ok(pool) => pool,
+                    Err(e) => return Err(e.to_string()),
+                };
+
+                pool.install(|| {
+                    category_batches.par_iter().for_each(|category_batch| {
+                        let mut sql = Platform::sql_tuple();
+                        match self.params.combine.as_str() {
+                            "subset" => {
+                                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
+                                sql.0 += link_count_sql;
+                                sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
+                                //println!("\nSTART:\n{:?}", &sql);
                                 Platform::append_sql(
                                     &mut sql,
-                                    &mut Platform::prep_quote(&category_batch[a].to_owned()),
+                                    &mut Platform::prep_quote(&category_batch[0].to_owned()),
                                 );
-                                sql.0 += ")";
-                                //println!("\nINNER:\n{:?}", &sql);
+                                sql.0 += ")) cl0";
+                                //println!("\nAPPENDED:\n{:?}", &sql);
+                                for a in 1..category_batch.len() {
+                                    sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
+                                    Platform::append_sql(
+                                        &mut sql,
+                                        &mut Platform::prep_quote(&category_batch[a].to_owned()),
+                                    );
+                                    sql.0 += ")";
+                                    //println!("\nINNER:\n{:?}", &sql);
+                                }
+                            }
+                            "union" => {
+                                let mut tmp: HashSet<String> = HashSet::new();
+                                category_batch.iter().for_each(|group| {
+                                    group.iter().for_each(|s| {
+                                        tmp.insert(s.to_string());
+                                    });
+                                });
+                                let tmp = tmp
+                                    .par_iter()
+                                    .map(|s| s.to_owned())
+                                    .collect::<Vec<String>>();
+                                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
+                                sql.0 += link_count_sql;
+                                sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
+                                Platform::append_sql(&mut sql, &mut Platform::prep_quote(&tmp));
+                                sql.0 += ")) cl0";
+                            }
+                            other => {
+                                panic!("self.params.combine is '{}'", &other);
                             }
                         }
-                        "union" => {
-                            let mut tmp: HashSet<String> = HashSet::new();
-                            category_batch.iter().for_each(|group| {
-                                group.iter().for_each(|s| {
-                                    tmp.insert(s.to_string());
-                                });
-                            });
-                            let tmp = tmp
-                                .par_iter()
-                                .map(|s| s.to_owned())
-                                .collect::<Vec<String>>();
-                            sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
-                            sql.0 += link_count_sql;
-                            sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
-                            Platform::append_sql(&mut sql, &mut Platform::prep_quote(&tmp));
-                            sql.0 += ")) cl0";
+                        sql.0 += " INNER JOIN (page p";
+                        sql.0 += ") ON p.page_id=cl0.cl_from";
+                        let mut pl2 = PageList::new_from_wiki(&wiki.clone());
+                        let api = match state.get_api_for_wiki(wiki.clone()) {
+                            Ok(api) => api,
+                            Err(e) => {
+                                *error.lock().unwrap() = Some(e.to_string());
+                                return ;
+                            }
+                        };
+                        match self.get_pages_for_primary_new_connection(
+                            state,
+                            &wiki,
+                            &primary.to_string(),
+                            &mut sql,
+                            &mut sql_before_after.clone(),
+                            &mut pl2,
+                            &mut is_before_after_done.clone(),
+                            api,
+                        ) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                *error.lock().unwrap() = Some(e.to_string());
+                                return ;
+                            }
                         }
-                        other => {
-                            panic!("self.params.combine is '{}'", &other);
+                        let mut ret = ret.lock().unwrap();
+                        if ret.is_empty() {
+                            ret.swap_entries(&mut pl2);
+                        } else {
+                            ret.union(Some(pl2), None).unwrap();
                         }
-                    }
-                    sql.0 += " INNER JOIN (page p";
-                    sql.0 += ") ON p.page_id=cl0.cl_from";
-                    let mut pl2 = PageList::new_from_wiki(&wiki.clone());
-                    let api = match state.get_api_for_wiki(wiki.clone()) {
-                        Ok(api) => api,
-                        Err(e) => {
-                            *error.lock().unwrap() = Some(e.to_string());
-                            return ;
-                        }
-                    };
-                    match self.get_pages_for_primary_new_connection(
-                        state,
-                        &wiki,
-                        &primary.to_string(),
-                        &mut sql,
-                        &mut sql_before_after.clone(),
-                        &mut pl2,
-                        &mut is_before_after_done.clone(),
-                        api,
-                    ) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            *error.lock().unwrap() = Some(e.to_string());
-                            return ;
-                        }
-                    }
-                    let mut ret = ret.lock().unwrap();
-                    if ret.is_empty() {
-                        ret.swap_entries(&mut pl2);
-                    } else {
-                        ret.union(Some(pl2), None).unwrap();
-                    }
-                    Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE",None);
-                });
+                        Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE",None);
+                    });
+} ) ;
 
                 match &*error.lock().unwrap() {
                     Some(e) => return Err(e.to_string()),

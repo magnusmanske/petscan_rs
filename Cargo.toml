@@ -20,9 +20,12 @@ rocket = "0.4.2"
 rocket_contrib = "0.4.2"
 rand = "0.7.0"
 mysql = { version="16.0.2" , features = ["ssl"] }
+reqwest = "*"
 
 #mediawiki = "0.1.7"
 mediawiki =  { git = "https://github.com/magnusmanske/mediawiki_rust" }
+#mediawiki = { path='../mediawiki' }
+
 #wikibase = "0.3"
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
 #wikibase = { path='../wikibase_rs' }
