@@ -321,11 +321,11 @@ function AutoList ( callback ) {
 	}
 
 	this.is_wikidata = function () {
-		typeof autolist_wiki_server=='undefined' || autolist_wiki_server=='' || autolist_wiki_server=='www.wikidata.org'
+		return typeof autolist_wiki_server=='undefined' || autolist_wiki_server=='' || autolist_wiki_server=='www.wikidata.org'
 	}
 
 	this.is_commons = function () {
-		autolist_wiki_server == 'commons.wikimedia.org'
+		return autolist_wiki_server == 'commons.wikimedia.org'
 	}
 
 	this.initializeAutoListBox = function () {
@@ -352,7 +352,8 @@ function AutoList ( callback ) {
 			h += "</div>" ;
 			h += "<div class='autolist_subbox'>" ;
 			h += "<textarea id='al_commands' tt_placeholder='al_commands_ph' rows=3 style='padding:2px;width:200px'>" + (p.statementlist||'') + "</textarea><br/>" ;
-			if (me.is_wikidata()) h += "<button id='al_do_process' class='btn btn-outline-success btn-sm' tt='al_process'></button>" ;
+			console.log(autolist_wiki_server);
+			if (this.is_wikidata()) h += "<button id='al_do_process' class='btn btn-outline-success btn-sm' tt='al_process'></button>" ;
 			h += "<button id='al_start_qs' class='btn btn-outline-success btn-sm' tt='al_start_qs'></button>" ;
 			h += "<button id='al_do_stop' class='btn btn-outline-danger btn-sm' tt='al_stop' style='display:none'></button>" ;
 			h += "<form style='display:none' id='qs_form' action='//tools.wmflabs.org/quickstatements/api.php' method='post' target='_blank'>" ;
@@ -498,13 +499,15 @@ function AutoList ( callback ) {
 		return ;
 	}
 
-	me.mode = $('#autolist_box').attr('mode') ;
-	me.commands_todo = [] ;
-	me.addCheckLinks () ;
-	me.widar = new WiDaR ( function () {
-		me.widar.tool_hashtag = 'petscan' ;
-		me.initializeAutoListBox() ;
-		if ( typeof callback != 'undefined' ) callback() ;
-	} ) ;
+	$( document ).ready(function(){
+		me.mode = $('#autolist_box').attr('mode') ;
+		me.commands_todo = [] ;
+		me.addCheckLinks () ;
+		me.widar = new WiDaR ( function () {
+			me.widar.tool_hashtag = 'petscan' ;
+			me.initializeAutoListBox() ;
+			if ( typeof callback != 'undefined' ) callback() ;
+		} ) ;
+	});
 }
 
