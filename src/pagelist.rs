@@ -1,8 +1,6 @@
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
-use mediawiki::api::NamespaceID;
-use mediawiki::title::Title;
 use mysql as my;
 use rayon::prelude::*;
 use regex::Regex;
@@ -11,6 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::Mutex;
+use wikibase::mediawiki::api::NamespaceID;
+use wikibase::mediawiki::title::Title;
 
 //________________________________________________________________________________________________________________________
 

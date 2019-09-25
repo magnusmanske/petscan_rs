@@ -47,6 +47,7 @@ function WiDaR ( callback ) {
 		var me = this ;
 		params.tool_hashtag = me.tool_hashtag ;
 		params.botmode = 1 ;
+		params.server = autolist_wiki_server;
 		$.getJSON ( me.api , params , function ( d ) {
 			if ( typeof callback != 'undefined' ) callback ( d ) ;
 		} ) . fail ( function () {
@@ -231,7 +232,7 @@ function AutoList ( callback ) {
 				me.finishCommand ( id ) ;
 			} ) ;
 		} else if ( cmd.mode == 'delete' ) {
-			$.getJSON ( 'https://www.wikidata.org/w/api.php?action=wbgetentities&ids=Q'+cmd.q+'&format=json&callback=?' , function ( d ) {
+			$.getJSON ( 'https://'+autolist_wiki_server+'/w/api.php?action=wbgetentities&ids=Q'+cmd.q+'&format=json&callback=?' , function ( d ) {
 				var done = false ;
 				$.each ( ((((d.entities||{})['Q'+cmd.q]||{}).claims||{})[cmd.prop.toUpperCase()]||{}) , function ( k , v ) {
 					if ( typeof cmd.value != 'undefined' ) { // Specific value to delete
@@ -268,7 +269,7 @@ function AutoList ( callback ) {
 	this.runNextCommand = function () {
 		var me = this ;
 		
-console.log ( me.concurrent , me.running.length ) ;
+//console.log ( me.concurrent , me.running.length ) ;
 		
 		if ( me.emergency_stop ) return ; // Used clicked stop
 
@@ -319,6 +320,14 @@ console.log ( me.concurrent , me.running.length ) ;
 		$('#al_status').html ( t ) ;
 	}
 
+	this.is_wikidata = function () {
+		autolist_wiki_server == 'www.wikidata.org'
+	}
+
+	this.is_commons = function () {
+		autolist_wiki_server == 'commons.wikimedia.org'
+	}
+
 	this.initializeAutoListBox = function () {
 		var me = this ;
 		var h = '' ;
@@ -343,10 +352,16 @@ console.log ( me.concurrent , me.running.length ) ;
 			h += "</div>" ;
 			h += "<div class='autolist_subbox'>" ;
 			h += "<textarea id='al_commands' tt_placeholder='al_commands_ph' rows=3 style='padding:2px;width:200px'>" + (p.statementlist||'') + "</textarea><br/>" ;
-			h += "<button id='al_do_process' class='btn btn-outline-success btn-sm' tt='al_process'></button>" ;
+			if (me.is_wikidata()) h += "<button id='al_do_process' class='btn btn-outline-success btn-sm' tt='al_process'></button>" ;
 			h += "<button id='al_start_qs' class='btn btn-outline-success btn-sm' tt='al_start_qs'></button>" ;
 			h += "<button id='al_do_stop' class='btn btn-outline-danger btn-sm' tt='al_stop' style='display:none'></button>" ;
-			h += "<form style='display:none' id='qs_form' action='//tools.wmflabs.org/quickstatements/api.php' method='post' target='_blank'><input type='hidden' name='action' value='import' /><input type='hidden' name='format' value='v1' /><input type='hidden' name='temporary' value='1' /><input type='hidden' name='openpage' value='1' /><textarea type='hidden' id='qs_commands' name='data'></textarea><button name='yup'></button></form>" ;
+			h += "<form style='display:none' id='qs_form' action='//tools.wmflabs.org/quickstatements/api.php' method='post' target='_blank'>" ;
+			h += "<input type='hidden' name='action' value='import' />" ;
+			h += "<input type='hidden' name='format' value='v1' />" ;
+			h += "<input type='hidden' name='temporary' value='1' />" ;
+			h += "<input type='hidden' name='openpage' value='1' />" ;
+			h += "<input type='hidden' name='site' value='"+(autolist_wiki_server=='commons.wikimedia.org'?'commons':'wikidata')+"' />" ;
+			h += "<textarea type='hidden' id='qs_commands' name='data'></textarea><button name='yup'></button></form>" ;
 			h += "<div id='al_status'></div>" ;
 			h += "</div>" ;
 		} else {
@@ -374,6 +389,7 @@ console.log ( me.concurrent , me.running.length ) ;
 			e.preventDefault() ;
 			me.setupCommands() ;
 			let qs_commands = [] ;
+			let entity_letter = autolist_wiki_server=='www.wikidata.org'?'Q':'M';
 			$.each ( me.commands_todo , function ( dummy , cmd ) {
 				let qs = '' ;
 				if ( cmd.mode == 'create' ) {
@@ -384,7 +400,7 @@ console.log ( me.concurrent , me.running.length ) ;
 				} else {
 					if ( cmd.mode == 'delete' ) qs = '-' ;
 					if ( /^create_item_/.test(cmd.q) ) qs += 'LAST' ;
-					else qs += 'Q' + cmd.q ;
+					else qs += entity_letter + cmd.q ;
 					qs += "|" + cmd.prop ;
 					if ( typeof cmd.value != 'undefined' ) {
 						if ( /^[PpQq]\d+$/.test(cmd.value) ) qs += "|" + cmd.value ;

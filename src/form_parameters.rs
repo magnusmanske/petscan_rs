@@ -232,7 +232,7 @@ impl<'b> FromData<'b> for FormParameters {
     }
 
     fn from_data(_: &Request, outcome: Transformed<'b, Self>) -> DataOutcome<Self, Self::Error> {
-        let query = outcome.borrowed()?;
+        let query = outcome.borrowed().unwrap(); //FIXME
         match FormParameters::outcome_from_query(query) {
             Ok(fp) => Outcome::Success(fp),
             Err(e) => Outcome::Failure((Status::BadRequest, format!("{}", &e))),

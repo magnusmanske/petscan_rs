@@ -1,11 +1,11 @@
 use crate::pagelist::*;
 use crate::platform::Platform;
-use mediawiki::api::Api;
-use mediawiki::title::Title;
 use mysql as my;
 use rayon::prelude::*;
 use serde_json::value::Value;
 use std::time;
+use wikibase::mediawiki::api::Api;
+use wikibase::mediawiki::title::Title;
 
 /*
 let _no_sitelinks = platform.form_parameters().wpiu_no_sitelinks.is_some();

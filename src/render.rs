@@ -2,16 +2,18 @@ use crate::app_state::AppState;
 use crate::pagelist::PageListEntry;
 use crate::platform::*;
 use htmlescape::encode_minimal;
-use mediawiki::api::Api;
-use mediawiki::title::Title;
 use rocket::http::uri::Uri;
 use rocket::http::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use wikibase::mediawiki::api::Api;
+use wikibase::mediawiki::title::Title;
 
 static MAX_HTML_RESULTS: usize = 10000;
+static AUTOLIST_WIKIDATA: &str = "www.wikidata.org";
+static AUTOLIST_COMMONS: &str = "commons.wikimedia.org";
 
 //________________________________________________________________________________________________________________________
 
@@ -32,6 +34,7 @@ pub struct RenderParams {
     do_output_redlinks: bool,
     use_autolist: bool,
     autolist_creator_mode: bool,
+    autolist_wiki_server: String,
     api: Api,
     state: Arc<AppState>,
     row_number: usize,
@@ -61,6 +64,7 @@ impl RenderParams {
             do_output_redlinks: platform.do_output_redlinks(),
             use_autolist: false,          // Possibly set downstream
             autolist_creator_mode: false, // Possibly set downstream
+            autolist_wiki_server: AUTOLIST_WIKIDATA.to_string(), // Possibly set downstream
             api: api,
             state: platform.state(),
             row_number: 0,
@@ -167,7 +171,7 @@ pub trait Render {
                         + ":"
                         + fu.namespace_name()
                         + ":"
-                        + fu.title().pretty();
+                        + &fu.title().pretty();
                     rows.push(txt);
                 }
                 rows.join("|")
@@ -392,8 +396,8 @@ impl RenderWiki {
     fn render_wikilink(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         if params.is_wikidata {
             match &entry.wikidata_label {
-                Some(label) => "[[".to_string() + entry.title().pretty() + "|" + &label + "]]",
-                None => "[[".to_string() + entry.title().pretty() + "]]",
+                Some(label) => "[[".to_string() + &entry.title().pretty() + "|" + &label + "]]",
+                None => "[[".to_string() + &entry.title().pretty() + "]]",
             }
         } else {
             let mut ret = "[[".to_string();
@@ -562,6 +566,18 @@ impl Render for RenderHTML {
             rows.push("<div id='autolist_box' mode='creator'></div>".to_string());
             params.use_autolist = true;
             params.autolist_creator_mode = true;
+        } else if wiki == "commonswiki" && entries.iter().all(|e| e.title().namespace_id() == 6) {
+            // If it's Commons, and all results are files
+            rows.push("<div id='autolist_box' mode='autolist'></div>".to_string());
+            params.use_autolist = true;
+            params.autolist_wiki_server = AUTOLIST_COMMONS.to_string();
+        }
+
+        if params.use_autolist {
+            rows.push(format!(
+                "<script>\nvar autolist_wiki_server='{}';\n</script>",
+                params.autolist_wiki_server
+            ));
         }
 
         // Gallery?
@@ -756,10 +772,10 @@ impl Render for RenderHTML {
         params: &RenderParams,
         platform: &Platform,
     ) -> String {
-        let mut q: String;
+        let mut q = "".to_string();
         let checked: &str;
         if params.autolist_creator_mode {
-            if platform.label_exists(entry.title().pretty()) {
+            if platform.label_exists(&entry.title().pretty()) {
                 checked = "";
             } else {
                 if entry.title().pretty().contains('(') {
@@ -773,8 +789,17 @@ impl Render for RenderHTML {
                 _ => "".to_string(),
             }
         } else {
-            q = entry.title().pretty().to_string();
-            q.remove(0);
+            if params.autolist_wiki_server == AUTOLIST_COMMONS {
+                q = match entry.page_id {
+                    Some(id) => id.to_string(),
+                    None => "".to_string(),
+                }
+            } else if params.autolist_wiki_server == AUTOLIST_WIKIDATA {
+                q = entry.title().pretty().to_string();
+                q.remove(0);
+            } else {
+                // TODO paranoia
+            }
             checked = "checked";
         };
         format!(
@@ -1048,7 +1073,7 @@ impl RenderJSON {
                     "namespace":entry.title().namespace_id(),
                     "len":entry.page_bytes.unwrap_or(0),
                     "touched":entry.page_timestamp.as_ref().unwrap_or(&"".to_string()),
-                    "nstext":params.api.get_local_namespace_name(entry.title().namespace_id()).unwrap_or("".to_string())
+                    "nstext":params.api.get_canonical_namespace_name(entry.title().namespace_id()).unwrap_or("".to_string())
                 });
                 match &entry.wikidata_item {
                     Some(q) => {

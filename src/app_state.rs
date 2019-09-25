@@ -3,7 +3,6 @@ extern crate rocket;
 use crate::form_parameters::FormParameters;
 use crate::platform::MyResponse;
 use chrono::prelude::*;
-use mediawiki::api::Api;
 use mysql as my;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
@@ -15,6 +14,7 @@ use std::fs;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::{thread, time};
+use wikibase::mediawiki::api::Api;
 
 static MAX_CONCURRENT_DB_CONNECTIONS: u64 = 10;
 static MYSQL_MAX_CONNECTION_ATTEMPTS: u64 = 15;

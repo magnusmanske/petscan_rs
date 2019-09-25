@@ -3,7 +3,6 @@ use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 use crate::platform::*;
-use mediawiki::api::Api;
 use mysql as my;
 use rayon::prelude::*;
 use regex::Regex;
@@ -11,6 +10,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
+use wikibase::mediawiki::api::Api;
 
 pub static MIN_IGNORE_DB_FILE_COUNT: usize = 3;
 pub static MAX_FILE_COUNT_IN_RESULT_SET: usize = 5;

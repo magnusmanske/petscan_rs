@@ -6,12 +6,12 @@ use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use chrono::prelude::*;
 use chrono::Duration;
 use core::ops::Sub;
-use mediawiki::api::{Api, NamespaceID};
-use mediawiki::title::Title;
 use mysql as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use wikibase::mediawiki::api::{Api, NamespaceID};
+use wikibase::mediawiki::title::Title;
 
 static MAX_CATEGORY_BATCH_SIZE: usize = 5000;
 
@@ -1066,13 +1066,14 @@ impl SourceDatabase {
             }
         }
 
-        let wiki =
-            match &self.params.wiki {
-                Some(wiki) => wiki,
-                None => return Err(format!(
+        let wiki = match &self.params.wiki {
+            Some(wiki) => wiki,
+            None => {
+                return Err(format!(
                     "SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params"
-                )),
-            };
+                ))
+            }
+        };
 
         let result = match conn.prep_exec(sql.0.to_owned(), sql.1.to_owned()) {
             Ok(r) => r,
