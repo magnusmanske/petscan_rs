@@ -321,7 +321,7 @@ function AutoList ( callback ) {
 	}
 
 	this.is_wikidata = function () {
-		autolist_wiki_server == 'www.wikidata.org'
+		typeof autolist_wiki_server=='undefined' || autolist_wiki_server=='' || autolist_wiki_server=='www.wikidata.org'
 	}
 
 	this.is_commons = function () {
