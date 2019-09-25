@@ -584,8 +584,8 @@ impl Render for RenderHTML {
         let only_files = entries
             .iter()
             .any(|entry| entry.title().namespace_id() == 6);
-        if only_files && !params.use_autolist {
-            rows.push( "<div id='file_results' style='float:right' class='btn-group' data-toggle='buttons'>".to_string());
+        if only_files && (!params.use_autolist || params.autolist_wiki_server == AUTOLIST_COMMONS) {
+            rows.push( "<div id='file_results' style='float:right;clear:right;' class='btn-group' data-toggle='buttons'>".to_string());
             rows.push( "<label class='btn btn-secondary active'><input type='radio' checked name='results_mode' value='titles' autocomplete='off' /><span tt='show_titles'></span></label>".to_string());
             rows.push( "<label class='btn btn-secondary'><input type='radio' name='results_mode' value='thumbnails' checked autocomplete='off' /><span tt='show_thumbnails'></span></label>".to_string());
             rows.push("</div>".to_string());
