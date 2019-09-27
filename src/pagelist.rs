@@ -653,6 +653,23 @@ impl PageList {
         Ok(())
     }
 
+    fn entry_from_row(
+        &self,
+        row: &my::Row,
+        col_title: usize,
+        col_ns: usize,
+    ) -> Option<PageListEntry> {
+        let page_title = match row.get(col_title)? {
+            my::Value::Bytes(uv) => String::from_utf8(uv).ok()?,
+            _ => return None,
+        };
+        let namespace_id = match row.get(col_ns)? {
+            my::Value::Int(i) => i,
+            _ => return None,
+        };
+        Some(PageListEntry::new(Title::new(&page_title, namespace_id)))
+    }
+
     /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
     pub fn annotate_batch_results(
         &self,
@@ -662,31 +679,12 @@ impl PageList {
         col_ns: usize,
         f: &dyn Fn(my::Row, &mut PageListEntry),
     ) -> Result<(), String> {
-        let rows = self.run_batch_queries(state, batches)?;
-
-        // Rows to entries
-        match rows.lock() {
-            Ok(rows) => {
-                rows.iter().for_each(|row| {
-                    let page_title = match row.get(col_title) {
-                        Some(title) => match title {
-                            my::Value::Bytes(uv) => match String::from_utf8(uv) {
-                                Ok(s) => s,
-                                Err(_) => return,
-                            },
-                            _ => return,
-                        },
-                        None => return,
-                    };
-                    let namespace_id = match row.get(col_ns) {
-                        Some(title) => match title {
-                            my::Value::Int(i) => i,
-                            _ => return,
-                        },
-                        None => return,
-                    };
-
-                    let tmp_entry = PageListEntry::new(Title::new(&page_title, namespace_id));
+        self.run_batch_queries(state, batches)?
+            .lock()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .for_each(|row| match self.entry_from_row(row, col_title, col_ns) {
+                Some(tmp_entry) => {
                     let mut entry = match self.entries.read().unwrap().get(&tmp_entry) {
                         Some(e) => (*e).clone(),
                         None => return,
@@ -694,10 +692,9 @@ impl PageList {
 
                     f(row.clone(), &mut entry);
                     self.add_entry(entry);
-                });
-            }
-            Err(e) => return Err(e.to_string()),
-        };
+                }
+                None => {}
+            });
         Ok(())
     }
 
