@@ -683,7 +683,7 @@ impl SourceDatabase {
                         }
                         Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE",None);
                     });
-} ) ;
+                } ) ;
 
                 match &*error.lock().unwrap() {
                     Some(e) => return Err(e.to_string()),
@@ -750,11 +750,7 @@ impl SourceDatabase {
                     });
                 });
 
-                let wiki = match primary_pagelist.wiki() {
-                    Some(wiki) => wiki,
-                    None => return Err(format!("No wiki 12345")),
-                };
-
+                let wiki = primary_pagelist.wiki().ok_or(format!("No wiki 12345"))?;
                 let partial_ret: Vec<PageList> = batches
                     .par_iter_mut()
                     .map(|mut sql| {

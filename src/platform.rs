@@ -220,13 +220,14 @@ impl Platform {
     }
 
     pub fn profile(label: &str, num: Option<usize>) {
-        let _out = format!(
-            "{} [{}]: {}",
-            Local::now().format("%Y-%m-%d %H:%M:%S"),
-            num.unwrap_or(0),
-            label,
-        );
-        //println!("{}", _out); // TODO deactivate for production
+        if false {
+            println!(
+                "{} [{}]: {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                num.unwrap_or(0),
+                label,
+            );
+        }
     }
 
     fn post_process_result(&mut self, available_sources: &Vec<String>) -> Result<(), String> {
@@ -1870,6 +1871,6 @@ mod tests {
 
     #[test]
     fn test_en_categories_sparql_common_wiki_other() {
-        check_results_for_psid(10222976, "frwiki", vec![Title::new("Magnus Manske", 0)]);
+        check_results_for_psid(11515666, "frwiki", vec![Title::new("Magnus Manske", 0)]);
     }
 }

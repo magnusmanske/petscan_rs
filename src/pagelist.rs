@@ -496,13 +496,14 @@ impl PageList {
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         let other_entries = self.check_before_merging(pagelist, platform)?;
-        *self.entries.write().unwrap() = self
+        let new_entries = self
             .entries
             .read()
             .unwrap()
             .union(&other_entries.read().unwrap())
             .cloned()
             .collect();
+        *self.entries.write().unwrap() = new_entries;
         Ok(())
     }
 
@@ -512,13 +513,14 @@ impl PageList {
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         let other_entries = self.check_before_merging(pagelist, platform)?;
-        *self.entries.write().unwrap() = self
+        let new_entries = self
             .entries
             .read()
             .unwrap()
             .intersection(&other_entries.read().unwrap())
             .cloned()
             .collect();
+        *self.entries.write().unwrap() = new_entries;
         Ok(())
     }
 
@@ -528,13 +530,14 @@ impl PageList {
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         let other_entries = self.check_before_merging(pagelist, platform)?;
-        *self.entries.write().unwrap() = self
+        let new_entries = self
             .entries
             .read()
             .unwrap()
             .difference(&other_entries.read().unwrap())
             .cloned()
             .collect();
+        *self.entries.write().unwrap() = new_entries;
         Ok(())
     }
 

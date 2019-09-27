@@ -148,25 +148,19 @@ impl DataSource for SourcePagePile {
             .ok_or(format!("Missing parameter 'pagepile'"))?;
         let timeout = Some(time::Duration::from_secs(240));
         let builder = reqwest::ClientBuilder::new().timeout(timeout);
-        let api = match Api::new_from_builder("https://www.wikidata.org/w/api.php", builder) {
-            Ok(api) => api,
-            Err(e) => return Err(format!("{:?}", e)),
-        };
+        let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
+            .map_err(|e| e.to_string())?;
         let params = api.params_into(&vec![
             ("id", &pagepile.to_string()),
             ("action", "get_data"),
             ("format", "json"),
             ("doit", "1"),
         ]);
-        let text = match api.query_raw("https://tools.wmflabs.org/pagepile/api.php", &params, "GET")
-        {
-            Ok(text) => text,
-            Err(e) => return Err(format!("PagePile: {:?}", e)),
-        };
-        let v: Value = match serde_json::from_str(&text) {
-            Ok(v) => v,
-            Err(e) => return Err(format!("PagePile: {:?}", e)),
-        };
+        let text = api
+            .query_raw("https://tools.wmflabs.org/pagepile/api.php", &params, "GET")
+            .map_err(|e| format!("PagePile: {:?}", e))?;
+        let v: Value =
+            serde_json::from_str(&text).map_err(|e| format!("PagePile JSON: {:?}", e))?;
         let wiki = v["wiki"]
             .as_str()
             .ok_or(format!("PagePile {} does not specify a wiki", &pagepile))?;
@@ -316,22 +310,16 @@ impl DataSource for SourceSparql {
             .ok_or(format!("Missing parameter 'sparql'"))?;
         let timeout = Some(time::Duration::from_secs(120));
         let builder = reqwest::ClientBuilder::new().timeout(timeout);
-        let api = match Api::new_from_builder("https://www.wikidata.org/w/api.php", builder) {
-            Ok(api) => api,
-            Err(e) => return Err(format!("SourceSparql::run:1 {:?}", e)),
-        };
-        let result = match api.sparql_query(sparql.as_str()) {
-            Ok(result) => result,
-            Err(e) => return Err(format!("SourceSparql::run:2 {:?}", e)),
-        };
+        let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
+            .map_err(|e| format!("SourceSparql::run:1 {:?}", e))?;
+        let result = api
+            .sparql_query(sparql.as_str())
+            .map_err(|e| format!("SourceSparql::run:2 {:?}", e))?;
         let first_var = result["head"]["vars"][0]
             .as_str()
             .ok_or(format!("No variables found in SPARQL result"))?;
-        let entities = api.entities_from_sparql_result(&result, first_var);
-
-        // TODO letters/namespaces are hardcoded?
-        // TODO M for commons?
-        let ple: Vec<PageListEntry> = entities
+        let ple: Vec<PageListEntry> = api
+            .entities_from_sparql_result(&result, first_var)
             .par_iter()
             .filter_map(|e| Platform::entry_from_entity(e))
             .collect();
