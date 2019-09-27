@@ -450,8 +450,11 @@ impl PageList {
         */
     }
 
-    pub fn swap_entries(&mut self, other: &mut PageList) {
-        std::mem::swap(&mut self.entries, &mut other.entries);
+    pub fn swap_entries(&self, other: &PageList) {
+        std::mem::swap(
+            &mut *self.entries.write().unwrap(),
+            &mut *other.entries.write().unwrap(),
+        )
     }
 
     pub fn is_empty(&self) -> bool {

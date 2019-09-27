@@ -199,10 +199,7 @@ impl SourceDatabase {
             // Don't par_iter, already in pool!
             (*categories_done.lock().unwrap()).insert(c.to_string());
         });
-        Platform::append_sql(
-            &mut sql,
-            &mut Platform::prep_quote(&categories_batch.to_vec()),
-        );
+        Platform::append_sql(&mut sql, Platform::prep_quote(&categories_batch.to_vec()));
         sql.0 += ")";
 
         let result = match conn.prep_exec(sql.0, sql.1) {
@@ -381,7 +378,7 @@ impl SourceDatabase {
         }
 
         sql.0 += " IN (";
-        Platform::append_sql(&mut sql, &mut Platform::prep_quote(input));
+        Platform::append_sql(&mut sql, Platform::prep_quote(input));
         sql.0 += "))";
         if use_talk_page {
             sql.0 += ")";
@@ -424,7 +421,7 @@ impl SourceDatabase {
             sql.0 += "( SELECT p_to.page_id FROM page p_to,page p_from,pagelinks WHERE p_from.page_namespace=";
             sql.0 += &nsgroup.0.to_string();
             sql.0 += "  AND p_from.page_id=pl_from AND pl_namespace=p_to.page_namespace AND pl_title=p_to.page_title AND p_from.page_title IN (";
-            Platform::append_sql(&mut sql, &mut Platform::prep_quote(nsgroup.1));
+            Platform::append_sql(&mut sql, Platform::prep_quote(nsgroup.1));
             sql.0 += ") )";
         });
         sql.0 += ")";
@@ -441,7 +438,7 @@ impl SourceDatabase {
             sql.0 += "( SELECT DISTINCT pl_from FROM pagelinks WHERE pl_namespace=";
             sql.0 += &nsgroup.0.to_string();
             sql.0 += " AND pl_title IN (";
-            Platform::append_sql(&mut sql, &mut Platform::prep_quote(nsgroup.1));
+            Platform::append_sql(&mut sql, Platform::prep_quote(nsgroup.1));
             sql.0 += ") )";
         });
         sql.0 += ")";
@@ -614,7 +611,7 @@ impl SourceDatabase {
                                 //println!("\nSTART:\n{:?}", &sql);
                                 Platform::append_sql(
                                     &mut sql,
-                                    &mut Platform::prep_quote(&category_batch[0].to_owned()),
+                                    Platform::prep_quote(&category_batch[0].to_owned()),
                                 );
                                 sql.0 += ")) cl0";
                                 //println!("\nAPPENDED:\n{:?}", &sql);
@@ -622,7 +619,7 @@ impl SourceDatabase {
                                     sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
                                     Platform::append_sql(
                                         &mut sql,
-                                        &mut Platform::prep_quote(&category_batch[a].to_owned()),
+                                        Platform::prep_quote(&category_batch[a].to_owned()),
                                     );
                                     sql.0 += ")";
                                     //println!("\nINNER:\n{:?}", &sql);
@@ -642,7 +639,7 @@ impl SourceDatabase {
                                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
                                 sql.0 += link_count_sql;
                                 sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
-                                Platform::append_sql(&mut sql, &mut Platform::prep_quote(&tmp));
+                                Platform::append_sql(&mut sql, Platform::prep_quote(&tmp));
                                 sql.0 += ")) cl0";
                             }
                             other => {
@@ -675,7 +672,7 @@ impl SourceDatabase {
                                 return ;
                             }
                         }
-                        let mut ret = ret.lock().unwrap();
+                        let ret = ret.lock().unwrap();
                         if ret.is_empty() {
                             ret.swap_entries(&mut pl2);
                         } else {
@@ -703,7 +700,7 @@ impl SourceDatabase {
                 sql.0 += " FROM page p";
                 if !is_before_after_done {
                     is_before_after_done = true;
-                    Platform::append_sql(&mut sql, &mut sql_before_after);
+                    Platform::append_sql(&mut sql, sql_before_after.clone());
                 }
                 sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')" ;
             }
@@ -713,7 +710,7 @@ impl SourceDatabase {
                 sql.0 += " FROM page p";
                 if !is_before_after_done {
                     is_before_after_done = true;
-                    Platform::append_sql(&mut sql, &mut sql_before_after);
+                    Platform::append_sql(&mut sql, sql_before_after.clone());
                 }
                 sql.0 += " WHERE 1=1";
             }
@@ -738,13 +735,13 @@ impl SourceDatabase {
                         sql.0 += " FROM page p";
                         if !is_before_after_done {
                             is_before_after_done = true;
-                            Platform::append_sql(&mut sql, &mut sql_before_after);
+                            Platform::append_sql(&mut sql, sql_before_after.clone());
                         }
                         sql.0 += " WHERE (0=1)";
                         sql.0 += " OR (p.page_namespace=";
                         sql.0 += &nsgroup.0.to_string();
                         sql.0 += " AND p.page_title IN (";
-                        Platform::append_sql(&mut sql, &mut Platform::prep_quote(&titles));
+                        Platform::append_sql(&mut sql, Platform::prep_quote(&titles));
                         sql.0 += "))";
                         batches.push(sql);
                     });
@@ -755,14 +752,14 @@ impl SourceDatabase {
                     .par_iter_mut()
                     .map(|mut sql| {
                         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).unwrap();
-                        let mut sql_before_after = sql_before_after.clone();
+                        let sql_before_after = sql_before_after.clone();
                         let mut is_before_after_done = is_before_after_done.clone();
                         let mut pl2 = PageList::new_from_wiki(&wiki.clone());
                         self.get_pages_for_primary(
                             &mut conn,
                             &primary.to_string(),
                             &mut sql,
-                            &mut sql_before_after,
+                            sql_before_after,
                             &mut pl2,
                             &mut is_before_after_done,
                             state.get_api_for_wiki(wiki.clone()).unwrap(),
@@ -797,7 +794,7 @@ impl SourceDatabase {
             &mut conn,
             &primary.to_string(),
             &mut sql,
-            &mut sql_before_after,
+            sql_before_after,
             &mut ret,
             &mut is_before_after_done,
             state.get_api_for_wiki(wiki.clone())?,
@@ -825,7 +822,7 @@ impl SourceDatabase {
             &mut conn,
             primary,
             sql,
-            sql_before_after,
+            sql_before_after.clone(),
             pages_sublist,
             is_before_after_done,
             api,
@@ -837,7 +834,7 @@ impl SourceDatabase {
         conn: &mut my::Conn,
         primary: &String,
         mut sql: &mut SQLtuple,
-        sql_before_after: &mut SQLtuple,
+        sql_before_after: SQLtuple,
         pages_sublist: &mut PageList,
         is_before_after_done: &mut bool,
         api: Api,
@@ -859,7 +856,7 @@ impl SourceDatabase {
         if !self.cat_neg.is_empty() {
             self.cat_neg.iter().for_each(|cats|{
                 sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to IN (" ;
-                Platform::append_sql(&mut sql, &mut Platform::prep_quote(cats));
+                Platform::append_sql(&mut sql, Platform::prep_quote(cats));
                 sql.0 += "))" ;
             });
         }
@@ -869,33 +866,33 @@ impl SourceDatabase {
         if self.has_pos_templates {
             // All
             self.params.templates_yes.iter().for_each(|t| {
-                let mut tmp = self.template_subquery(
+                let tmp = self.template_subquery(
                     &vec![t.to_string()],
                     self.params.templates_yes_talk_page,
                     false,
                 );
-                Platform::append_sql(&mut sql, &mut tmp);
+                Platform::append_sql(&mut sql, tmp);
             });
 
             // Any
             if !self.params.templates_any.is_empty() {
-                let mut tmp = self.template_subquery(
+                let tmp = self.template_subquery(
                     &self.params.templates_any,
                     self.params.templates_any_talk_page,
                     false,
                 );
-                Platform::append_sql(&mut sql, &mut tmp);
+                Platform::append_sql(&mut sql, tmp);
             }
         }
 
         // Negative templates
         if !self.params.templates_no.is_empty() {
-            let mut tmp = self.template_subquery(
+            let tmp = self.template_subquery(
                 &self.params.templates_no,
                 self.params.templates_no_talk_page,
                 true,
             );
-            Platform::append_sql(&mut sql, &mut tmp);
+            Platform::append_sql(&mut sql, tmp);
         }
 
         // Links from all
@@ -903,7 +900,7 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id IN ";
             Platform::append_sql(
                 &mut sql,
-                &mut self.links_from_subquery(&vec![l.to_owned()], &api),
+                self.links_from_subquery(&vec![l.to_owned()], &api),
             );
         });
 
@@ -912,7 +909,7 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id IN ";
             Platform::append_sql(
                 &mut sql,
-                &mut self.links_from_subquery(&self.params.linked_from_any, &api),
+                self.links_from_subquery(&self.params.linked_from_any, &api),
             );
         }
 
@@ -921,17 +918,14 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id NOT IN ";
             Platform::append_sql(
                 &mut sql,
-                &mut self.links_from_subquery(&self.params.linked_from_none, &api),
+                self.links_from_subquery(&self.params.linked_from_none, &api),
             );
         }
 
         // Links to all
         self.params.links_to_all.iter().for_each(|l| {
             sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(
-                &mut sql,
-                &mut self.links_to_subquery(&vec![l.to_owned()], &api),
-            );
+            Platform::append_sql(&mut sql, self.links_to_subquery(&vec![l.to_owned()], &api));
         });
 
         // Links to any
@@ -939,7 +933,7 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id IN ";
             Platform::append_sql(
                 &mut sql,
-                &mut self.links_to_subquery(&self.params.links_to_any, &api),
+                self.links_to_subquery(&self.params.links_to_any, &api),
             );
         }
 
@@ -948,7 +942,7 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id NOT IN ";
             Platform::append_sql(
                 &mut sql,
-                &mut self.links_to_subquery(&self.params.links_to_none, &api),
+                self.links_to_subquery(&self.params.links_to_none, &api),
             );
         }
 
@@ -1057,8 +1051,8 @@ impl SourceDatabase {
         // HAVING
         if !having.is_empty() {
             sql.0 += " HAVING ";
-            for mut h in having {
-                Platform::append_sql(sql, &mut h);
+            for h in having {
+                Platform::append_sql(sql, h);
             }
         }
 
@@ -1094,7 +1088,7 @@ impl SourceDatabase {
             })
             .collect();
 
-        let mut pl1 = PageList::new_from_vec(wiki, entries_tmp);
+        let pl1 = PageList::new_from_vec(wiki, entries_tmp);
         pl1.swap_entries(pages_sublist);
 
         Ok(())

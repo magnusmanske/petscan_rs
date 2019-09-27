@@ -229,7 +229,7 @@ impl Platform {
     fn post_process_result(&self, available_sources: &Vec<String>) -> Result<(), String> {
         Platform::profile("post_process_result begin", None);
         let result = match self.result.as_ref() {
-            Some(res) => res.to_owned(),
+            Some(res) => res,
             None => return Ok(()),
         };
 
@@ -274,9 +274,6 @@ impl Platform {
         Platform::profile("after process_redlinks", Some(result.len()));
         self.process_creator(&result)?;
         Platform::profile("after process_creator", Some(result.len()));
-
-        // DONE
-        //self.result = Some(result);
 
         Ok(())
     }
@@ -998,8 +995,8 @@ impl Platform {
         });
         if !sitelinks_any.is_empty() {
             sql.0 += " AND EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id IN (" ;
-            let mut tmp = Platform::prep_quote(&sitelinks_any);
-            Platform::append_sql(&mut sql, &mut tmp);
+            let tmp = Platform::prep_quote(&sitelinks_any);
+            Platform::append_sql(&mut sql, tmp);
             sql.0 += ") LIMIT 1)";
         }
         sitelinks_no.iter().for_each(|site|{
@@ -1314,7 +1311,7 @@ impl Platform {
         }
     }
 
-    pub fn append_sql(sql: &mut SQLtuple, sub: &mut SQLtuple) {
+    pub fn append_sql(sql: &mut SQLtuple, mut sub: SQLtuple) {
         sql.0 += &sub.0;
         sql.1.append(&mut sub.1);
     }
