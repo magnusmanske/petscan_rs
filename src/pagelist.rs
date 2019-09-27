@@ -683,17 +683,21 @@ impl PageList {
             .lock()
             .map_err(|e| e.to_string())?
             .iter()
-            .for_each(|row| match self.entry_from_row(row, col_title, col_ns) {
-                Some(tmp_entry) => {
-                    let mut entry = match self.entries.read().unwrap().get(&tmp_entry) {
-                        Some(e) => (*e).clone(),
-                        None => return,
-                    };
-
-                    f(row.clone(), &mut entry);
-                    self.add_entry(entry);
-                }
-                None => {}
+            .filter_map(|row| {
+                self.entry_from_row(row, col_title, col_ns)
+                    .map(|entry| (row, entry))
+            })
+            .filter_map(|(row, entry)| {
+                self.entries
+                    .read()
+                    .unwrap()
+                    .get(&entry)
+                    .map(|e| (row, e.clone()))
+            })
+            .for_each(|(row, e)| {
+                let mut entry = e.clone();
+                f(row.clone(), &mut entry);
+                self.add_entry(entry);
             });
         Ok(())
     }
