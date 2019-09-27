@@ -694,8 +694,7 @@ impl PageList {
                     .get(&entry)
                     .map(|e| (row, e.clone()))
             })
-            .for_each(|(row, e)| {
-                let mut entry = e.clone();
+            .for_each(|(row, mut entry)| {
                 f(row.clone(), &mut entry);
                 self.add_entry(entry);
             });
