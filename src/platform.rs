@@ -1320,10 +1320,9 @@ impl Platform {
     pub fn prep_quote(strings: &Vec<String>) -> SQLtuple {
         let escaped: Vec<String> = strings
             .par_iter()
-            .filter_map(|s| match s.trim() {
-                "" => None,
-                other => Some(other.to_string()),
-            })
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
             .collect();
         (Platform::get_questionmarks(escaped.len()), escaped)
     }
@@ -1538,7 +1537,7 @@ impl Platform {
 
     fn combine_results(
         &self,
-        results: &mut HashMap<String, PageList>,
+        results: &HashMap<String, PageList>,
         combination: &Combination,
     ) -> Result<PageList, String> {
         match combination {

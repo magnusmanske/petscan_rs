@@ -327,27 +327,18 @@ impl SourceDatabase {
         ret
     }
 
-    fn get_talk_namespace_ids(&mut self, conn: &mut my::Conn) -> Result<(), String> {
-        let mut sql = Platform::sql_tuple();
-        sql.0 =
-            "SELECT DISTINCT page_namespace FROM page WHERE MOD(page_namespace,2)=1".to_string();
-        let result = match conn.prep_exec(sql.0, sql.1) {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(format!(
-                    "datasource_database::get_talk_namespace_ids: {:?}",
-                    e
-                ))
-            }
-        };
-
-        self.talk_namespace_ids = result
+    fn get_talk_namespace_ids(&self, conn: &mut my::Conn) -> Result<String, String> {
+        Ok(conn
+            .prep_exec(
+                "SELECT DISTINCT page_namespace FROM page WHERE MOD(page_namespace,2)=1",
+                Vec::<String>::new(),
+            )
+            .map_err(|e| format!("datasource_database::get_talk_namespace_ids: {:?}", e))?
             .filter_map(|row| row.ok())
             .map(|row| my::from_row::<NamespaceID>(row))
             .map(|id| id.to_string())
             .collect::<Vec<String>>()
-            .join(",");
-        Ok(())
+            .join(","))
     }
 
     pub fn template_subquery(
@@ -514,7 +505,7 @@ impl SourceDatabase {
         };
         let mut ret = PageList::new_from_wiki(&wiki);
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
-        self.get_talk_namespace_ids(&mut conn)?;
+        self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn)?;
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
