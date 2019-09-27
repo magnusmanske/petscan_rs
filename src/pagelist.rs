@@ -7,8 +7,7 @@ use regex::Regex;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 use wikibase::mediawiki::api::NamespaceID;
 use wikibase::mediawiki::title::Title;
 
@@ -369,57 +368,67 @@ impl PageListEntry {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct PageList {
-    wiki: Option<String>,
-    pub entries: HashSet<PageListEntry>,
+    wiki: Arc<RwLock<Option<String>>>,
+    entries: Arc<RwLock<HashSet<PageListEntry>>>,
+}
+
+impl PartialEq for PageList {
+    fn eq(&self, other: &Self) -> bool {
+        self.wiki() == other.wiki()
+            && *self.entries.read().unwrap() == *other.entries.read().unwrap()
+    }
 }
 
 impl PageList {
     pub fn new_from_wiki(wiki: &str) -> Self {
         Self {
-            wiki: Some(wiki.to_string()),
-            entries: HashSet::new(),
+            wiki: Arc::new(RwLock::new(Some(wiki.to_string()))),
+            entries: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
     pub fn new_from_vec(wiki: &str, entries: Vec<PageListEntry>) -> Self {
-        let mut entries_hashset: HashSet<PageListEntry> = HashSet::new();
-        entries.iter().for_each(|e| {
-            entries_hashset.insert(e.to_owned());
-        });
         Self {
-            wiki: Some(wiki.to_string()),
-            entries: entries_hashset,
+            wiki: Arc::new(RwLock::new(Some(wiki.to_string()))),
+            entries: Arc::new(RwLock::new(entries.par_iter().cloned().collect())),
         }
     }
 
-    pub fn set_wiki(&mut self, wiki: &Option<String>) {
-        self.wiki = wiki.to_owned();
+    pub fn entries(&self) -> Arc<RwLock<HashSet<PageListEntry>>> {
+        self.entries.clone()
     }
 
-    pub fn wiki(&self) -> &Option<String> {
-        &self.wiki
+    pub fn set_entries(&self, entries: HashSet<PageListEntry>) {
+        *self.entries.write().unwrap() = entries
+    }
+
+    pub fn retain_entries(&self, f: &dyn Fn(&PageListEntry) -> bool) {
+        self.entries.write().unwrap().retain(f);
+    }
+
+    pub fn set_wiki(&mut self, wiki: Option<String>) {
+        *self.wiki.write().unwrap() = wiki;
+    }
+
+    pub fn wiki(&self) -> Option<String> {
+        self.wiki.read().unwrap().clone()
     }
 
     pub fn get_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {
-        let mut ret: Vec<PageListEntry> = self.entries.par_iter().cloned().collect();
+        let mut ret: Vec<PageListEntry> =
+            self.entries.read().unwrap().par_iter().cloned().collect();
         ret.par_sort_by(|a, b| a.compare(b, &sorter, self.is_wikidata()));
         ret
     }
 
     pub fn group_by_namespace(&self) -> HashMap<NamespaceID, Vec<String>> {
         let mut ret: HashMap<NamespaceID, Vec<String>> = HashMap::new();
-        self.entries.iter().for_each(|entry| {
-            if !ret.contains_key(&entry.title.namespace_id()) {
-                ret.insert(entry.title.namespace_id(), vec![]);
-            }
-            match ret.get_mut(&entry.title.namespace_id()) {
-                Some(x) => {
-                    x.push(entry.title.with_underscores().to_string());
-                }
-                None => {}
-            }
+        self.entries.read().unwrap().iter().for_each(|entry| {
+            ret.entry(entry.title.namespace_id())
+                .or_insert(vec![])
+                .push(entry.title.with_underscores().to_string());
         });
         ret
     }
@@ -429,20 +438,21 @@ impl PageList {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.read().unwrap().is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.read().unwrap().len()
     }
 
-    pub fn add_entry(&mut self, entry: PageListEntry) {
-        self.entries.replace(entry);
+    pub fn add_entry(&self, entry: PageListEntry) {
+        self.entries.write().unwrap().replace(entry);
     }
 
-    pub fn set_entries_from_vec(&mut self, entries: Vec<PageListEntry>) {
-        entries.iter().for_each(|e| {
-            self.entries.insert(e.to_owned());
+    pub fn set_entries_from_vec(&self, new_entries: Vec<PageListEntry>) {
+        let mut entries = self.entries.write().unwrap();
+        new_entries.iter().for_each(|e| {
+            entries.insert(e.to_owned());
         });
     }
 
@@ -450,74 +460,81 @@ impl PageList {
         &self,
         pagelist: Option<PageList>,
         platform: Option<&Platform>,
-    ) -> Result<HashSet<PageListEntry>, String> {
-        match pagelist {
-            Some(mut pagelist) => {
-                let my_wiki = match &self.wiki {
-                    Some(wiki) => wiki,
-                    None => {
-                        return Err(
-                            "PageList::check_before_merging self.wiki is not set".to_string()
-                        )
-                    }
-                };
-                if pagelist.wiki.is_none() {
-                    return Err(
-                        "PageList::check_before_merging pagelist.wiki is not set".to_string()
-                    );
-                }
-                if self.wiki != pagelist.wiki {
-                    match platform {
-                        Some(platform) => {
-                            pagelist.convert_to_wiki(&my_wiki, platform)?;
-                        }
-                        None => {
-                            return Err(format!(
-                                "PageList::check_before_merging wikis are not identical: {}/{}",
-                                &self
-                                    .wiki
-                                    .as_ref()
-                                    .unwrap_or(&"PageList::check_before_merging:1".to_string()),
-                                &pagelist
-                                    .wiki
-                                    .unwrap_or("PageList::check_before_merging:2".to_string())
-                            ))
-                        }
-                    }
-                }
-                Ok(pagelist.entries)
-            }
-            None => Err("PageList::check_before_merging pagelist is None".to_string()),
+    ) -> Result<Arc<RwLock<HashSet<PageListEntry>>>, String> {
+        let mut pagelist =
+            pagelist.ok_or("PageList::check_before_merging pagelist is None".to_string())?;
+        let my_wiki = match self.wiki() {
+            Some(wiki) => wiki,
+            None => return Err("PageList::check_before_merging self.wiki is not set".to_string()),
+        };
+        if pagelist.wiki().is_none() {
+            return Err("PageList::check_before_merging pagelist.wiki is not set".to_string());
         }
+        if self.wiki() != pagelist.wiki() {
+            match platform {
+                Some(platform) => {
+                    pagelist.convert_to_wiki(&my_wiki, platform)?;
+                }
+                None => {
+                    return Err(format!(
+                        "PageList::check_before_merging wikis are not identical: {}/{}",
+                        self.wiki()
+                            .unwrap_or("PageList::check_before_merging:1".to_string()),
+                        pagelist
+                            .wiki()
+                            .unwrap_or("PageList::check_before_merging:2".to_string())
+                    ))
+                }
+            }
+        }
+        Ok(pagelist.entries())
     }
 
     pub fn union(
-        &mut self,
+        &self,
         pagelist: Option<PageList>,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         let other_entries = self.check_before_merging(pagelist, platform)?;
-        self.entries = self.entries.union(&other_entries).cloned().collect();
+        *self.entries.write().unwrap() = self
+            .entries
+            .read()
+            .unwrap()
+            .union(&other_entries.read().unwrap())
+            .cloned()
+            .collect();
         Ok(())
     }
 
     pub fn intersection(
-        &mut self,
+        &self,
         pagelist: Option<PageList>,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         let other_entries = self.check_before_merging(pagelist, platform)?;
-        self.entries = self.entries.intersection(&other_entries).cloned().collect();
+        *self.entries.write().unwrap() = self
+            .entries
+            .read()
+            .unwrap()
+            .intersection(&other_entries.read().unwrap())
+            .cloned()
+            .collect();
         Ok(())
     }
 
     pub fn difference(
-        &mut self,
+        &self,
         pagelist: Option<PageList>,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         let other_entries = self.check_before_merging(pagelist, platform)?;
-        self.entries = self.entries.difference(&other_entries).cloned().collect();
+        *self.entries.write().unwrap() = self
+            .entries
+            .read()
+            .unwrap()
+            .difference(&other_entries.read().unwrap())
+            .cloned()
+            .collect();
         Ok(())
     }
 
@@ -559,14 +576,33 @@ impl PageList {
         ret
     }
 
-    pub fn clear_entries(&mut self) {
-        self.entries.clear();
+    pub fn clear_entries(&self) {
+        self.entries.write().unwrap().clear();
     }
 
-    pub fn replace_entries(&mut self, other: &PageList) {
-        other.entries.iter().for_each(|entry| {
-            self.entries.replace(entry.to_owned());
+    pub fn replace_entries(&self, other: &PageList) {
+        other.entries.read().unwrap().iter().for_each(|entry| {
+            self.entries.write().unwrap().replace(entry.to_owned());
         });
+    }
+
+    fn run_batch_query(
+        &self,
+        state: Arc<AppState>,
+        sql: &SQLtuple,
+        wiki: &String,
+    ) -> Result<Vec<my::Row>, String> {
+        let db_user_pass = state
+            .get_db_mutex()
+            .lock()
+            .map_err(|e| format!("PageList::run_batch_query: Bad mutex: {:?}", e))?;
+        let mut conn = state
+            .get_wiki_db_connection(&db_user_pass, &wiki)
+            .map_err(|e| format!("PageList::run_batch_query: get_wiki_db_connection: {:?}", e))?;
+        let result = conn
+            .prep_exec(&sql.0, &sql.1)
+            .map_err(|e| format!("PageList::run_batch_queries: SQL query error: {:?}", e))?;
+        Ok(result.filter_map(|row| row.ok()).collect())
     }
 
     /// Runs batched queries for process_batch_results and annotate_batch_results
@@ -578,52 +614,15 @@ impl PageList {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
         let error: Mutex<Option<String>> = Mutex::new(None);
-
-        let wiki = match self.wiki.as_ref() {
-            Some(wiki) => wiki,
-            None => {
-                return Err(format!("PageList::run_batch_queries: No wiki"));
-            }
-        };
+        let wiki = self
+            .wiki()
+            .ok_or(format!("PageList::run_batch_queries: No wiki"))?;
 
         batches.par_iter().for_each(|sql| {
-            // Get DB connection
-            let db_user_pass = match state.get_db_mutex().lock() {
-                Ok(db) => db,
-                Err(e) => {
-                    *error.lock().unwrap() =
-                        Some(format!("PageList::run_batch_queries: Bad mutex: {:?}", e));
-                    return;
-                }
+            match self.run_batch_query(state.clone(), sql, &wiki) {
+                Ok(mut data) => rows.lock().unwrap().append(&mut data),
+                Err(e) => *error.lock().unwrap() = Some(e),
             };
-            let mut conn = match state.get_wiki_db_connection(&db_user_pass, &wiki) {
-                Ok(conn) => conn,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(format!(
-                        "PageList::run_batch_queries: Can't get wiki db connection: {:?}",
-                        e
-                    ));
-                    return;
-                }
-            };
-
-            // Run query
-            let result = match conn.prep_exec(&sql.0, &sql.1) {
-                Ok(r) => r,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(format!(
-                        "PageList::run_batch_queries: SQL query error: {:?}",
-                        e
-                    ));
-                    return;
-                }
-            };
-
-            // Add to row list
-            let mut rows_lock = rows.lock().unwrap();
-            result
-                .filter_map(|row| row.ok())
-                .for_each(|row| rows_lock.push(row.clone()));
         });
 
         // Check error
@@ -640,29 +639,23 @@ impl PageList {
 
     /// Adds/replaces entries based on SQL query batch results.
     pub fn process_batch_results(
-        &mut self,
+        &self,
         state: Arc<AppState>,
         batches: Vec<SQLtuple>,
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
     ) -> Result<(), String> {
-        let rows = self.run_batch_queries(state, batches)?;
-
-        // Rows to entries
-        match rows.lock() {
-            Ok(rows) => {
-                rows.iter().for_each(|row| match f(row.to_owned()) {
-                    Some(entry) => self.add_entry(entry),
-                    None => {}
-                });
-            }
-            Err(e) => return Err(e.to_string()),
-        }
+        self.run_batch_queries(state, batches)?
+            .lock()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .filter_map(|row| f(row.to_owned()))
+            .for_each(|entry| self.add_entry(entry));
         Ok(())
     }
 
     /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
     pub fn annotate_batch_results(
-        &mut self,
+        &self,
         state: Arc<AppState>,
         batches: Vec<SQLtuple>,
         col_title: usize,
@@ -694,7 +687,7 @@ impl PageList {
                     };
 
                     let tmp_entry = PageListEntry::new(Title::new(&page_title, namespace_id));
-                    let mut entry = match self.entries.get(&tmp_entry) {
+                    let mut entry = match self.entries.read().unwrap().get(&tmp_entry) {
                         Some(e) => (*e).clone(),
                         None => return,
                     };
@@ -739,7 +732,7 @@ impl PageList {
         )?;
 
         // All done
-        if self.wiki != Some("wikidatawiki".to_string()) || wikidata_language.is_none() {
+        if !self.is_wikidata() || wikidata_language.is_none() {
             return Ok(());
         }
 
@@ -802,7 +795,7 @@ impl PageList {
 
     pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
         // Already that wiki?
-        if self.wiki == None || self.wiki == Some(wiki.to_string()) {
+        if self.wiki() == None || self.wiki() == Some(wiki.to_string()) {
             return Ok(());
         }
         self.convert_to_wikidata(platform)?;
@@ -813,7 +806,7 @@ impl PageList {
     }
 
     fn convert_to_wikidata(&mut self, platform: &Platform) -> Result<(), String> {
-        if self.wiki == None || self.wiki == Some("wikidatawiki".to_string()) {
+        if self.wiki() == None || self.is_wikidata() {
             return Ok(());
         }
 
@@ -824,17 +817,17 @@ impl PageList {
                 sql.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
-        self.entries.clear();
+        self.clear_entries();
         self.process_batch_results(platform.state(), batches, &|row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
         })?;
-        self.wiki = Some("wikidatawiki".to_string());
+        self.set_wiki(Some("wikidatawiki".to_string()));
         Ok(())
     }
 
     fn convert_from_wikidata(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
-        if self.wiki == None || self.wiki != Some("wikidatawiki".to_string()) {
+        if !self.is_wikidata() {
             return Ok(());
         }
         let batches = self.to_sql_batches(PAGE_BATCH_SIZE)
@@ -846,7 +839,7 @@ impl PageList {
             })
             .collect::<Vec<SQLtuple>>();
 
-        self.entries.clear();
+        self.clear_entries();
         let api = platform.state().get_api_for_wiki(wiki.to_string())?;
         self.process_batch_results(platform.state(), batches, &|row: my::Row| {
             let ips_site_page: String = my::from_row(row);
@@ -855,7 +848,7 @@ impl PageList {
                 &api,
             )))
         })?;
-        self.wiki = Some(wiki.to_string());
+        self.set_wiki(Some(wiki.to_string()));
         Ok(())
     }
 
@@ -863,19 +856,23 @@ impl PageList {
         let regexp_all = "^".to_string() + regexp + "$";
         let is_wikidata = self.is_wikidata();
         match Regex::new(&regexp_all) {
-            Ok(re) => self.entries.retain(|entry| match is_wikidata {
-                true => match &entry.wikidata_label {
-                    Some(s) => re.is_match(s.as_str()),
-                    None => false,
-                },
-                false => re.is_match(entry.title().pretty().as_str()),
-            }),
+            Ok(re) => self
+                .entries
+                .write()
+                .unwrap()
+                .retain(|entry| match is_wikidata {
+                    true => match &entry.wikidata_label {
+                        Some(s) => re.is_match(s.as_str()),
+                        None => false,
+                    },
+                    false => re.is_match(entry.title().pretty().as_str()),
+                }),
             _ => {}
         }
     }
 
     pub fn is_wikidata(&self) -> bool {
-        self.wiki == Some("wikidatawiki".to_string())
+        self.wiki() == Some("wikidatawiki".to_string())
     }
 }
 

@@ -750,7 +750,7 @@ impl SourceDatabase {
                     });
                 });
 
-                let wiki = match &primary_pagelist.wiki() {
+                let wiki = match primary_pagelist.wiki() {
                     Some(wiki) => wiki,
                     None => return Err(format!("No wiki 12345")),
                 };
@@ -1135,10 +1135,12 @@ mod tests {
         let state = get_state();
         let result = dbs.get_pages(&state, None).unwrap();
         //println!("{:?}", &result);
-        assert_eq!(*result.wiki(), Some("enwiki".to_string()));
-        assert!(result.entries.len() < 5); // This may change as more articles are written/categories added, please adjust!
+        assert_eq!(result.wiki(), Some("enwiki".to_string()));
+        assert!(result.len() < 5); // This may change as more articles are written/categories added, please adjust!
         assert!(result
-            .entries
+            .entries()
+            .read()
+            .unwrap()
             .iter()
             .any(|entry| entry.title().pretty() == "Magnus Manske"));
     }

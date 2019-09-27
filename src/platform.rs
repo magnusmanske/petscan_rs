@@ -491,14 +491,16 @@ impl Platform {
             .unwrap_or(1);
         let mut redlink_counter = redlink_counter.lock().unwrap();
         redlink_counter.retain(|_, &mut v| v >= min_redlinks);
-        result.entries = redlink_counter
-            .par_iter()
-            .map(|(k, redlink_count)| {
-                let mut ret = PageListEntry::new(k.to_owned());
-                ret.redlink_count = Some(*redlink_count);
-                ret
-            })
-            .collect();
+        result.set_entries(
+            redlink_counter
+                .par_iter()
+                .map(|(k, redlink_count)| {
+                    let mut ret = PageListEntry::new(k.to_owned());
+                    ret.redlink_count = Some(*redlink_count);
+                    ret
+                })
+                .collect(),
+        );
         Ok(())
     }
 
@@ -511,7 +513,9 @@ impl Platform {
 
         if add_subpages {
             let title_ns: Vec<(String, NamespaceID)> = result
-                .entries
+                .entries()
+                .read()
+                .unwrap()
                 .par_iter()
                 .map(|entry| {
                     (
@@ -547,7 +551,7 @@ impl Platform {
                 };
                 db_result.filter_map(|row_result|row_result.ok()).for_each(|row|{
                     let (page_title,page_namespace) = my::from_row::<(String,NamespaceID)>(row);
-                    result.entries.insert(PageListEntry::new(Title::new(&page_title,page_namespace)));
+                    result.add_entry(PageListEntry::new(Title::new(&page_title,page_namespace)));
                 });
             });
             match error {
@@ -562,10 +566,16 @@ impl Platform {
         }
 
         let keep_subpages = subpage_filter == "subpages";
+        result.retain_entries(&|entry: &PageListEntry| {
+            let has_slash = entry.title().pretty().find('/').is_some();
+            has_slash == keep_subpages
+        });
+        /*
         result.entries.retain(|entry| {
             let has_slash = entry.title().pretty().find('/').is_some();
             has_slash == keep_subpages
         });
+        */
         Ok(())
     }
 
@@ -761,7 +771,9 @@ impl Platform {
 
         // Using Wikidata
         let titles: Vec<String> = result
-            .entries
+            .entries()
+            .read()
+            .unwrap()
             .par_iter()
             .filter_map(|entry| entry.title().full_pretty(&api))
             .collect();
@@ -846,7 +858,7 @@ impl Platform {
             };
             let title = Title::new_from_full(&full_page_title, &api);
             let tmp_entry = PageListEntry::new(title);
-            let mut entry = match result.entries.get(&tmp_entry) {
+            let mut entry = match result.entries().read().unwrap().get(&tmp_entry) {
                 Some(e) => (*e).clone(),
                 None => return,
             };
@@ -896,10 +908,10 @@ impl Platform {
         }
         self.annotate_with_wikidata_item(result)?;
         if wdi == "with" {
-            result.entries.retain(|entry| entry.wikidata_item.is_some());
+            result.retain_entries(&|entry| entry.wikidata_item.is_some());
         }
         if wdi == "without" {
-            result.entries.retain(|entry| entry.wikidata_item.is_none());
+            result.retain_entries(&|entry| entry.wikidata_item.is_none());
         }
         Ok(())
     }
@@ -1548,7 +1560,7 @@ impl Platform {
                 (Combination::None, c) => self.combine_results(results, c),
                 (c, Combination::None) => self.combine_results(results, c),
                 (c, d) => {
-                    let mut r1 = self.combine_results(results, c)?;
+                    let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
                     r1.union(Some(r2), Some(&self))?;
                     Ok(r1)
@@ -1562,7 +1574,7 @@ impl Platform {
                     Err(format!("Intersection with Combination::None found"))
                 }
                 (c, d) => {
-                    let mut r1 = self.combine_results(results, c)?;
+                    let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
                     r1.intersection(Some(r2), Some(&self))?;
                     Ok(r1)
@@ -1572,7 +1584,7 @@ impl Platform {
                 (Combination::None, _c) => Err(format!("Not with Combination::None found")),
                 (c, Combination::None) => self.combine_results(results, c),
                 (c, d) => {
-                    let mut r1 = self.combine_results(results, c)?;
+                    let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
                     r1.difference(Some(r2), Some(&self))?;
                     Ok(r1)
@@ -1640,7 +1652,7 @@ mod tests {
     fn check_results_for_psid_ext(psid: usize, addendum: &str, wiki: &str, expected: Vec<Title>) {
         let platform = run_psid_ext(psid, addendum).unwrap();
         let result = platform.result.clone().unwrap();
-        assert_eq!(*result.wiki(), Some(wiki.to_string()));
+        assert_eq!(result.wiki(), Some(wiki.to_string()));
 
         // Sort/crop results
         let mut entries = result.get_sorted_vec(PageListSort::new_from_params(
@@ -1720,7 +1732,9 @@ mod tests {
         let platform = run_psid(10137125);
         let result = platform.result.unwrap();
         let entries = result
-            .entries
+            .entries()
+            .read()
+            .unwrap()
             .iter()
             .cloned()
             .collect::<Vec<PageListEntry>>();
@@ -1746,7 +1760,9 @@ mod tests {
         let platform = run_psid(10136716);
         let result = platform.result.unwrap();
         let entries = result
-            .entries
+            .entries()
+            .read()
+            .unwrap()
             .iter()
             .cloned()
             .collect::<Vec<PageListEntry>>();
@@ -1771,7 +1787,9 @@ mod tests {
         let platform = run_psid(10137767);
         let result = platform.result.unwrap();
         let entries = result
-            .entries
+            .entries()
+            .read()
+            .unwrap()
             .iter()
             .cloned()
             .collect::<Vec<PageListEntry>>();
@@ -1787,7 +1805,9 @@ mod tests {
         let platform = run_psid(10138030);
         let result = platform.result.unwrap();
         let entries = result
-            .entries
+            .entries()
+            .read()
+            .unwrap()
             .iter()
             .cloned()
             .collect::<Vec<PageListEntry>>();
@@ -1804,7 +1824,9 @@ mod tests {
         let platform = run_psid(10138979);
         let result = platform.result.unwrap();
         let entries = result
-            .entries
+            .entries()
+            .read()
+            .unwrap()
             .iter()
             .cloned()
             .collect::<Vec<PageListEntry>>();

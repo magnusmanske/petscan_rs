@@ -7,20 +7,6 @@ use std::time;
 use wikibase::mediawiki::api::Api;
 use wikibase::mediawiki::title::Title;
 
-/*
-let _no_sitelinks = platform.form_parameters().wpiu_no_sitelinks.is_some();
-let _label_language = platform
-    .form_parameters()
-    .wikidata_label_language
-    .as_ref()?; // .or(platform.form_parameters().interface_language.as_ref())
-let _prop_item_use = platform.form_parameters().wikidata_prop_item_use.as_ref()?;
-let _wpiu = platform
-    .form_parameters()
-    .wpiu
-    .as_ref()
-    .unwrap_or(&"any".to_string());
-*/
-
 pub type SQLtuple = (String, Vec<String>);
 
 pub trait DataSource {
@@ -99,14 +85,6 @@ impl DataSource for SourceWikidata {
             return Err(format!("SourceWikidata: No wikidata source sites given"));
         }
 
-        let state = platform.state();
-        let db_user_pass = match state.get_db_mutex().lock() {
-            Ok(db) => db,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
-        let mut conn = platform
-            .state()
-            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
         let sites = Platform::prep_quote(&sites);
 
         let mut sql = "SELECT ips_item_id FROM wb_items_per_site".to_string();
@@ -120,28 +98,27 @@ impl DataSource for SourceWikidata {
             sql += " AND page_namespace=0 AND ips_item_id=substr(page_title,2)*1 AND page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0" ;
         }
 
-        let mut ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
-        let result = match conn.prep_exec(sql, sites.1) {
-            Ok(r) => r,
-            Err(e) => return Err(format!("{:?}", e)),
+        // Perform DB query
+        let state = platform.state();
+        let db_user_pass = match state.get_db_mutex().lock() {
+            Ok(db) => db,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
         };
-        for row in result {
-            match row {
-                Ok(row_inner) => {
-                    let ips_item_id: usize = my::from_row(row_inner);
-                    let term_full_entity_id = format!("Q{}", ips_item_id);
-                    match Platform::entry_from_entity(&term_full_entity_id) {
-                        Some(entry) => {
-                            ret.add_entry(entry);
-                        }
-                        None => {}
-                    }
-                }
-                Err(_) => {}
-            }
-        }
-
-        Ok(ret)
+        let mut conn = platform
+            .state()
+            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
+        let result = conn
+            .prep_exec(sql, sites.1)
+            .map_err(|e| format!("{:?}", e))?;
+        let entries = result
+            .filter_map(|row| row.ok())
+            .filter_map(|row_inner| {
+                let ips_item_id: usize = my::from_row(row_inner);
+                let term_full_entity_id = format!("Q{}", ips_item_id);
+                Platform::entry_from_entity(&term_full_entity_id)
+            })
+            .collect();
+        Ok(PageList::new_from_vec(&"wikidatawiki".to_string(), entries))
     }
 }
 
@@ -204,8 +181,7 @@ impl DataSource for SourcePagePile {
             .filter_map(|title| title.as_str())
             .map(|title| PageListEntry::new(Title::new_from_full(&title.to_string(), &api)))
             .collect();
-        let pagelist = PageList::new_from_vec(wiki, entries);
-        Ok(pagelist)
+        Ok(PageList::new_from_vec(wiki, entries))
     }
 }
 

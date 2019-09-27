@@ -16,18 +16,14 @@ url = "*"
 rayon = "*"
 htmlescape = "*"
 rand = "*"
-mysql = { version="16.0.2" , features = ["ssl"] }
+mysql = { version="*" , features = ["ssl"] }
 reqwest = "*"
 rocket = "*"
 rocket_contrib = "*"
 #rocket =  { git = "https://github.com/SergioBenitez/Rocket" }
 #rocket_contrib =  { git = "https://github.com/SergioBenitez/Rocket" }
 
-#mediawiki = "0.1.7"
-#mediawiki =  { git = "https://github.com/magnusmanske/mediawiki_rust" }
-#mediawiki = { path='../mediawiki' }
-
-#wikibase = "0.3"
-wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
+#wikibase = "0.5"
 #wikibase = { path='../wikibase_rs' }
+wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
 
