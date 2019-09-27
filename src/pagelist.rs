@@ -55,14 +55,14 @@ pub struct FileUsage {
 
 impl FileUsage {
     pub fn new_from_part(part: &String) -> Option<Self> {
-        let mut parts: Vec<&str> = part.split(":").collect();
-        if parts.len() < 4 {
+        let mut parts = part.split(":");
+        let wiki = parts.next()?;
+        let namespace_id = parts.next()?.parse::<NamespaceID>().ok()?;
+        let namespace_name = parts.next()?;
+        let page = parts.collect::<Vec<&str>>().join(":");
+        if page.is_empty() {
             return None;
         }
-        let wiki = parts.remove(0);
-        let namespace_id = parts.remove(0).parse::<NamespaceID>().ok()?;
-        let namespace_name = parts.remove(0);
-        let page = parts.join(":");
         Some(Self {
             title: Title::new(&page, namespace_id),
             namespace_name: namespace_name.to_string(),
@@ -396,6 +396,11 @@ impl PageList {
         }
     }
 
+    pub fn set_from(&self, other: Self) {
+        *self.wiki.write().unwrap() = other.wiki.read().unwrap().clone();
+        *self.entries.write().unwrap() = other.entries.read().unwrap().clone();
+    }
+
     pub fn entries(&self) -> Arc<RwLock<HashSet<PageListEntry>>> {
         self.entries.clone()
     }
@@ -408,7 +413,7 @@ impl PageList {
         self.entries.write().unwrap().retain(f);
     }
 
-    pub fn set_wiki(&mut self, wiki: Option<String>) {
+    pub fn set_wiki(&self, wiki: Option<String>) {
         *self.wiki.write().unwrap() = wiki;
     }
 
@@ -431,6 +436,18 @@ impl PageList {
                 .push(entry.title.with_underscores().to_string());
         });
         ret
+        /*
+        // THIS IS A PARALLEL VERSION BUT REQUIRES MUTEX. FASTER?
+        let ret = Mutex::new(HashMap::new());
+        self.entries.read().unwrap().par_iter().for_each(|entry| {
+            ret.lock()
+                .unwrap()
+                .entry(entry.title.namespace_id())
+                .or_insert(vec![])
+                .push(entry.title.with_underscores().to_string());
+        });
+        ret.into_inner().unwrap()
+        */
     }
 
     pub fn swap_entries(&mut self, other: &mut PageList) {
@@ -458,11 +475,9 @@ impl PageList {
 
     fn check_before_merging(
         &self,
-        pagelist: Option<PageList>,
+        pagelist: PageList,
         platform: Option<&Platform>,
     ) -> Result<Arc<RwLock<HashSet<PageListEntry>>>, String> {
-        let mut pagelist =
-            pagelist.ok_or("PageList::check_before_merging pagelist is None".to_string())?;
         let my_wiki = match self.wiki() {
             Some(wiki) => wiki,
             None => return Err("PageList::check_before_merging self.wiki is not set".to_string()),
@@ -490,11 +505,7 @@ impl PageList {
         Ok(pagelist.entries())
     }
 
-    pub fn union(
-        &self,
-        pagelist: Option<PageList>,
-        platform: Option<&Platform>,
-    ) -> Result<(), String> {
+    pub fn union(&self, pagelist: PageList, platform: Option<&Platform>) -> Result<(), String> {
         let other_entries = self.check_before_merging(pagelist, platform)?;
         let new_entries = self
             .entries
@@ -509,7 +520,7 @@ impl PageList {
 
     pub fn intersection(
         &self,
-        pagelist: Option<PageList>,
+        pagelist: PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         let other_entries = self.check_before_merging(pagelist, platform)?;
@@ -526,7 +537,7 @@ impl PageList {
 
     pub fn difference(
         &self,
-        pagelist: Option<PageList>,
+        pagelist: PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         let other_entries = self.check_before_merging(pagelist, platform)?;
@@ -705,7 +716,7 @@ impl PageList {
     }
 
     pub fn load_missing_metadata(
-        &mut self,
+        &self,
         wikidata_language: Option<String>,
         platform: &Platform,
     ) -> Result<(), String> {
@@ -760,7 +771,7 @@ impl PageList {
     }
 
     fn add_wikidata_labels_for_namespace(
-        &mut self,
+        &self,
         namespace_id: NamespaceID,
         entity_type: &str,
         wikidata_language: &String,
@@ -796,7 +807,7 @@ impl PageList {
         )
     }
 
-    pub fn convert_to_wiki(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
+    pub fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
         // Already that wiki?
         if self.wiki() == None || self.wiki() == Some(wiki.to_string()) {
             return Ok(());
@@ -808,7 +819,7 @@ impl PageList {
         Ok(())
     }
 
-    fn convert_to_wikidata(&mut self, platform: &Platform) -> Result<(), String> {
+    fn convert_to_wikidata(&self, platform: &Platform) -> Result<(), String> {
         if self.wiki() == None || self.is_wikidata() {
             return Ok(());
         }
@@ -829,7 +840,7 @@ impl PageList {
         Ok(())
     }
 
-    fn convert_from_wikidata(&mut self, wiki: &str, platform: &Platform) -> Result<(), String> {
+    fn convert_from_wikidata(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
         if !self.is_wikidata() {
             return Ok(());
         }
@@ -855,21 +866,17 @@ impl PageList {
         Ok(())
     }
 
-    pub fn regexp_filter(&mut self, regexp: &String) {
+    pub fn regexp_filter(&self, regexp: &String) {
         let regexp_all = "^".to_string() + regexp + "$";
         let is_wikidata = self.is_wikidata();
         match Regex::new(&regexp_all) {
-            Ok(re) => self
-                .entries
-                .write()
-                .unwrap()
-                .retain(|entry| match is_wikidata {
-                    true => match &entry.wikidata_label {
-                        Some(s) => re.is_match(s.as_str()),
-                        None => false,
-                    },
-                    false => re.is_match(entry.title().pretty().as_str()),
-                }),
+            Ok(re) => self.retain_entries(&|entry: &PageListEntry| match is_wikidata {
+                true => match &entry.wikidata_label {
+                    Some(s) => re.is_match(s.as_str()),
+                    None => false,
+                },
+                false => re.is_match(entry.title().pretty().as_str()),
+            }),
             _ => {}
         }
     }

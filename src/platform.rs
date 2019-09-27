@@ -77,7 +77,7 @@ pub struct Platform {
     state: Arc<AppState>,
     result: Option<PageList>,
     pub psid: Option<u64>,
-    existing_labels: HashSet<String>,
+    existing_labels: Arc<Mutex<HashSet<String>>>,
     combination: Combination,
     output_redlinks: bool,
     query_time: Option<Duration>,
@@ -92,7 +92,7 @@ impl Platform {
             state: Arc::new(state.clone()),
             result: None,
             psid: None,
-            existing_labels: HashSet::new(),
+            existing_labels: Arc::new(Mutex::new(HashSet::new())),
             combination: Combination::None,
             output_redlinks: false,
             query_time: None,
@@ -103,7 +103,7 @@ impl Platform {
 
     pub fn label_exists(&self, label: &String) -> bool {
         // TODO normalization?
-        self.existing_labels.contains(label)
+        self.existing_labels.lock().unwrap().contains(label)
     }
 
     pub fn combination(&self) -> Combination {
@@ -195,22 +195,18 @@ impl Platform {
         Platform::profile("after post_process_result", None);
 
         if self.has_param("wdf_main") {
-            let mut pagelist = match self.result.as_ref() {
-                Some(res) => res.to_owned(),
-                None => return Err(format!("No result set for WDfist")),
-            };
-            match pagelist.convert_to_wiki("wikidatawiki", self).ok() {
-                Some(_) => {}
-                None => return Err(format!("Failed to convert result to Wikidata for WDfist")),
-            }
-            self.result = Some(pagelist);
-            match WDfist::new(&self, &self.result) {
-                Some(mut wdfist) => {
-                    self.result = None; // Safe space
-                    self.wdfist_result = Some(wdfist.run()?);
-                }
-                None => return Err(format!("Cannot create WDfist")),
-            };
+            let pagelist = self
+                .result
+                .as_ref()
+                .ok_or(format!("No result set for WDfist"))?;
+            pagelist
+                .convert_to_wiki("wikidatawiki", self)
+                .map_err(|e| format!("Failed to convert result to Wikidata for WDfist: {}", e))?;
+            self.result = Some(pagelist.clone());
+            let mut wdfist =
+                WDfist::new(&self, &self.result).ok_or(format!("Cannot create WDfist"))?;
+            self.result = None; // Safe space
+            self.wdfist_result = Some(wdfist.run()?);
         }
 
         self.query_time = start_time.elapsed().ok();
@@ -230,38 +226,38 @@ impl Platform {
         }
     }
 
-    fn post_process_result(&mut self, available_sources: &Vec<String>) -> Result<(), String> {
+    fn post_process_result(&self, available_sources: &Vec<String>) -> Result<(), String> {
         Platform::profile("post_process_result begin", None);
-        let mut result = match self.result.as_ref() {
+        let result = match self.result.as_ref() {
             Some(res) => res.to_owned(),
             None => return Ok(()),
         };
 
         // Filter and post-process
         Platform::profile("before filter_wikidata", Some(result.len()));
-        self.filter_wikidata(&mut result)?;
+        self.filter_wikidata(&result)?;
         Platform::profile("after filter_wikidata", Some(result.len()));
-        self.process_sitelinks(&mut result)?;
+        self.process_sitelinks(&result)?;
         Platform::profile("after process_sitelinks", None);
         if *available_sources != vec!["labels".to_string()] {
-            self.process_labels(&mut result)?;
+            self.process_labels(&result)?;
             Platform::profile("after process_labels", Some(result.len()));
         }
 
-        self.convert_to_common_wiki(&mut result)?;
+        self.convert_to_common_wiki(&result)?;
         Platform::profile("after convert_to_common_wiki", Some(result.len()));
 
         if !available_sources.contains(&"categories".to_string()) {
-            self.process_missing_database_filters(&mut result)?;
+            self.process_missing_database_filters(&result)?;
             Platform::profile("after process_missing_database_filters", Some(result.len()));
         }
-        self.process_by_wikidata_item(&mut result)?;
+        self.process_by_wikidata_item(&result)?;
         Platform::profile("after process_by_wikidata_item", Some(result.len()));
-        self.process_files(&mut result)?;
+        self.process_files(&result)?;
         Platform::profile("after process_files", Some(result.len()));
-        self.process_pages(&mut result)?;
+        self.process_pages(&result)?;
         Platform::profile("after process_pages", Some(result.len()));
-        self.process_subpages(&mut result)?;
+        self.process_subpages(&result)?;
         Platform::profile("after process_subpages", Some(result.len()));
 
         let wikidata_label_language = self.get_param_default(
@@ -274,13 +270,13 @@ impl Platform {
             Some(regexp) => result.regexp_filter(&regexp),
             None => {}
         }
-        self.process_redlinks(&mut result)?;
+        self.process_redlinks(&result)?;
         Platform::profile("after process_redlinks", Some(result.len()));
-        self.process_creator(&mut result)?;
+        self.process_creator(&result)?;
         Platform::profile("after process_creator", Some(result.len()));
 
         // DONE
-        self.result = Some(result);
+        //self.result = Some(result);
 
         Ok(())
     }
@@ -289,39 +285,40 @@ impl Platform {
         self.state.clone()
     }
 
-    fn convert_to_common_wiki(&mut self, result: &mut PageList) -> Result<(), String> {
+    fn convert_to_common_wiki(&self, result: &PageList) -> Result<(), String> {
         // Find best wiki to convert to
         match self.get_param_default("common_wiki", "auto").as_str() {
             "auto" => {}
-            "cats" => match self.wiki_by_source.get("categories") {
-                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                None => return Err(format!("categories wiki requested as output, but not set")),
-            },
-            "pagepile" => match self.wiki_by_source.get("pagepile") {
-                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                None => return Err(format!("pagepile wiki requested as output, but not set")),
-            },
-            "manual" => match self.wiki_by_source.get("manual") {
-                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                None => {
-                    // Backwards compatability hack
-                    match self.get_param("common_wiki_other") {
-                        Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                        None => {
-                            return Err(format!("manual wiki requested as output, but not set"))
-                        }
-                    }
-                }
-            },
+            "cats" => result.convert_to_wiki(
+                &self
+                    .wiki_by_source
+                    .get("categories")
+                    .ok_or(format!("categories wiki requested as output, but not set"))?,
+                &self,
+            )?,
+            "pagepile" => result.convert_to_wiki(
+                &self
+                    .wiki_by_source
+                    .get("pagepile")
+                    .ok_or(format!("pagepile wiki requested as output, but not set"))?,
+                &self,
+            )?,
+            "manual" => result.convert_to_wiki(
+                &self
+                    .wiki_by_source
+                    .get("manual")
+                    .map(|s| s.to_string())
+                    .or_else(|| self.get_param("common_wiki_other"))
+                    .ok_or(format!("manual wiki requested as output, but not set"))?,
+                &self,
+            )?,
             "wikidata" => result.convert_to_wiki("wikidatawiki", &self)?,
-            "other" => match self.get_param("common_wiki_other") {
-                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
-                None => {
-                    return Err(format!(
-                        "Other wiki for output expected, but not given in text field"
-                    ))
-                }
-            },
+            "other" => result.convert_to_wiki(
+                &self.get_param("common_wiki_other").ok_or(format!(
+                    "Other wiki for output expected, but not given in text field"
+                ))?,
+                &self,
+            )?,
             unknown => return Err(format!("Unknown output wiki type '{}'", &unknown)),
         }
         Ok(())
@@ -337,7 +334,7 @@ impl Platform {
         }
     }
 
-    fn process_creator(&mut self, result: &mut PageList) -> Result<(), String> {
+    fn process_creator(&self, result: &PageList) -> Result<(), String> {
         if result.is_empty() || result.is_wikidata() {
             return Ok(());
         }
@@ -384,7 +381,7 @@ impl Platform {
                 match row {
                     Ok(row) => {
                         let term_text = my::from_row::<String>(row);
-                        self.existing_labels.insert(term_text);
+                        self.existing_labels.lock().unwrap().insert(term_text);
                     }
                     _ => {} // Ignore error
                 }
@@ -396,7 +393,7 @@ impl Platform {
         }
     }
 
-    fn process_redlinks(&self, result: &mut PageList) -> Result<(), String> {
+    fn process_redlinks(&self, result: &PageList) -> Result<(), String> {
         if result.is_empty() || !self.has_param("show_redlinks") || result.is_wikidata() {
             return Ok(());
         }
@@ -505,7 +502,7 @@ impl Platform {
         Ok(())
     }
 
-    fn process_subpages(&self, result: &mut PageList) -> Result<(), String> {
+    fn process_subpages(&self, result: &PageList) -> Result<(), String> {
         let add_subpages = self.has_param("add_subpages");
         let subpage_filter = self.get_param_default("subpage_filter", "either");
         if !add_subpages && subpage_filter != "subpages" && subpage_filter != "no_subpages" {
@@ -580,7 +577,7 @@ impl Platform {
         Ok(())
     }
 
-    fn process_pages(&self, result: &mut PageList) -> Result<(), String> {
+    fn process_pages(&self, result: &PageList) -> Result<(), String> {
         let add_coordinates = self.has_param("add_coordinates");
         let add_image = self.has_param("add_image");
         let add_defaultsort = self.has_param("add_defaultsort");
@@ -656,7 +653,7 @@ impl Platform {
         )
     }
 
-    fn process_files(&self, result: &mut PageList) -> Result<(), String> {
+    fn process_files(&self, result: &PageList) -> Result<(), String> {
         let giu = self.has_param("giu");
         let file_data = self.has_param("ext_image_data")
             || self.get_param("sortby") == Some("filesize".to_string())
@@ -759,7 +756,7 @@ impl Platform {
         Ok(())
     }
 
-    fn annotate_with_wikidata_item(&self, result: &mut PageList) -> Result<(), String> {
+    fn annotate_with_wikidata_item(&self, result: &PageList) -> Result<(), String> {
         if result.is_wikidata() {
             return Ok(());
         }
@@ -899,7 +896,7 @@ impl Platform {
     }
 
     /// Filters on whether a page has a Wikidata item, depending on the "wikidata_item"
-    fn process_by_wikidata_item(&mut self, result: &mut PageList) -> Result<(), String> {
+    fn process_by_wikidata_item(&self, result: &PageList) -> Result<(), String> {
         if result.is_wikidata() {
             return Ok(());
         }
@@ -918,22 +915,17 @@ impl Platform {
     }
 
     /// Adds page properties that might be missing if none of the original sources was "categories"
-    fn process_missing_database_filters(&mut self, result: &mut PageList) -> Result<(), String> {
+    fn process_missing_database_filters(&self, result: &PageList) -> Result<(), String> {
         let mut params = self.db_params();
-        params.wiki = match result.wiki() {
-            Some(wiki) => Some(wiki.to_string()),
-            None => {
-                return Err(format!(
-                    "Platform::process_missing_database_filters: result has no wiki"
-                ))
-            }
-        };
+        params.wiki = Some(result.wiki().ok_or(format!(
+            "Platform::process_missing_database_filters: result has no wiki"
+        ))?);
         let mut db = SourceDatabase::new(params);
-        *result = db.get_pages(&self.state, Some(result))?;
+        result.set_from(db.get_pages(&self.state, Some(result))?);
         Ok(())
     }
 
-    fn process_labels(&mut self, result: &mut PageList) -> Result<(), String> {
+    fn process_labels(&self, result: &PageList) -> Result<(), String> {
         let mut sql = self.get_label_sql();
         if sql.1.is_empty() {
             return Ok(());
@@ -963,7 +955,7 @@ impl Platform {
         })
     }
 
-    fn process_sitelinks(&mut self, result: &mut PageList) -> Result<(), String> {
+    fn process_sitelinks(&self, result: &PageList) -> Result<(), String> {
         if result.is_empty() {
             return Ok(());
         }
@@ -1059,7 +1051,7 @@ impl Platform {
         Ok(())
     }
 
-    fn filter_wikidata(&mut self, result: &mut PageList) -> Result<(), String> {
+    fn filter_wikidata(&self, result: &PageList) -> Result<(), String> {
         if result.is_empty() {
             return Ok(());
         }
@@ -1563,7 +1555,7 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.union(Some(r2), Some(&self))?;
+                    r1.union(r2, Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1577,7 +1569,7 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.intersection(Some(r2), Some(&self))?;
+                    r1.intersection(r2, Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1587,7 +1579,7 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.difference(Some(r2), Some(&self))?;
+                    r1.difference(r2, Some(&self))?;
                     Ok(r1)
                 }
             },

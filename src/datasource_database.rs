@@ -679,7 +679,7 @@ impl SourceDatabase {
                         if ret.is_empty() {
                             ret.swap_entries(&mut pl2);
                         } else {
-                            ret.union(Some(pl2), None).unwrap();
+                            ret.union(pl2, None).unwrap();
                         }
                         Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE",None);
                     });
@@ -776,7 +776,7 @@ impl SourceDatabase {
                     if ret.is_empty() {
                         ret.swap_entries(&mut pl2);
                     } else {
-                        ret.union(Some(pl2), None)?;
+                        ret.union(pl2, None)?;
                     }
                 }
                 return Ok(ret);
