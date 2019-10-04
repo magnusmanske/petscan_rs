@@ -670,16 +670,20 @@ impl PageList {
         Ok(())
     }
 
+    pub fn string_from_row(row: &my::Row, col_num: usize) -> Option<String> {
+        match row.get(col_num)? {
+            my::Value::Bytes(uv) => String::from_utf8(uv).ok(),
+            _ => return None,
+        }
+    }
+
     fn entry_from_row(
         &self,
         row: &my::Row,
         col_title: usize,
         col_ns: usize,
     ) -> Option<PageListEntry> {
-        let page_title = match row.get(col_title)? {
-            my::Value::Bytes(uv) => String::from_utf8(uv).ok()?,
-            _ => return None,
-        };
+        let page_title = Self::string_from_row(row, col_title)?;
         let namespace_id = match row.get(col_ns)? {
             my::Value::Int(i) => i,
             _ => return None,
