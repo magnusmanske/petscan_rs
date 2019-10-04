@@ -679,9 +679,20 @@ impl Platform {
                 0,
                 1,
                 &|row: my::Row, entry: &mut PageListEntry| {
-                    let (_gil_to, _namespace_id, gil_group) =
-                        my::from_row::<(String, usize, String)>(row);
-                    entry.file_info = Some(FileInfo::new_from_gil_group(&gil_group));
+                    //let (_gil_to, _namespace_id, gil_group) = my::from_row::<(String, usize, String)>(row);
+                    let gil_group = match row.get(2) {
+                        Some(g) => g,
+                        _ => return,
+                    };
+                    match gil_group {
+                        my::Value::Bytes(uv) => match String::from_utf8(uv) {
+                            Ok(gil_group) => {
+                                entry.file_info = Some(FileInfo::new_from_gil_group(&gil_group));
+                            }
+                            _ => {}
+                        },
+                        _ => {}
+                    }
                 },
             )?;
         }
