@@ -24,7 +24,7 @@ use rocket::Request;
 use rocket::Response;
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 pub static PAGE_BATCH_SIZE: usize = 20000;
@@ -83,6 +83,7 @@ pub struct Platform {
     query_time: Option<Duration>,
     wiki_by_source: HashMap<String, String>,
     wdfist_result: Option<Value>,
+    warnings: Arc<RwLock<Vec<String>>>,
 }
 
 impl Platform {
@@ -98,7 +99,16 @@ impl Platform {
             query_time: None,
             wiki_by_source: HashMap::new(),
             wdfist_result: None,
+            warnings: Arc::new(RwLock::new(vec![])),
         }
+    }
+
+    pub fn warnings(&self) -> Vec<String> {
+        self.warnings.read().unwrap().clone()
+    }
+
+    pub fn warn(&self, s: String) {
+        self.warnings.write().unwrap().push(s);
     }
 
     pub fn label_exists(&self, label: &String) -> bool {

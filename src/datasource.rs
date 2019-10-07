@@ -165,7 +165,7 @@ impl DataSource for SourcePagePile {
             .as_str()
             .ok_or(format!("PagePile {} does not specify a wiki", &pagepile))?;
         let api = platform.state().get_api_for_wiki(wiki.to_string())?; // Just because we need query_raw
-        let entries = v["pages"]
+        let entries: Vec<PageListEntry> = v["pages"]
             .as_array()
             .ok_or(format!(
                 "PagePile {} does not have a 'pages' array",
@@ -175,6 +175,9 @@ impl DataSource for SourcePagePile {
             .filter_map(|title| title.as_str())
             .map(|title| PageListEntry::new(Title::new_from_full(&title.to_string(), &api)))
             .collect();
+        if entries.is_empty() {
+            platform.warn(format!("<span tt='warn_pagepile'></span>"));
+        }
         Ok(PageList::new_from_vec(wiki, entries))
     }
 }
@@ -235,6 +238,9 @@ impl DataSource for SourceSearch {
             .map(|title| PageListEntry::new(title.to_owned()))
             .collect();
         let pagelist = PageList::new_from_vec(&wiki, entries);
+        if pagelist.is_empty() {
+            platform.warn(format!("<span tt='warn_search'></span>"));
+        }
         Ok(pagelist)
     }
 }
@@ -323,6 +329,9 @@ impl DataSource for SourceSparql {
             .par_iter()
             .filter_map(|e| Platform::entry_from_entity(e))
             .collect();
+        if ple.is_empty() {
+            platform.warn(format!("<span tt='warn_sparql'></span>"));
+        }
         Ok(PageList::new_from_vec("wikidatawiki", ple))
     }
 }

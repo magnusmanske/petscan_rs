@@ -134,7 +134,16 @@ impl DataSource for SourceDatabase {
     }
 
     fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
-        self.get_pages(&platform.state(), None)
+        let ret = self.get_pages(&platform.state(), None);
+        match &ret {
+            Ok(pagelist) => {
+                if pagelist.is_empty() {
+                    platform.warn(format!("<span tt='warn_categories'></span>"));
+                }
+            }
+            _ => {}
+        }
+        ret
     }
 }
 

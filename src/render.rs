@@ -596,6 +596,13 @@ impl Render for RenderHTML {
             entries.len()
         ));
 
+        for warning in platform.warnings() {
+            rows.push(format!(
+                "<div class='alert alert-warning' style='clear:both'>{}</div>",
+                warning
+            ));
+        }
+
         let header = self.get_initial_columns(&params);
         rows.push("<div style='clear:both;overflow:auto'>".to_string());
         rows.push(self.get_table_header(&header, &params));
