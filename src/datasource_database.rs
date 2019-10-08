@@ -118,17 +118,22 @@ impl SourceDatabaseParameters {
         } else {
             depth_signed as u16
         };
-        let ret = SourceDatabaseParameters {
-            combine: match platform.form_parameters().params.get("combination") {
-                Some(x) => {
-                    if x == "union" {
-                        x.to_string()
-                    } else {
-                        "subset".to_string()
-                    }
+        let mut combine = match platform.form_parameters().params.get("combination") {
+            Some(x) => {
+                if x == "union" {
+                    x.to_string()
+                } else {
+                    "subset".to_string()
                 }
-                None => "subset".to_string(),
-            },
+            }
+            None => "subset".to_string(),
+        };
+        let cat_pos = platform.get_param_as_vec("categories", "\n");
+        if cat_pos.len() == 1 && combine == "subset" {
+            combine = "union".to_string(); // Easier to construct
+        }
+        let ret = SourceDatabaseParameters {
+            combine: combine,
             only_new_since: platform.has_param("only_new"),
             max_age: platform
                 .get_param("max_age")
@@ -156,7 +161,7 @@ impl SourceDatabaseParameters {
             ores_type: platform.get_param_blank("ores_type"),
             ores_prediction: platform.get_param_default("ores_prediction", "any"),
             depth: depth,
-            cat_pos: platform.get_param_as_vec("categories", "\n"),
+            cat_pos: cat_pos,
             cat_neg: platform.get_param_as_vec("negcats", "\n"),
             ores_prob_from: platform
                 .get_param("ores_prob_from")
