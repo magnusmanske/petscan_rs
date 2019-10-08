@@ -107,6 +107,7 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
     // Actually do something useful!
     state.modify_threads_running(1);
     let mut platform = Platform::new_from_parameters(&form_parameters, &state.inner());
+    Platform::profile("platform initialized", None);
     match platform.run() {
         Ok(_) => {}
         Err(error) => {
@@ -115,12 +116,14 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
         }
     }
     platform.state().modify_threads_running(-1);
+    Platform::profile("platform run complete", None);
 
     // Generate and store a new PSID
     platform.psid = match state.get_or_create_psid_for_query(&form_parameters.to_string()) {
         Ok(psid) => Some(psid),
         Err(e) => return state.render_error(e, &form_parameters),
     };
+    Platform::profile("PSID created", None);
 
     // Render response
     match platform.get_response() {

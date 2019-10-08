@@ -460,14 +460,38 @@ impl SourceDatabase {
                 "(SELECT DISTINCT tl_from FROM templatelinks WHERE tl_namespace=10 AND tl_title";
         }
 
-        sql.0 += " IN (";
-        Platform::append_sql(&mut sql, Platform::prep_quote(input));
-        sql.0 += "))";
+        self.sql_in(input, &mut sql);
+
+        if !self.params.namespace_ids.is_empty() {
+            sql.0 += " AND tl_from_namespace";
+            self.sql_in(
+                &self
+                    .params
+                    .namespace_ids
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                &mut sql,
+            );
+        }
+
+        sql.0 += ")";
         if use_talk_page {
             sql.0 += ")";
         }
 
         sql
+    }
+
+    pub fn sql_in(&self, input: &Vec<String>, sql: &mut SQLtuple) {
+        if input.len() == 1 {
+            sql.0 += "=";
+            Platform::append_sql(sql, Platform::prep_quote(input));
+        } else {
+            sql.0 += " IN (";
+            Platform::append_sql(sql, Platform::prep_quote(input));
+            sql.0 += ")";
+        }
     }
 
     pub fn group_link_list_by_namespace(
@@ -503,9 +527,9 @@ impl SourceDatabase {
             }
             sql.0 += "( SELECT p_to.page_id FROM page p_to,page p_from,pagelinks WHERE p_from.page_namespace=";
             sql.0 += &nsgroup.0.to_string();
-            sql.0 += "  AND p_from.page_id=pl_from AND pl_namespace=p_to.page_namespace AND pl_title=p_to.page_title AND p_from.page_title IN (";
-            Platform::append_sql(&mut sql, Platform::prep_quote(nsgroup.1));
-            sql.0 += ") )";
+            sql.0 += "  AND p_from.page_id=pl_from AND pl_namespace=p_to.page_namespace AND pl_title=p_to.page_title AND p_from.page_title" ;
+            self.sql_in(nsgroup.1,&mut sql);
+            sql.0 += " )";
         });
         sql.0 += ")";
         sql
@@ -520,9 +544,9 @@ impl SourceDatabase {
             }
             sql.0 += "( SELECT DISTINCT pl_from FROM pagelinks WHERE pl_namespace=";
             sql.0 += &nsgroup.0.to_string();
-            sql.0 += " AND pl_title IN (";
-            Platform::append_sql(&mut sql, Platform::prep_quote(nsgroup.1));
-            sql.0 += ") )";
+            sql.0 += " AND pl_title";
+            self.sql_in(nsgroup.1, &mut sql);
+            sql.0 += " )";
         });
         sql.0 += ")";
         sql
@@ -755,9 +779,10 @@ impl SourceDatabase {
                                 return ;
                             }
                         }
-                        let ret = ret.lock().unwrap();
+                        let mut ret = ret.lock().unwrap();
                         if ret.is_empty() {
-                            ret.swap_entries(&mut pl2);
+                            *ret = pl2 ;
+                            //ret.swap_entries(&mut pl2);
                         } else {
                             ret.union(pl2, None).unwrap();
                         }
@@ -851,9 +876,10 @@ impl SourceDatabase {
                     })
                     .collect();
 
-                for mut pl2 in partial_ret {
+                for pl2 in partial_ret {
                     if ret.is_empty() {
-                        ret.swap_entries(&mut pl2);
+                        ret = pl2;
+                    //ret.swap_entries(&mut pl2);
                     } else {
                         ret.union(pl2, None)?;
                     }
@@ -923,28 +949,27 @@ impl SourceDatabase {
     ) -> Result<(), String> {
         // Namespaces
         if !self.params.namespace_ids.is_empty() {
-            sql.0 += " AND p.page_namespace IN(";
-            sql.0 += &self
+            let namespace_ids = &self
                 .params
                 .namespace_ids
-                .par_iter()
+                .iter()
                 .map(|ns| ns.to_string())
-                .collect::<Vec<String>>()
-                .join(",");
-            sql.0 += ")";
+                .collect::<Vec<String>>();
+            sql.0 += " AND p.page_namespace";
+            self.sql_in(&namespace_ids, &mut sql);
         }
 
         // Negative categories
         if !self.cat_neg.is_empty() {
-            self.cat_neg.iter().for_each(|cats|{
-                sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to IN (" ;
-                Platform::append_sql(&mut sql, Platform::prep_quote(cats));
-                sql.0 += "))" ;
+            self.cat_neg.iter().for_each(|cats| {
+                sql.0 +=
+                    " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
+                self.sql_in(cats, &mut sql);
+                sql.0 += ")";
             });
         }
 
         // Templates as secondary; template namespace only!
-        // TODO talk page
         if self.has_pos_templates {
             // All
             self.params.templates_yes.iter().for_each(|t| {
@@ -1147,6 +1172,7 @@ impl SourceDatabase {
             }
         };
 
+        println!("{:?}", &sql);
         let result = match conn.prep_exec(sql.0.to_owned(), sql.1.to_owned()) {
             Ok(r) => r,
             Err(e) => {
@@ -1170,9 +1196,8 @@ impl SourceDatabase {
             })
             .collect();
 
-        let pl1 = PageList::new_from_vec(wiki, entries_tmp);
-        pl1.swap_entries(pages_sublist);
-
+        *pages_sublist = PageList::new_from_vec(wiki, entries_tmp);
+        println!("PageList with {} entries", pages_sublist.len());
         Ok(())
     }
 }

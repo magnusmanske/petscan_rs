@@ -450,13 +450,6 @@ impl PageList {
         */
     }
 
-    pub fn swap_entries(&self, other: &PageList) {
-        std::mem::swap(
-            &mut *self.entries.write().unwrap(),
-            &mut *other.entries.write().unwrap(),
-        )
-    }
-
     pub fn is_empty(&self) -> bool {
         self.entries.read().unwrap().is_empty()
     }
@@ -722,35 +715,44 @@ impl PageList {
         Ok(())
     }
 
+    fn load_missing_page_metadata(&self, platform: &Platform) -> Result<(), String> {
+        if self.entries.read().unwrap().par_iter().any(|entry| {
+            entry.page_id.is_none() || entry.page_bytes.is_none() || entry.page_timestamp.is_none()
+        }) {
+            let batches: Vec<SQLtuple> = self
+                .to_sql_batches(PAGE_BATCH_SIZE)
+                .par_iter_mut()
+                .map(|mut sql_batch| {
+                    sql_batch.0 =
+                        "SELECT page_title,page_namespace,page_id,page_len,page_touched FROM page WHERE"
+                            .to_string() + &sql_batch.0;
+                    sql_batch.to_owned()
+                })
+                .collect::<Vec<SQLtuple>>();
+
+            self.annotate_batch_results(
+                platform.state(),
+                batches,
+                0,
+                1,
+                &|row: my::Row, entry: &mut PageListEntry| {
+                    let (_page_title, _page_namespace, page_id, page_len, page_touched) =
+                        my::from_row::<(String, NamespaceID, usize, usize, String)>(row);
+                    entry.page_id = Some(page_id);
+                    entry.page_bytes = Some(page_len);
+                    entry.page_timestamp = Some(page_touched);
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn load_missing_metadata(
         &self,
         wikidata_language: Option<String>,
         platform: &Platform,
     ) -> Result<(), String> {
-        let batches: Vec<SQLtuple> = self
-            .to_sql_batches(PAGE_BATCH_SIZE)
-            .par_iter_mut()
-            .map(|mut sql_batch| {
-                sql_batch.0 =
-                    "SELECT page_title,page_namespace,page_id,page_len,page_touched FROM page WHERE"
-                        .to_string() + &sql_batch.0;
-                sql_batch.to_owned()
-            })
-            .collect::<Vec<SQLtuple>>();
-
-        self.annotate_batch_results(
-            platform.state(),
-            batches,
-            0,
-            1,
-            &|row: my::Row, entry: &mut PageListEntry| {
-                let (_page_title, _page_namespace, page_id, page_len, page_touched) =
-                    my::from_row::<(String, NamespaceID, usize, usize, String)>(row);
-                entry.page_id = Some(page_id);
-                entry.page_bytes = Some(page_len);
-                entry.page_timestamp = Some(page_touched);
-            },
-        )?;
+        self.load_missing_page_metadata(platform)?;
 
         // All done
         if !self.is_wikidata() || wikidata_language.is_none() {
