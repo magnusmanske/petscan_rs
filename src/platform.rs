@@ -133,7 +133,7 @@ impl Platform {
         let start_time = SystemTime::now();
         let mut candidate_sources: Vec<Arc<Mutex<Box<dyn DataSource + Send + Sync>>>> = vec![];
         candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceDatabase::new(
-            self.db_params(),
+            SourceDatabaseParameters::db_params(self),
         )))));
         candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceSparql::new()))));
         candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceManual::new()))));
@@ -925,10 +925,10 @@ impl Platform {
 
     /// Adds page properties that might be missing if none of the original sources was "categories"
     fn process_missing_database_filters(&self, result: &PageList) -> Result<(), String> {
-        let mut params = self.db_params();
-        params.wiki = Some(result.wiki().ok_or(format!(
+        let mut params = SourceDatabaseParameters::db_params(self);
+        params.set_wiki(Some(result.wiki().ok_or(format!(
             "Platform::process_missing_database_filters: result has no wiki"
-        ))?);
+        ))?));
         let mut db = SourceDatabase::new(params);
         result.set_from(db.get_pages(&self.state, Some(result))?);
         Ok(())
@@ -1157,82 +1157,8 @@ impl Platform {
         }
     }
 
-    fn usize_option_from_param(&self, key: &str) -> Option<usize> {
+    pub fn usize_option_from_param(&self, key: &str) -> Option<usize> {
         self.get_param(key)?.parse::<usize>().ok()
-    }
-
-    pub fn db_params(&self) -> SourceDatabaseParameters {
-        let depth_signed: i32 = self
-            .get_param("depth")
-            .unwrap_or("0".to_string())
-            .parse::<i32>()
-            .unwrap_or(0);
-        let depth: u16 = if depth_signed < 0 {
-            999
-        } else {
-            depth_signed as u16
-        };
-        let ret = SourceDatabaseParameters {
-            combine: match self.form_parameters.params.get("combination") {
-                Some(x) => {
-                    if x == "union" {
-                        x.to_string()
-                    } else {
-                        "subset".to_string()
-                    }
-                }
-                None => "subset".to_string(),
-            },
-            only_new_since: self.has_param("only_new"),
-            max_age: self
-                .get_param("max_age")
-                .map(|x| x.parse::<i64>().unwrap_or(0)),
-            before: self.get_param_blank("before"),
-            after: self.get_param_blank("after"),
-            templates_yes: self.get_param_as_vec("templates_yes", "\n"),
-            templates_any: self.get_param_as_vec("templates_any", "\n"),
-            templates_no: self.get_param_as_vec("templates_no", "\n"),
-            templates_yes_talk_page: self.has_param("templates_use_talk_yes"),
-            templates_any_talk_page: self.has_param("templates_use_talk_any"),
-            templates_no_talk_page: self.has_param("templates_use_talk_no"),
-            linked_from_all: self.get_param_as_vec("outlinks_yes", "\n"),
-            linked_from_any: self.get_param_as_vec("outlinks_any", "\n"),
-            linked_from_none: self.get_param_as_vec("outlinks_no", "\n"),
-            links_to_all: self.get_param_as_vec("links_to_all", "\n"),
-            links_to_any: self.get_param_as_vec("links_to_any", "\n"),
-            links_to_none: self.get_param_as_vec("links_to_no", "\n"),
-            last_edit_bot: self.get_param_default("edits[bots]", "both"),
-            last_edit_anon: self.get_param_default("edits[anons]", "both"),
-            last_edit_flagged: self.get_param_default("edits[flagged]", "both"),
-            gather_link_count: self.has_param("minlinks") || self.has_param("maxlinks"),
-            page_image: self.get_param_default("page_image", "any"),
-            page_wikidata_item: self.get_param_default("wikidata_item", "any"),
-            ores_type: self.get_param_blank("ores_type"),
-            ores_prediction: self.get_param_default("ores_prediction", "any"),
-            depth: depth,
-            cat_pos: self.get_param_as_vec("categories", "\n"),
-            cat_neg: self.get_param_as_vec("negcats", "\n"),
-            ores_prob_from: self
-                .get_param("ores_prob_from")
-                .map(|x| x.parse::<f32>().unwrap_or(0.0)),
-            ores_prob_to: self
-                .get_param("ores_prob_to")
-                .map(|x| x.parse::<f32>().unwrap_or(1.0)),
-            redirects: self.get_param_blank("show_redirects"),
-            minlinks: self.usize_option_from_param("minlinks"),
-            maxlinks: self.usize_option_from_param("maxlinks"),
-            larger: self.usize_option_from_param("larger"),
-            smaller: self.usize_option_from_param("smaller"),
-            wiki: self.get_main_wiki(),
-            namespace_ids: self
-                .form_parameters
-                .ns
-                .par_iter()
-                .cloned()
-                .collect::<Vec<usize>>(),
-            use_new_category_mode: true,
-        };
-        ret
     }
 
     pub fn get_main_wiki(&self) -> Option<String> {

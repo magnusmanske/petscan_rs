@@ -17,50 +17,50 @@ static MAX_CATEGORY_BATCH_SIZE: usize = 5000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
-    pub name: String,
-    pub depth: u16,
+    name: String,
+    depth: u16,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseParameters {
-    pub combine: String,
-    pub namespace_ids: Vec<usize>,
-    pub linked_from_all: Vec<String>,
-    pub linked_from_any: Vec<String>,
-    pub linked_from_none: Vec<String>,
-    pub links_to_all: Vec<String>,
-    pub links_to_any: Vec<String>,
-    pub links_to_none: Vec<String>,
-    pub templates_yes: Vec<String>,
-    pub templates_any: Vec<String>,
-    pub templates_no: Vec<String>,
-    pub templates_yes_talk_page: bool,
-    pub templates_any_talk_page: bool,
-    pub templates_no_talk_page: bool,
-    pub page_image: String,
-    pub ores_type: String,
-    pub ores_prediction: String,
-    pub ores_prob_from: Option<f32>,
-    pub ores_prob_to: Option<f32>,
-    pub last_edit_bot: String,
-    pub last_edit_anon: String,
-    pub last_edit_flagged: String,
-    pub redirects: String,
-    pub page_wikidata_item: String,
-    pub larger: Option<usize>,
-    pub smaller: Option<usize>,
-    pub minlinks: Option<usize>,
-    pub maxlinks: Option<usize>,
-    pub wiki: Option<String>,
-    pub gather_link_count: bool,
-    pub cat_pos: Vec<String>,
-    pub cat_neg: Vec<String>,
-    pub depth: u16,
-    pub max_age: Option<i64>,
-    pub only_new_since: bool,
-    pub before: String,
-    pub after: String,
-    pub use_new_category_mode: bool,
+    combine: String,
+    namespace_ids: Vec<usize>,
+    linked_from_all: Vec<String>,
+    linked_from_any: Vec<String>,
+    linked_from_none: Vec<String>,
+    links_to_all: Vec<String>,
+    links_to_any: Vec<String>,
+    links_to_none: Vec<String>,
+    templates_yes: Vec<String>,
+    templates_any: Vec<String>,
+    templates_no: Vec<String>,
+    templates_yes_talk_page: bool,
+    templates_any_talk_page: bool,
+    templates_no_talk_page: bool,
+    page_image: String,
+    ores_type: String,
+    ores_prediction: String,
+    ores_prob_from: Option<f32>,
+    ores_prob_to: Option<f32>,
+    last_edit_bot: String,
+    last_edit_anon: String,
+    last_edit_flagged: String,
+    redirects: String,
+    page_wikidata_item: String,
+    larger: Option<usize>,
+    smaller: Option<usize>,
+    minlinks: Option<usize>,
+    maxlinks: Option<usize>,
+    wiki: Option<String>,
+    gather_link_count: bool,
+    cat_pos: Vec<String>,
+    cat_neg: Vec<String>,
+    depth: u16,
+    max_age: Option<i64>,
+    only_new_since: bool,
+    before: String,
+    after: String,
+    use_new_category_mode: bool,
 }
 
 impl SourceDatabaseParameters {
@@ -105,6 +105,84 @@ impl SourceDatabaseParameters {
             after: "".to_string(),
             use_new_category_mode: true,
         }
+    }
+
+    pub fn db_params(platform: &Platform) -> SourceDatabaseParameters {
+        let depth_signed: i32 = platform
+            .get_param("depth")
+            .unwrap_or("0".to_string())
+            .parse::<i32>()
+            .unwrap_or(0);
+        let depth: u16 = if depth_signed < 0 {
+            999
+        } else {
+            depth_signed as u16
+        };
+        let ret = SourceDatabaseParameters {
+            combine: match platform.form_parameters().params.get("combination") {
+                Some(x) => {
+                    if x == "union" {
+                        x.to_string()
+                    } else {
+                        "subset".to_string()
+                    }
+                }
+                None => "subset".to_string(),
+            },
+            only_new_since: platform.has_param("only_new"),
+            max_age: platform
+                .get_param("max_age")
+                .map(|x| x.parse::<i64>().unwrap_or(0)),
+            before: platform.get_param_blank("before"),
+            after: platform.get_param_blank("after"),
+            templates_yes: platform.get_param_as_vec("templates_yes", "\n"),
+            templates_any: platform.get_param_as_vec("templates_any", "\n"),
+            templates_no: platform.get_param_as_vec("templates_no", "\n"),
+            templates_yes_talk_page: platform.has_param("templates_use_talk_yes"),
+            templates_any_talk_page: platform.has_param("templates_use_talk_any"),
+            templates_no_talk_page: platform.has_param("templates_use_talk_no"),
+            linked_from_all: platform.get_param_as_vec("outlinks_yes", "\n"),
+            linked_from_any: platform.get_param_as_vec("outlinks_any", "\n"),
+            linked_from_none: platform.get_param_as_vec("outlinks_no", "\n"),
+            links_to_all: platform.get_param_as_vec("links_to_all", "\n"),
+            links_to_any: platform.get_param_as_vec("links_to_any", "\n"),
+            links_to_none: platform.get_param_as_vec("links_to_no", "\n"),
+            last_edit_bot: platform.get_param_default("edits[bots]", "both"),
+            last_edit_anon: platform.get_param_default("edits[anons]", "both"),
+            last_edit_flagged: platform.get_param_default("edits[flagged]", "both"),
+            gather_link_count: platform.has_param("minlinks") || platform.has_param("maxlinks"),
+            page_image: platform.get_param_default("page_image", "any"),
+            page_wikidata_item: platform.get_param_default("wikidata_item", "any"),
+            ores_type: platform.get_param_blank("ores_type"),
+            ores_prediction: platform.get_param_default("ores_prediction", "any"),
+            depth: depth,
+            cat_pos: platform.get_param_as_vec("categories", "\n"),
+            cat_neg: platform.get_param_as_vec("negcats", "\n"),
+            ores_prob_from: platform
+                .get_param("ores_prob_from")
+                .map(|x| x.parse::<f32>().unwrap_or(0.0)),
+            ores_prob_to: platform
+                .get_param("ores_prob_to")
+                .map(|x| x.parse::<f32>().unwrap_or(1.0)),
+            redirects: platform.get_param_blank("show_redirects"),
+            minlinks: platform.usize_option_from_param("minlinks"),
+            maxlinks: platform.usize_option_from_param("maxlinks"),
+            larger: platform.usize_option_from_param("larger"),
+            smaller: platform.usize_option_from_param("smaller"),
+            wiki: platform.get_main_wiki(),
+            namespace_ids: platform
+                .form_parameters()
+                .ns
+                .par_iter()
+                .cloned()
+                .collect::<Vec<usize>>(),
+            use_new_category_mode: true,
+        };
+        ret
+    }
+
+    pub fn set_wiki(&mut self, wiki: Option<String>) {
+        self.wiki = wiki;
     }
 }
 
@@ -737,8 +815,7 @@ impl SourceDatabase {
                             is_before_after_done = true;
                             Platform::append_sql(&mut sql, sql_before_after.clone());
                         }
-                        sql.0 += " WHERE (0=1)";
-                        sql.0 += " OR (p.page_namespace=";
+                        sql.0 += " WHERE (p.page_namespace=";
                         sql.0 += &nsgroup.0.to_string();
                         sql.0 += " AND p.page_title IN (";
                         Platform::append_sql(&mut sql, Platform::prep_quote(&titles));
