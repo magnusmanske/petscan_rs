@@ -116,7 +116,7 @@ impl AppState {
     /// Returns the server and database name for the wiki, as a tuple
     pub fn db_host_and_schema_for_wiki(&self, wiki: &String) -> (String, String) {
         // TESTING
-        // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.analytics.db.svc.eqiad.wmflabs:3306 -N
+        // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N
         lazy_static! {
             static ref REMOVE_WIKI: Regex = Regex::new(r"wiki$")
                 .expect("AppState::get_url_for_wiki_from_site: Regex is invalid");
