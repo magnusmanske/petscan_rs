@@ -1172,7 +1172,6 @@ impl SourceDatabase {
             }
         };
 
-        println!("{:?}", &sql);
         let result = match conn.prep_exec(sql.0.to_owned(), sql.1.to_owned()) {
             Ok(r) => r,
             Err(e) => {
@@ -1197,7 +1196,6 @@ impl SourceDatabase {
             .collect();
 
         *pages_sublist = PageList::new_from_vec(wiki, entries_tmp);
-        println!("PageList with {} entries", pages_sublist.len());
         Ok(())
     }
 }
