@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use wikibase::mediawiki::api::{Api, NamespaceID};
 use wikibase::mediawiki::title::Title;
 
-static MAX_CATEGORY_BATCH_SIZE: usize = 5000;
+static MAX_CATEGORY_BATCH_SIZE: usize = 2500;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
