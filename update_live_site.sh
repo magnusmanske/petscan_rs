@@ -17,6 +17,6 @@ url="http://127.0.0.1/?restart=$code"
 # Restart server
 curl -s -o /dev/null $url
 #sleep 1
-screen -r
+screen -r pts-0.petscan4
 #/usr/sbin/service ./target/release/petscan_rs restart
 
