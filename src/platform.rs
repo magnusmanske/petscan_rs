@@ -1212,6 +1212,7 @@ impl Platform {
             &self.get_param_blank("sortby"),
             self.get_param_blank("sortorder") == "descending".to_string(),
         ));
+        drop(result);
         self.apply_results_limit(&mut pages);
 
         let renderer: Box<dyn Render> = match self.get_param_blank("format").as_str() {

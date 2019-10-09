@@ -539,10 +539,17 @@ impl Render for RenderHTML {
         &self,
         platform: &Platform,
         wiki: &String,
-        entries: Vec<PageListEntry>,
+        mut entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let mut params = RenderParams::new(platform, wiki)?;
-        let mut rows: Vec<String> = Vec::with_capacity(entries.len() + 100);
+        /*
+        let capacity = if entries.len() > MAX_HTML_RESULTS {
+            MAX_HTML_RESULTS
+        } else {
+            entries.len()
+        };
+        */
+        let mut rows = vec![]; //: Vec<String> = Vec::with_capacity(capacity + 100);
 
         rows.push("<hr/>".to_string());
         rows.push("<script>var output_wiki='".to_string() + &wiki + "';</script>");
@@ -613,18 +620,21 @@ impl Render for RenderHTML {
             .map(|x| (x.to_string(), x.to_string()))
             .collect();
 
-        entries.iter().for_each(|entry| {
+        let entries_len = entries.len();
+        let mut output = rows.join("\n");
+        entries.drain(..).for_each(|entry| {
             if params.row_number < MAX_HTML_RESULTS {
                 params.row_number += 1;
                 let row = self.row_from_entry(&entry, &header, &params, &platform);
                 let row = self.render_html_row(&row, &header);
-                rows.push(row);
+                output += &row;
             }
         });
 
+        let mut rows = vec![];
         rows.push("</tbody></table></div>".to_string());
 
-        if entries.len() > MAX_HTML_RESULTS {
+        if entries_len > MAX_HTML_RESULTS {
             rows.push( format!("<div class='alert alert-warning' style='clear:both'>Only the first {} results are shown in HTML, so as to not crash your browser; other formats will have complete results.</div>",MAX_HTML_RESULTS) );
         }
 
@@ -640,7 +650,7 @@ impl Render for RenderHTML {
         }
         rows.push("<script src='autolist.js'></script>".to_string());
 
-        let output = rows.join("\n");
+        output += &rows.join("\n");
         let state = platform.state();
         let html = state.get_main_page();
         let html = html.replace(
