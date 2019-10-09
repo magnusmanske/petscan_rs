@@ -291,7 +291,7 @@ impl SourceDatabase {
             // Don't par_iter, already in pool!
             (*categories_done.lock().unwrap()).insert(c.to_string());
         });
-        Platform::append_sql(&mut sql, Platform::prep_quote(&categories_batch.to_vec()));
+        Platform::append_sql(&mut sql, Platform::prep_quote(&categories_batch));
         sql.0 += ")";
 
         let result = match conn.prep_exec(sql.0, sql.1) {
@@ -718,7 +718,7 @@ impl SourceDatabase {
                                 //println!("\nSTART:\n{:?}", &sql);
                                 Platform::append_sql(
                                     &mut sql,
-                                    Platform::prep_quote(&category_batch[0].to_owned()),
+                                    Platform::prep_quote(&category_batch[0]),
                                 );
                                 sql.0 += ")) cl0";
                                 //println!("\nAPPENDED:\n{:?}", &sql);
@@ -726,7 +726,7 @@ impl SourceDatabase {
                                     sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
                                     Platform::append_sql(
                                         &mut sql,
-                                        Platform::prep_quote(&category_batch[a].to_owned()),
+                                        Platform::prep_quote(&category_batch[a]),
                                     );
                                     sql.0 += ")";
                                     //println!("\nINNER:\n{:?}", &sql);
@@ -836,7 +836,6 @@ impl SourceDatabase {
                 let mut batches: Vec<SQLtuple> = vec![];
                 nslist.iter().for_each(|nsgroup| {
                     nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
-                        let titles = titles.to_vec();
                         let mut sql = Platform::sql_tuple();
                         sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len ".to_string() ;
                         sql.0 += link_count_sql;
@@ -1179,9 +1178,11 @@ impl SourceDatabase {
             }
         };
 
-        let entries_tmp = result
+        pages_sublist.set_wiki(Some(wiki.to_string()));
+        pages_sublist.clear_entries();
+        result
             .filter_map(|row_result| row_result.ok())
-            .map(|row| {
+            .for_each(|row| {
                 let (page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count) =
                     my::from_row::<(usize, String, NamespaceID, String, usize, usize)>(row);
                 let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
@@ -1191,11 +1192,9 @@ impl SourceDatabase {
                 if self.params.gather_link_count {
                     entry.link_count = Some(link_count);
                 }
-                entry
-            })
-            .collect();
+                pages_sublist.add_entry(entry)
+            });
 
-        *pages_sublist = PageList::new_from_vec(wiki, entries_tmp);
         Ok(())
     }
 }

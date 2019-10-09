@@ -44,14 +44,12 @@ impl DataSource for SourceLabels {
             Err(e) => return Err(format!("{:?}", e)),
         };
 
-        let entries_tmp = result
+        let ret = PageList::new_from_wiki("wikidatawiki");
+        result
             .filter_map(|row_result| row_result.ok())
             .filter_map(|row| Platform::entry_from_entity(&my::from_row::<String>(row)))
-            .collect();
-        Ok(PageList::new_from_vec(
-            &"wikidatawiki".to_string(),
-            entries_tmp,
-        ))
+            .for_each(|entry| ret.add_entry(entry));
+        Ok(ret)
     }
 }
 
@@ -110,15 +108,17 @@ impl DataSource for SourceWikidata {
         let result = conn
             .prep_exec(sql, sites.1)
             .map_err(|e| format!("{:?}", e))?;
-        let entries = result
+
+        let ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
+        result
             .filter_map(|row| row.ok())
             .filter_map(|row_inner| {
                 let ips_item_id: usize = my::from_row(row_inner);
                 let term_full_entity_id = format!("Q{}", ips_item_id);
                 Platform::entry_from_entity(&term_full_entity_id)
             })
-            .collect();
-        Ok(PageList::new_from_vec(&"wikidatawiki".to_string(), entries))
+            .for_each(|entry| ret.add_entry(entry));
+        Ok(ret)
     }
 }
 
@@ -165,7 +165,8 @@ impl DataSource for SourcePagePile {
             .as_str()
             .ok_or(format!("PagePile {} does not specify a wiki", &pagepile))?;
         let api = platform.state().get_api_for_wiki(wiki.to_string())?; // Just because we need query_raw
-        let entries: Vec<PageListEntry> = v["pages"]
+        let ret = PageList::new_from_wiki(wiki);
+        v["pages"]
             .as_array()
             .ok_or(format!(
                 "PagePile {} does not have a 'pages' array",
@@ -174,11 +175,11 @@ impl DataSource for SourcePagePile {
             .iter()
             .filter_map(|title| title.as_str())
             .map(|title| PageListEntry::new(Title::new_from_full(&title.to_string(), &api)))
-            .collect();
-        if entries.is_empty() {
+            .for_each(|entry| ret.add_entry(entry));
+        if ret.is_empty() {
             platform.warn(format!("<span tt='warn_pagepile'></span>"));
         }
-        Ok(PageList::new_from_vec(wiki, entries))
+        Ok(ret)
     }
 }
 
@@ -233,15 +234,15 @@ impl DataSource for SourceSearch {
             Err(e) => return Err(format!("{:?}", e)),
         };
         let titles = Api::result_array_to_titles(&result);
-        let entries = titles
+        let ret = PageList::new_from_wiki(&wiki);
+        titles
             .iter()
             .map(|title| PageListEntry::new(title.to_owned()))
-            .collect();
-        let pagelist = PageList::new_from_vec(&wiki, entries);
-        if pagelist.is_empty() {
+            .for_each(|entry| ret.add_entry(entry));
+        if ret.is_empty() {
             platform.warn(format!("<span tt='warn_search'></span>"));
         }
-        Ok(pagelist)
+        Ok(ret)
     }
 }
 
@@ -270,7 +271,8 @@ impl DataSource for SourceManual {
             .get_param("manual_list_wiki")
             .ok_or(format!("Missing parameter 'manual_list_wiki'"))?;
         let api = platform.state().get_api_for_wiki(wiki.to_string())?;
-        let entries: Vec<PageListEntry> = platform
+        let ret = PageList::new_from_wiki(&wiki);
+        platform
             .get_param("manual_list")
             .ok_or(format!("Missing parameter 'manual_list'"))?
             .split("\n")
@@ -284,9 +286,8 @@ impl DataSource for SourceManual {
                     None
                 }
             })
-            .collect();
-        let pagelist = PageList::new_from_vec(&wiki, entries);
-        Ok(pagelist)
+            .for_each(|entry| ret.add_entry(entry));
+        Ok(ret)
     }
 }
 
@@ -324,15 +325,15 @@ impl DataSource for SourceSparql {
         let first_var = result["head"]["vars"][0]
             .as_str()
             .ok_or(format!("No variables found in SPARQL result"))?;
-        let ple: Vec<PageListEntry> = api
-            .entities_from_sparql_result(&result, first_var)
+        let ret = PageList::new_from_wiki("wikidatawiki");
+        api.entities_from_sparql_result(&result, first_var)
             .par_iter()
             .filter_map(|e| Platform::entry_from_entity(e))
-            .collect();
-        if ple.is_empty() {
+            .for_each(|entry| ret.add_entry(entry));
+        if ret.is_empty() {
             platform.warn(format!("<span tt='warn_sparql'></span>"));
         }
-        Ok(PageList::new_from_vec("wikidatawiki", ple))
+        Ok(ret)
     }
 }
 

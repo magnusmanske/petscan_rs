@@ -1255,7 +1255,7 @@ impl Platform {
     }
 
     /// Returns a tuple with a string containing comma-separated question marks, and the (non-empty) Vec elements
-    pub fn prep_quote(strings: &Vec<String>) -> SQLtuple {
+    pub fn prep_quote(strings: &[String]) -> SQLtuple {
         let escaped: Vec<String> = strings
             .par_iter()
             .map(|s| s.trim())
@@ -1276,18 +1276,18 @@ impl Platform {
     }
 
     fn get_label_sql_helper(&self, ret: &mut SQLtuple, part1: &str, part2: &str) {
-        let mut types = vec![];
+        let mut types: Vec<String> = vec![];
         if self.has_param(&("cb_labels_".to_owned() + part1 + "_l")) {
-            types.push("label");
+            types.push("label".to_string());
         }
         if self.has_param(&("cb_labels_".to_owned() + part1 + "_a")) {
-            types.push("alias");
+            types.push("alias".to_string());
         }
         if self.has_param(&("cb_labels_".to_owned() + part1 + "_d")) {
-            types.push("description");
+            types.push("description".to_string());
         }
         if !types.is_empty() {
-            let mut tmp = Self::prep_quote(&types.par_iter().map(|s| s.to_string()).collect());
+            let mut tmp = Self::prep_quote(&types);
             ret.0 += &(" AND ".to_owned() + part2 + &" IN (".to_owned() + &tmp.0 + ")");
             ret.1.append(&mut tmp.1);
         }

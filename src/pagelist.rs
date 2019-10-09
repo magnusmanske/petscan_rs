@@ -389,13 +389,6 @@ impl PageList {
         }
     }
 
-    pub fn new_from_vec(wiki: &str, entries: Vec<PageListEntry>) -> Self {
-        Self {
-            wiki: Arc::new(RwLock::new(Some(wiki.to_string()))),
-            entries: Arc::new(RwLock::new(entries.par_iter().cloned().collect())),
-        }
-    }
-
     pub fn set_from(&self, other: Self) {
         *self.wiki.write().unwrap() = other.wiki.read().unwrap().clone();
         *self.entries.write().unwrap() = other.entries.read().unwrap().clone();
@@ -460,13 +453,6 @@ impl PageList {
 
     pub fn add_entry(&self, entry: PageListEntry) {
         self.entries.write().unwrap().replace(entry);
-    }
-
-    pub fn set_entries_from_vec(&self, new_entries: Vec<PageListEntry>) {
-        let mut entries = self.entries.write().unwrap();
-        new_entries.iter().for_each(|e| {
-            entries.insert(e.to_owned());
-        });
     }
 
     fn check_before_merging(
@@ -556,7 +542,7 @@ impl PageList {
         let by_ns = self.group_by_namespace();
         for (nsid, titles) in by_ns {
             titles.chunks(chunk_size).for_each(|chunk| {
-                let mut sql = Platform::prep_quote(&chunk.to_vec());
+                let mut sql = Platform::prep_quote(&chunk);
                 sql.0 = format!("(page_namespace={} AND page_title IN({}))", nsid, &sql.0);
                 ret.push(sql);
             });
@@ -577,7 +563,7 @@ impl PageList {
         for (nsid, titles) in by_ns {
             if nsid == namespace_id {
                 titles.chunks(chunk_size).for_each(|chunk| {
-                    let mut sql = Platform::prep_quote(&chunk.to_vec());
+                    let mut sql = Platform::prep_quote(&chunk);
                     sql.0 = format!("(page_namespace={} AND page_title IN({}))", nsid, &sql.0);
                     ret.push(sql);
                 });
