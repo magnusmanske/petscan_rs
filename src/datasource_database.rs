@@ -386,8 +386,11 @@ impl SourceDatabase {
         let title = Title::spaces_to_underscores(&Title::first_letter_uppercase(title));
         (*categories_done.lock().unwrap()).insert(title.to_owned());
         self.go_depth(state, wiki, categories_done.clone(), &vec![title], depth)?;
-        let tmp = categories_done.lock().unwrap();
-        Ok(tmp.par_iter().cloned().collect::<Vec<String>>())
+        let mut tmp = Arc::try_unwrap(categories_done)
+            .map_err(|_| format!("get_categories_in_tree"))?
+            .into_inner()
+            .unwrap();
+        Ok(tmp.drain().collect())
     }
 
     pub fn parse_category_list(

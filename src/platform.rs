@@ -788,7 +788,7 @@ impl Platform {
         let mut batches: Vec<SQLtuple> = vec![];
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
 
-            let escaped: Vec<String> = chunk//.to_vec()
+            let escaped: Vec<String> = chunk
                 .par_iter()
                 .filter_map(|s| match s.trim() {
                     "" => None,
@@ -930,7 +930,8 @@ impl Platform {
             "Platform::process_missing_database_filters: result has no wiki"
         ))?));
         let mut db = SourceDatabase::new(params);
-        result.set_from(db.get_pages(&self.state, Some(result))?);
+        let new_result = db.get_pages(&self.state, Some(result))?;
+        result.set_from(new_result);
         Ok(())
     }
 
@@ -1207,7 +1208,7 @@ impl Platform {
             None => return Err(format!("Platform::get_response: No wiki in result")),
         };
 
-        let mut pages = result.get_sorted_vec(PageListSort::new_from_params(
+        let mut pages = result.drain_into_sorted_vec(PageListSort::new_from_params(
             &self.get_param_blank("sortby"),
             self.get_param_blank("sortorder") == "descending".to_string(),
         ));
@@ -1582,7 +1583,7 @@ mod tests {
         assert_eq!(result.wiki(), Some(wiki.to_string()));
 
         // Sort/crop results
-        let mut entries = result.get_sorted_vec(PageListSort::new_from_params(
+        let mut entries = result.drain_into_sorted_vec(PageListSort::new_from_params(
             &platform.get_param_blank("sortby"),
             platform.get_param_blank("sortorder") == "descending".to_string(),
         ));

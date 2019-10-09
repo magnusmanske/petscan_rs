@@ -392,6 +392,13 @@ impl PageList {
     pub fn set_from(&self, other: Self) {
         *self.wiki.write().unwrap() = other.wiki.read().unwrap().clone();
         *self.entries.write().unwrap() = other.entries.read().unwrap().clone();
+        /*
+        self.clear_entries();
+        std::mem::swap(
+            &mut self.entries.write().unwrap(),
+            &mut other.entries.write().unwrap(),
+        );
+        */
     }
 
     pub fn entries(&self) -> Arc<RwLock<HashSet<PageListEntry>>> {
@@ -414,9 +421,8 @@ impl PageList {
         self.wiki.read().unwrap().clone()
     }
 
-    pub fn get_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {
-        let mut ret: Vec<PageListEntry> =
-            self.entries.read().unwrap().par_iter().cloned().collect();
+    pub fn drain_into_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {
+        let mut ret: Vec<PageListEntry> = self.entries.write().unwrap().drain().collect();
         ret.par_sort_by(|a, b| a.compare(b, &sorter, self.is_wikidata()));
         ret
     }
