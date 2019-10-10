@@ -135,7 +135,9 @@ impl AppState {
         };
         let schema = wiki.to_string() + "_p";
         let schema = match schema.as_str() {
-            "be-taraskwiki_p" | "be-x-oldwiki_p" => "be_x_oldwiki_p",
+            "be-taraskwiki_p" | "be-x-oldwiki_p" | "be_taraskwiki_p" | "be_x_oldwiki_p" => {
+                "be_x_oldwiki_p"
+            }
             other => other,
         }
         .to_string();
@@ -343,7 +345,7 @@ impl AppState {
     }
 
     pub fn get_server_url_for_wiki(&self, wiki: &String) -> Result<String, String> {
-        match wiki.as_str() {
+        match wiki.replace("_", "-").as_str() {
             "be-taraskwiki" | "be-x-oldwiki" => {
                 return Ok("https://be-tarask.wikipedia.org".to_string())
             }
