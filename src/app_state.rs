@@ -114,7 +114,7 @@ impl AppState {
     }
 
     /// Returns the server and database name for the wiki, as a tuple
-    pub fn db_host_and_schema_for_wiki(&self, wiki: &String) -> (String, String) {
+    pub fn db_host_and_schema_for_wiki(&self, wiki: &String) -> Result<(String, String), String> {
         // TESTING
         // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N
         lazy_static! {
@@ -134,7 +134,12 @@ impl AppState {
             None => panic!("No host in config file"),
         };
         let schema = wiki.to_string() + "_p";
-        (host, schema)
+        let schema = match schema.as_str() {
+            "be-taraskwiki_p" | "be-x-oldwiki_p" => "be_x_oldwiki_p",
+            other => other,
+        }
+        .to_string();
+        Ok((host, schema))
     }
 
     /// Returns the server and database name for the tool db, as a tuple
@@ -187,7 +192,7 @@ impl AppState {
         let mut loops_left = MYSQL_MAX_CONNECTION_ATTEMPTS;
         let mut milliseconds = MYSQL_CONNECTION_INITIAL_DELAY_MS;
         loop {
-            let (host, schema) = self.db_host_and_schema_for_wiki(wiki);
+            let (host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
             let (user, pass) = db_user_pass;
             let mut builder = my::OptsBuilder::new();
             builder
@@ -338,6 +343,12 @@ impl AppState {
     }
 
     pub fn get_server_url_for_wiki(&self, wiki: &String) -> Result<String, String> {
+        match wiki.as_str() {
+            "be-taraskwiki" | "be-x-oldwiki" => {
+                return Ok("https://be-tarask.wikipedia.org".to_string())
+            }
+            _ => {}
+        }
         self.site_matrix["sitematrix"]
             .as_object()
             .expect("AppState::get_server_url_for_wiki: sitematrix not an object")
@@ -540,6 +551,25 @@ mod tests {
         assert_eq!(
             state.get_wiki_for_server_url(&"https://outreach.wikimedia.org".to_string()),
             Some("outreachwiki".to_string())
+        );
+    }
+
+    #[test]
+    fn test_db_host_and_schema_for_wiki() {
+        let state = get_state();
+        assert_eq!(
+            "enwiki_p".to_string(),
+            state
+                .db_host_and_schema_for_wiki(&"enwiki".to_string())
+                .unwrap()
+                .1
+        );
+        assert_eq!(
+            "be_x_oldwiki_p".to_string(),
+            state
+                .db_host_and_schema_for_wiki(&"be-taraskwiki".to_string())
+                .unwrap()
+                .1
         );
     }
 }
