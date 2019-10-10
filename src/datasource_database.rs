@@ -140,9 +140,9 @@ impl SourceDatabaseParameters {
                 .map(|x| x.parse::<i64>().unwrap_or(0)),
             before: platform.get_param_blank("before"),
             after: platform.get_param_blank("after"),
-            templates_yes: platform.get_param_as_vec("templates_yes", "\n"),
-            templates_any: platform.get_param_as_vec("templates_any", "\n"),
-            templates_no: platform.get_param_as_vec("templates_no", "\n"),
+            templates_yes: Self::vec_to_ucfirst(platform.get_param_as_vec("templates_yes", "\n")),
+            templates_any: Self::vec_to_ucfirst(platform.get_param_as_vec("templates_any", "\n")),
+            templates_no: Self::vec_to_ucfirst(platform.get_param_as_vec("templates_no", "\n")),
             templates_yes_talk_page: platform.has_param("templates_use_talk_yes"),
             templates_any_talk_page: platform.has_param("templates_use_talk_any"),
             templates_no_talk_page: platform.has_param("templates_use_talk_no"),
@@ -184,6 +184,13 @@ impl SourceDatabaseParameters {
             use_new_category_mode: true,
         };
         ret
+    }
+
+    fn vec_to_ucfirst(input: Vec<String>) -> Vec<String> {
+        input
+            .iter()
+            .map(|s| Title::spaces_to_underscores(&Title::first_letter_uppercase(s)))
+            .collect()
     }
 
     pub fn set_wiki(&mut self, wiki: Option<String>) {
@@ -463,7 +470,7 @@ impl SourceDatabase {
                 "(SELECT DISTINCT tl_from FROM templatelinks WHERE tl_namespace=10 AND tl_title";
         }
 
-        self.sql_in(input, &mut sql);
+        self.sql_in(&input, &mut sql);
 
         if !self.params.namespace_ids.is_empty() {
             sql.0 += " AND tl_from_namespace";
