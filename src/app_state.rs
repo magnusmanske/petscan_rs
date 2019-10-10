@@ -320,6 +320,19 @@ impl AppState {
         self.get_value_from_site_matrix_entry(wiki, site, "dbname", "url")
     }
 
+    fn is_language_rtl(&self, language: &str) -> bool {
+        self.site_matrix["sitematrix"]
+            .as_object()
+            .expect("AppState::get_wiki_for_server_url: sitematrix not an object")
+            .iter()
+            .any(
+                |(_id, data)| match (data["code"].as_str(), data["dir"].as_str()) {
+                    (Some(lang), Some("rtl")) => lang == language,
+                    _ => false,
+                },
+            )
+    }
+
     pub fn get_wiki_for_server_url(&self, url: &String) -> Option<String> {
         self.site_matrix["sitematrix"]
             .as_object()
@@ -573,5 +586,14 @@ mod tests {
                 .unwrap()
                 .1
         );
+    }
+
+    #[test]
+    fn is_language_rtl() {
+        let state = get_state();
+        assert!(!state.is_language_rtl("en"));
+        assert!(state.is_language_rtl("ar"));
+        assert!(!state.is_language_rtl("de"));
+        assert!(state.is_language_rtl("he"));
     }
 }
