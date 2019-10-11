@@ -60,8 +60,15 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
 
     // Just show the main page
     if form_parameters.params.contains_key("show_main_page") {
+        let interface_language = form_parameters
+            .params
+            .get("interface_language")
+            .map(|s| s.to_string())
+            .unwrap_or("en".to_string());
         return MyResponse {
-            s: state.get_main_page().to_owned(),
+            s: state
+                .get_main_page(interface_language.to_string())
+                .to_owned(),
             content_type: ContentType::HTML,
         };
     }
@@ -95,7 +102,12 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
         if !form_parameters.params.contains_key("doit")
             || form_parameters.params.contains_key("norun")
         {
-            let html = state.get_main_page();
+            let interface_language = form_parameters
+                .params
+                .get("interface_language")
+                .map(|s| s.to_string())
+                .unwrap_or("en".to_string());
+            let html = state.get_main_page(interface_language.to_string());
             let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
             return MyResponse {
                 s: html,

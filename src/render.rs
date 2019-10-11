@@ -542,14 +542,7 @@ impl Render for RenderHTML {
         mut entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let mut params = RenderParams::new(platform, wiki)?;
-        /*
-        let capacity = if entries.len() > MAX_HTML_RESULTS {
-            MAX_HTML_RESULTS
-        } else {
-            entries.len()
-        };
-        */
-        let mut rows = vec![]; //: Vec<String> = Vec::with_capacity(capacity + 100);
+        let mut rows = vec![];
 
         rows.push("<hr/>".to_string());
         rows.push("<script>var output_wiki='".to_string() + &wiki + "';</script>");
@@ -649,10 +642,10 @@ impl Render for RenderHTML {
             None => {}
         }
         rows.push("<script src='autolist.js'></script>".to_string());
-
         output += &rows.join("\n");
+        let interface_language = platform.get_param_default("interface_language", "en");
         let state = platform.state();
-        let html = state.get_main_page();
+        let html = state.get_main_page(interface_language);
         let html = html.replace(
             "<!--querystring-->",
             encode_minimal(&platform.form_parameters().to_string()).as_str(),

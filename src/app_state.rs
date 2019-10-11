@@ -102,8 +102,18 @@ impl AppState {
         ret
     }
 
-    pub fn get_main_page(&self) -> String {
-        self.main_page.clone()
+    pub fn get_main_page(&self, interface_language: String) -> String {
+        let direction = if self.is_language_rtl(&interface_language) {
+            "rtl"
+        } else {
+            "ltr"
+        };
+        let h = format!(
+            "<html dir='{}' lang='{}'>",
+            direction,
+            interface_language.replace("'", "")
+        );
+        self.main_page.replace("<html>", &h).to_string()
     }
 
     fn get_db_server_group(&self) -> &str {
@@ -234,7 +244,14 @@ impl AppState {
                     "<div class='alert alert-danger' role='alert'>{}</div>",
                     &error
                 );
-                let html = self.get_main_page().to_owned();
+                let interface_language = form_parameters
+                    .params
+                    .get("interface_language")
+                    .map(|s| s.to_string())
+                    .unwrap_or("en".to_string());
+                let html = self
+                    .get_main_page(interface_language.to_string())
+                    .to_owned();
                 let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
                 let html = &html.replace("<!--output-->", &output);
                 MyResponse {
@@ -320,7 +337,19 @@ impl AppState {
         self.get_value_from_site_matrix_entry(wiki, site, "dbname", "url")
     }
 
-    fn is_language_rtl(&self, language: &str) -> bool {
+    pub fn is_language_rtl(&self, language: &str) -> bool {
+        let rtl: Vec<String> = self.site_matrix["sitematrix"]
+            .as_object()
+            .expect("AppState::get_wiki_for_server_url: sitematrix not an object")
+            .iter()
+            .filter_map(
+                |(_id, data)| match (data["code"].as_str(), data["dir"].as_str()) {
+                    (Some(lang), Some("rtl")) => Some(lang.to_string()),
+                    _ => None,
+                },
+            )
+            .collect();
+        println!("{:?}", rtl);
         self.site_matrix["sitematrix"]
             .as_object()
             .expect("AppState::get_wiki_for_server_url: sitematrix not an object")
