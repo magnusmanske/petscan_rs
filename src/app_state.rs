@@ -338,18 +338,6 @@ impl AppState {
     }
 
     pub fn is_language_rtl(&self, language: &str) -> bool {
-        let rtl: Vec<String> = self.site_matrix["sitematrix"]
-            .as_object()
-            .expect("AppState::get_wiki_for_server_url: sitematrix not an object")
-            .iter()
-            .filter_map(
-                |(_id, data)| match (data["code"].as_str(), data["dir"].as_str()) {
-                    (Some(lang), Some("rtl")) => Some(lang.to_string()),
-                    _ => None,
-                },
-            )
-            .collect();
-        println!("{:?}", rtl);
         self.site_matrix["sitematrix"]
             .as_object()
             .expect("AppState::get_wiki_for_server_url: sitematrix not an object")
