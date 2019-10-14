@@ -20,9 +20,6 @@ var default_params = {
 	'active_tab':'tab_categories',
 	'common_wiki':'auto',
 	'subpage_filter':'either',
-	'cb_labels_yes_l':'1',
-	'cb_labels_any_l':'1',
-	'cb_labels_no_l':'1',
 	'sortorder':'ascending'
 } ;
 
@@ -507,6 +504,14 @@ function initializeInterface () {
 	params = $.extend ( {} , default_params , p ) ;
 	params.sortby = params.sortby.replace ( / /g , '_' ) ;
 	$('#ores_model_select').val(params.ores_type) ;
+
+	$.each(["yes","any","no"],function(k,v){
+		let base = 'cb_labels_'+v+"_" ;
+		if ( (params[base+"l"]||'')=='' && (params[base+"a"]||'')=='' && (params[base+"d"]||'')=='' ) {
+			params[base+"l"]="1";
+		}
+	});
+
 
 	var l = 'en' ;
 	if ( typeof params.interface_language != 'undefined' ) l = params.interface_language ;

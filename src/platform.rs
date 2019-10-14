@@ -935,7 +935,7 @@ impl Platform {
         Ok(())
     }
 
-    fn process_labels(&self, result: &PageList) -> Result<(), String> {
+    fn process_labels_old(&self, result: &PageList) -> Result<(), String> {
         let mut sql = self.get_label_sql();
         if sql.1.is_empty() {
             return Ok(());
@@ -963,6 +963,163 @@ impl Platform {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
         })
+    }
+
+    //________________________________________________________________________________________________
+
+    fn get_label_sql_helper_new(&self, ret: &mut SQLtuple, part1: &str) {
+        let mut wbt_type: Vec<String> = vec![];
+        if self.has_param(&("cb_labels_".to_owned() + part1 + "_l")) {
+            wbt_type.push("1".to_string());
+        }
+        if self.has_param(&("cb_labels_".to_owned() + part1 + "_a")) {
+            wbt_type.push("3".to_string());
+        }
+        if self.has_param(&("cb_labels_".to_owned() + part1 + "_d")) {
+            wbt_type.push("2".to_string());
+        }
+        if !wbt_type.is_empty() {
+            if wbt_type.len() == 1 {
+                ret.0 += &format!(" AND wbtl_type_id={}", wbt_type.join(","));
+            } else {
+                ret.0 += &format!(" AND wbtl_type_id IN ({})", wbt_type.join(","));
+            }
+        }
+    }
+
+    fn get_label_sql_subquery_new(
+        &self,
+        ret: &mut SQLtuple,
+        key: &str,
+        languages: &Vec<String>,
+        s: &String,
+    ) {
+        let has_pattern = !s.is_empty() && s != "%";
+        let has_languages = !languages.is_empty();
+        ret.0 += "SELECT * FROM wbt_term_in_lang,wbt_item_terms t2";
+        if has_languages || has_pattern {
+            ret.0 += ",wbt_text_in_lang";
+        }
+        if has_pattern {
+            ret.0 += ",wbt_text";
+        }
+        ret.0 += " WHERE t2.wbit_item_id=t1.wbit_item_id AND wbtl_id=t2.wbit_term_in_lang_id";
+        self.get_label_sql_helper_new(ret, key);
+        if has_languages || has_pattern {
+            let mut tmp = Self::prep_quote(&languages);
+            ret.0 += " AND wbtl_text_in_lang_id=wbxl_id";
+            if !tmp.1.is_empty() {
+                if tmp.1.len() == 1 {
+                    ret.0 += &(" AND wbxl_language=".to_owned() + &tmp.0);
+                } else {
+                    ret.0 += &(" AND wbxl_language IN (".to_owned() + &tmp.0 + ")");
+                }
+                ret.1.append(&mut tmp.1);
+            }
+            if has_pattern {
+                ret.0 += " AND wbxl_text_id=wbx_id AND wbx_text LIKE ?";
+                ret.1.push(s.to_string());
+            }
+        }
+    }
+
+    fn get_label_sql_new(&self, namespace_id: &NamespaceID) -> Option<SQLtuple> {
+        lazy_static! {
+            static ref RE1: Regex =
+                Regex::new(r#"[^a-z,]"#).expect("Platform::get_label_sql Regex is invalid");
+        }
+        let mut ret: SQLtuple = ("".to_string(), vec![]);
+        let yes = self.get_param_as_vec("labels_yes", "\n");
+        let any = self.get_param_as_vec("labels_any", "\n");
+        let no = self.get_param_as_vec("labels_no", "\n");
+        if yes.len() + any.len() + no.len() == 0 {
+            return None;
+        }
+
+        let langs_yes = self.get_param_as_vec("langs_labels_yes", ",");
+        let langs_any = self.get_param_as_vec("langs_labels_any", ",");
+        let langs_no = self.get_param_as_vec("langs_labels_no", ",");
+
+        if *namespace_id == 0 {
+            ret.0 =
+                "SELECT DISTINCT CONCAT('Q',wbit_item_id) AS term_full_entity_id FROM wbt_item_terms t1 WHERE 1=1".to_string();
+        } else if *namespace_id == 120 {
+            ret.0 = "SELECT DISTINCT CONACT('P',wbit_property_id) AS term_full_entity_id FROM wbt_property_terms t1 WHERE 1=1"
+                .to_string();
+        } else {
+            return None;
+        }
+
+        yes.iter().for_each(|s| {
+            ret.0 += " AND EXISTS (";
+            self.get_label_sql_subquery_new(&mut ret, "yes", &langs_yes, s);
+            ret.0 += ")";
+        });
+
+        if !langs_any.is_empty() {
+            ret.0 += " AND (0=1";
+            any.iter().for_each(|s| {
+                ret.0 += " OR EXISTS (";
+                self.get_label_sql_subquery_new(&mut ret, "any", &langs_any, s);
+                ret.0 += ")";
+            });
+            ret.0 += ")";
+        }
+
+        no.iter().for_each(|s| {
+            ret.0 += " AND NOT EXISTS (";
+            self.get_label_sql_subquery_new(&mut ret, "no", &langs_no, s);
+            ret.0 += ")";
+        });
+        Some(ret)
+    }
+
+    /// Using new wbt_item_terms
+    fn process_labels_new(&self, result: &PageList) -> Result<(), String> {
+        if self.get_label_sql_new(&0).is_none() {
+            return Ok(());
+        }
+        result.convert_to_wiki("wikidatawiki", &self)?;
+        if result.is_empty() {
+            return Ok(());
+        }
+
+        // Batches
+        let batches: Vec<SQLtuple> = result
+            .group_by_namespace()
+            .par_iter()
+            .filter_map(|(namespace_id, titles)| {
+                let mut sql = self.get_label_sql_new(namespace_id)?;
+                if *namespace_id == 0 {
+                    sql.0 += " AND wbit_item_id IN (";
+                } else if *namespace_id == 120 {
+                    sql.0 += " AND wbit_property_id IN (";
+                } else {
+                    return None;
+                }
+                sql.0 += &titles
+                    .par_iter()
+                    .map(|title| title[1..].to_string())
+                    .collect::<Vec<String>>()
+                    .join(",");
+                sql.0 += ")";
+                Some(sql)
+            })
+            .collect();
+
+        result.clear_entries();
+        result.process_batch_results(self.state(), batches, &|row: my::Row| {
+            let term_full_entity_id = my::from_row::<String>(row);
+            Platform::entry_from_entity(&term_full_entity_id)
+        })
+    }
+
+    fn process_labels(&self, result: &PageList) -> Result<(), String> {
+        if false {
+            self.process_labels_old(result)
+        } else {
+            self.process_labels_new(result)
+        }
     }
 
     fn process_sitelinks(&self, result: &PageList) -> Result<(), String> {
@@ -1168,10 +1325,10 @@ impl Platform {
             .get_param_default("language", &language)
             .replace("_", "-");
         let project = self.get_param_default("project", "wikipedia");
-        self.get_wiki_for_lagnuage_project(&language, &project)
+        self.get_wiki_for_language_project(&language, &project)
     }
 
-    pub fn get_wiki_for_lagnuage_project(
+    pub fn get_wiki_for_language_project(
         &self,
         language: &String,
         project: &String,
@@ -1318,8 +1475,10 @@ impl Platform {
         let field = "term_text".to_string(); // term_search_key case-sensitive; term_text case-insensitive?
 
         yes.iter().for_each(|s| {
-            ret.0 += &(" AND ".to_owned() + &field + " LIKE ?");
-            ret.1.push(s.to_string());
+            if s != "%" {
+                ret.0 += &(" AND ".to_owned() + &field + " LIKE ?");
+                ret.1.push(s.to_string());
+            }
             if !langs_yes.is_empty() {
                 let mut tmp = Self::prep_quote(&langs_yes);
                 ret.0 += &(" AND term_language IN (".to_owned() + &tmp.0 + ")");
@@ -1331,14 +1490,16 @@ impl Platform {
         if !langs_any.is_empty() {
             ret.0 += " AND (";
             let mut first = true;
-            yes.iter().for_each(|s| {
+            any.iter().for_each(|s| {
                 if first {
                     first = false;
                 } else {
                     ret.0 += " OR "
                 }
-                ret.0 += &(" ( ".to_owned() + &field + " LIKE ?");
-                ret.1.push(s.to_string());
+                if s != "%" {
+                    ret.0 += &(" ( ".to_owned() + &field + " LIKE ?");
+                    ret.1.push(s.to_string());
+                }
                 if !langs_any.is_empty() {
                     let mut tmp = Self::prep_quote(&langs_any);
                     ret.0 += &(" AND term_language IN (".to_owned() + &tmp.0 + ")");
@@ -1354,8 +1515,10 @@ impl Platform {
             ret.0 += " AND NOT EXISTS (SELECT t2.term_full_entity_id FROM wb_terms t2 WHERE";
             ret.0 +=
                 " t2.term_full_entity_id=t1.term_full_entity_id AND t2.term_entity_type='item'";
-            ret.0 += &(" AND t2.".to_owned() + &field + " LIKE ?");
-            ret.1.push(s.to_string());
+            if s != "%" {
+                ret.0 += &(" AND t2.".to_owned() + &field + " LIKE ?");
+                ret.1.push(s.to_string());
+            }
             if !langs_no.is_empty() {
                 let mut tmp = Self::prep_quote(&langs_no);
                 ret.0 += &(" AND t2.term_language IN (".to_owned() + &tmp.0 + ")");
