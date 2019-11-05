@@ -203,13 +203,13 @@ impl AppState {
     ) -> Result<my::Conn, String> {
         let mut loops_left = MYSQL_MAX_CONNECTION_ATTEMPTS;
         let mut milliseconds = MYSQL_CONNECTION_INITIAL_DELAY_MS;
+        let (host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
+        let (user, pass) = db_user_pass;
         loop {
-            let (host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
-            let (user, pass) = db_user_pass;
             let mut builder = my::OptsBuilder::new();
             builder
-                .ip_or_hostname(Some(host))
-                .db_name(Some(schema))
+                .ip_or_hostname(Some(host.to_owned()))
+                .db_name(Some(schema.to_owned()))
                 .user(Some(user))
                 .pass(Some(pass));
             builder.tcp_port(self.config["db_port"].as_u64().unwrap_or(3306) as u16);
@@ -232,8 +232,8 @@ impl AppState {
             }
         }
         Err(format!(
-            "Could not connect to database replica for '{}' after {} attempts",
-            &wiki, MYSQL_MAX_CONNECTION_ATTEMPTS
+            "Could not connect to database replica for '{}' on '{}'/'{}' after {} attempts",
+            &wiki, &host, &schema, MYSQL_MAX_CONNECTION_ATTEMPTS
         ))
     }
 
