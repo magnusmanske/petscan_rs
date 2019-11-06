@@ -131,12 +131,12 @@ impl AppState {
             static ref REMOVE_WIKI: Regex = Regex::new(r"wiki$")
                 .expect("AppState::get_url_for_wiki_from_site: Regex is invalid");
         }
-        /*
-        .or_else(|| {
-            let wiki = REMOVE_WIKI.replace(wiki, "").to_string();
-            let ret = self.get_value_from_site_matrix_entry(&wiki, site, "dbname", "url");
-            ret.map(|s| REMOVE_WIKI.replace(&s.to_string(), "").to_string())
-        })*/
+
+        let wiki = match wiki.as_str() {
+            "be-taraskwiki" | "be-x-oldwiki" | "be_taraskwiki" | "be_x_oldwiki" => "be_x_oldwiki",
+            other => other,
+        }
+        .to_string();
 
         let host = match self.config["host"].as_str() {
             Some("127.0.0.1") => "127.0.0.1".to_string(),
@@ -144,13 +144,6 @@ impl AppState {
             None => panic!("No host in config file"),
         };
         let schema = wiki.to_string() + "_p";
-        let schema = match schema.as_str() {
-            "be-taraskwiki_p" | "be-x-oldwiki_p" | "be_taraskwiki_p" | "be_x_oldwiki_p" => {
-                "be_x_oldwiki_p"
-            }
-            other => other,
-        }
-        .to_string();
         Ok((host, schema))
     }
 
