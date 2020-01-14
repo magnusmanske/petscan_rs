@@ -17,7 +17,7 @@ rayon = "*"
 htmlescape = "*"
 rand = "*"
 mysql = { version="*" , features = ["ssl"] }
-reqwest = "*"
+reqwest = "0.9"
 rocket = "*"
 rocket_contrib = "*"
 #rocket =  { git = "https://github.com/SergioBenitez/Rocket" }
