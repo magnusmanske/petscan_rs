@@ -821,7 +821,7 @@ mod tests {
         let items: Vec<&str> = vec![
             "Q63810120", // Some scientific paper, unlikely to ever get an image, designated survivor of this test
             "Q13520818", // Magnus Manske, has image
-            "Q37651",    // List item
+            "Q1782953",  // List item
             "Q21002367", // Disambig item
             "Q10000067", // Redirect
         ];

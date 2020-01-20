@@ -1230,10 +1230,15 @@ impl Platform {
         if list.is_empty() && !no_statements && !no_sitelinks {
             return Ok(());
         }
+        let original_wiki = result.wiki();
         Platform::profile("before filter_wikidata:convert_to_wiki", Some(result.len()));
         result.convert_to_wiki("wikidatawiki", &self)?;
         Platform::profile("after filter_wikidata:convert_to_wiki", Some(result.len()));
         if result.is_empty() {
+            match original_wiki {
+                Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+                None => {}
+            }
             return Ok(());
         }
         // For all/any/none
@@ -1299,10 +1304,15 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries();
-        result.process_batch_results(self.state(), batches, &|row: my::Row| {
+        let ret = result.process_batch_results(self.state(), batches, &|row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
-        })
+        });
+        match original_wiki {
+            Some(wiki) => result.convert_to_wiki(&wiki, &self)?,
+            None => {}
+        }
+        ret
     }
 
     pub fn entry_from_entity(entity: &str) -> Option<PageListEntry> {
@@ -1778,7 +1788,7 @@ mod tests {
 
     #[test]
     fn test_manual_list_enwiki_use_props() {
-        check_results_for_psid(10087995, "wikidatawiki", vec![Title::new("Q13520818", 0)]);
+        check_results_for_psid(10087995, "enwiki", vec![Title::new("Magnus_Manske", 0)]);
     }
 
     #[test]
