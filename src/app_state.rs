@@ -1,5 +1,6 @@
 extern crate rocket;
 
+use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::platform::MyResponse;
 use chrono::prelude::*;
@@ -189,6 +190,23 @@ impl AppState {
         }
     }
 
+    fn set_group_concat_max_len(&self, wiki: &String, conn: &mut my::Conn) -> Result<(), String> {
+        if wiki != "commonswiki" {
+            return Ok(()); // Only needed for commonswiki, in platform::process_files
+        }
+        let sql: SQLtuple = (
+            "SET SESSION group_concat_max_len = 1000000000".to_string(),
+            vec![],
+        );
+        conn.prep_exec(&sql.0, &sql.1).map_err(|e| {
+            format!(
+                "AppState::set_group_concat_max_len: SQL query error: {:?}",
+                e
+            )
+        })?;
+        Ok(())
+    }
+
     pub fn get_wiki_db_connection(
         &self,
         db_user_pass: &DbUserPass,
@@ -208,7 +226,10 @@ impl AppState {
             builder.tcp_port(self.config["db_port"].as_u64().unwrap_or(3306) as u16);
 
             match my::Conn::new(builder) {
-                Ok(con) => return Ok(con),
+                Ok(mut con) => {
+                    self.set_group_concat_max_len(wiki, &mut con)?;
+                    return Ok(con);
+                }
                 Err(e) => {
                     println!("CONNECTION ERROR: {:?}", e);
                     if loops_left == 0 {
