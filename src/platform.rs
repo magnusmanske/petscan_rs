@@ -1397,7 +1397,7 @@ impl Platform {
         match self.get_param(param) {
             Some(s) => s
                 .split(separator)
-                .map(|s| s.trim())
+                .map(|s| s.trim().trim_matches('\u{200E}').trim_matches('\u{200F}')) // See https://doc.rust-lang.org/reference/whitespace.html
                 .filter(|s| !s.is_empty())
                 .map(|s| Title::spaces_to_underscores(&s.to_string()))
                 .collect(),
@@ -1973,5 +1973,19 @@ mod tests {
     #[test]
     fn test_en_categories_sparql_common_wiki_other() {
         check_results_for_psid(11515666, "frwiki", vec![Title::new("Magnus Manske", 0)]);
+    }
+
+    #[test]
+    fn test_trim_extended_whitespace() {
+        let platform = run_psid(15015735); // The categories contain a left-to-right mark
+        let result = platform.result.unwrap();
+        let entries = result
+            .entries()
+            .read()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect::<Vec<PageListEntry>>();
+        assert!(entries.len() > 20);
     }
 }
