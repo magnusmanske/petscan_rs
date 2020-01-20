@@ -851,7 +851,6 @@ impl SourceDatabase {
                         sql.0 += link_count_sql;
                         sql.0 += " FROM page p";
                         if !is_before_after_done {
-                            is_before_after_done = true;
                             Platform::append_sql(&mut sql, sql_before_after.clone());
                         }
                         sql.0 += " WHERE (p.page_namespace=";
@@ -862,6 +861,9 @@ impl SourceDatabase {
                         batches.push(sql);
                     });
                 });
+
+                // Either way, it's done
+                is_before_after_done = true;
 
                 let wiki = primary_pagelist.wiki().ok_or(format!("No wiki 12345"))?;
                 let partial_ret: Vec<PageList> = batches
