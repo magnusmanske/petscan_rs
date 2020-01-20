@@ -1988,4 +1988,21 @@ mod tests {
             .collect::<Vec<PageListEntry>>();
         assert!(entries.len() > 20);
     }
+
+    #[test]
+    fn test_template_talk_pages() {
+        let platform = run_psid(15059382);
+        let result = platform.result.unwrap();
+        let entries = result
+            .entries()
+            .read()
+            .unwrap()
+            .iter()
+            .cloned()
+            .collect::<Vec<PageListEntry>>();
+        assert!(entries.len() > 0);
+        for entry in entries {
+            assert_eq!(entry.title().namespace_id(), 0);
+        }
+    }
 }

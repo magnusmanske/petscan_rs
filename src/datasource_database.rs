@@ -443,7 +443,7 @@ impl SourceDatabase {
             .join(","))
     }
 
-    pub fn template_subquery(
+    fn template_subquery(
         &self,
         input: &Vec<String>,
         use_talk_page: bool,
@@ -479,6 +479,7 @@ impl SourceDatabase {
                     .params
                     .namespace_ids
                     .iter()
+                    .map(|ns| if use_talk_page { ns + 1 } else { *ns })
                     .map(|s| s.to_string())
                     .collect(),
                 &mut sql,
@@ -493,7 +494,7 @@ impl SourceDatabase {
         sql
     }
 
-    pub fn sql_in(&self, input: &Vec<String>, sql: &mut SQLtuple) {
+    fn sql_in(&self, input: &Vec<String>, sql: &mut SQLtuple) {
         if input.len() == 1 {
             sql.0 += "=";
             Platform::append_sql(sql, Platform::prep_quote(input));
@@ -504,7 +505,7 @@ impl SourceDatabase {
         }
     }
 
-    pub fn group_link_list_by_namespace(
+    fn group_link_list_by_namespace(
         &self,
         input: &Vec<String>,
         api: &Api,
@@ -528,7 +529,7 @@ impl SourceDatabase {
         ret
     }
 
-    pub fn links_from_subquery(&self, input: &Vec<String>, api: &Api) -> SQLtuple {
+    fn links_from_subquery(&self, input: &Vec<String>, api: &Api) -> SQLtuple {
         let mut sql: SQLtuple = ("(".to_string(), vec![]);
         let nslist = self.group_link_list_by_namespace(input, api);
         nslist.iter().for_each(|nsgroup| {
@@ -545,7 +546,7 @@ impl SourceDatabase {
         sql
     }
 
-    pub fn links_to_subquery(&self, input: &Vec<String>, api: &Api) -> SQLtuple {
+    fn links_to_subquery(&self, input: &Vec<String>, api: &Api) -> SQLtuple {
         let mut sql: SQLtuple = ("(".to_string(), vec![]);
         let nslist = self.group_link_list_by_namespace(input, api);
         nslist.iter().for_each(|nsgroup| {
@@ -562,7 +563,7 @@ impl SourceDatabase {
         sql
     }
 
-    pub fn iterate_category_batches(
+    fn iterate_category_batches(
         &self,
         categories: &Vec<Vec<String>>,
         start: usize,
