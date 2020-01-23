@@ -410,7 +410,7 @@ function generateThumbnailView() {
 function validateSourceCombination () {
 	var o = $('input[name="source_combination"]') ;
 	var text = $.trim ( o.val() ) ;
-	var reg = /^( and | or | not |categories|sparql|pagepile|manual|wikidata|\(|\)| )*$/gi ;
+	var reg = /^( and | or | not |categories|sparql|pagepile|manual|wikidata|search|\(|\)| )*$/gi ;
 	var op = $(o.parents("div.input-group").get(0)) ;
 	if ( reg.test ( text ) ) {
 		op.removeClass ( 'has-danger' ) ;

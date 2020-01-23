@@ -223,11 +223,27 @@ impl DataSource for SourceSearch {
         let api = platform.state().get_api_for_wiki(wiki.to_string())?;
         let srlimit = if max > 500 { 500 } else { max };
         let srlimit = format!("{}", srlimit);
+        let namespace_ids = platform
+            .form_parameters()
+            .ns
+            .par_iter()
+            .cloned()
+            .collect::<Vec<usize>>();
+        let namespace_ids = if namespace_ids.is_empty() {
+            "*".to_string()
+        } else {
+            namespace_ids
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<String>>()
+                .join(",")
+        };
         let params = api.params_into(&vec![
             ("action", "query"),
             ("list", "search"),
             ("srlimit", srlimit.as_str()),
             ("srsearch", query.as_str()),
+            ("srnamespace", namespace_ids.as_str()),
         ]);
         let result = match api.get_query_api_json_limit(&params, Some(max)) {
             Ok(result) => result,

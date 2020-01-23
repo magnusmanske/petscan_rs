@@ -1547,7 +1547,7 @@ impl Platform {
         }
         match s.trim().to_lowercase().as_str() {
             "" => return Combination::None,
-            "categories" | "sparql" | "manual" | "pagepile" | "wikidata" => {
+            "categories" | "sparql" | "manual" | "pagepile" | "wikidata" | "search" => {
                 return Combination::Source(s.to_string())
             }
             _ => {}
