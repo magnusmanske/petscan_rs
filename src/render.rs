@@ -116,7 +116,7 @@ pub trait Render {
         columns.push("title");
         if params.do_output_redlinks {
             columns.push("namespace");
-            columns.push("linknumber");
+            columns.push("redlink_count");
         } else {
             columns.push("page_id");
             columns.push("namespace");
@@ -272,6 +272,10 @@ pub trait Render {
                     Some(lc) => format!("{}", &lc),
                     None => "".to_string(),
                 },
+                "redlink_count" => match &entry.redlink_count {
+                    Some(lc) => format!("{}", &lc),
+                    None => "".to_string(),
+                },
                 "coordinates" => self.render_coordinates(entry, params),
                 "fileusage" => self.render_cell_fileusage(&entry, &params),
 
@@ -304,7 +308,6 @@ impl Render for RenderWiki {
                 + " Regenerate this table].\n",
         );
         rows.push("{| border=1 class='wikitable'".to_string());
-
         let mut header: Vec<(&str, &str)> = vec![
             ("title", "Title"),
             ("page_id", "Page ID"),
@@ -312,6 +315,9 @@ impl Render for RenderWiki {
             ("size", "Size (bytes)"),
             ("timestamp", "Last change"),
         ];
+        if params.do_output_redlinks {
+            header.insert(0, ("redlink_count", "Incoming links"));
+        }
         if params.show_wikidata_item {
             header.push(("wikidata_item", "Wikidata"));
         }
@@ -555,7 +561,9 @@ impl Render for RenderHTML {
         */
 
         // Wikidata edit box?
-        if wiki != "wikidatawiki" && platform.get_param_blank("wikidata_item") == "without" {
+        if params.do_output_redlinks {
+            // Yeah no
+        } else if wiki != "wikidatawiki" && platform.get_param_blank("wikidata_item") == "without" {
             rows.push("<div id='autolist_box' mode='creator'></div>".to_string());
             params.use_autolist = true;
             params.autolist_creator_mode = true;
@@ -919,6 +927,7 @@ impl RenderHTML {
                 "page_id" => "<th class='text-nowrap' tt='h_id'></th>".to_string(),
                 "namespace" => "<th class='text-nowrap' tt='h_namespace'></th>".to_string(),
                 "linknumber" => "<th tt='link_number'></th>".to_string(),
+                "redlink_count" => "<th tt='link_number'></th>".to_string(),
                 "size" => "<th class='text-nowrap' tt='h_len'></th>".to_string(),
                 "timestamp" => "<th class='text-nowrap' tt='h_touched'></th>".to_string(),
                 "wikidata_item" => "<th tt='h_wikidata'></th>".to_string(),

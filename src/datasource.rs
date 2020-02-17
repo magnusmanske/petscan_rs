@@ -147,7 +147,7 @@ impl DataSource for SourcePagePile {
             .get_param("pagepile")
             .ok_or(format!("Missing parameter 'pagepile'"))?;
         let timeout = Some(time::Duration::from_secs(240));
-        let builder = reqwest::ClientBuilder::new().timeout(timeout);
+        let builder = reqwest::blocking::ClientBuilder::new().timeout(timeout);
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
             .map_err(|e| e.to_string())?;
         let params = api.params_into(&vec![
@@ -332,7 +332,7 @@ impl DataSource for SourceSparql {
             .get_param("sparql")
             .ok_or(format!("Missing parameter 'sparql'"))?;
         let timeout = Some(time::Duration::from_secs(120));
-        let builder = reqwest::ClientBuilder::new().timeout(timeout);
+        let builder = reqwest::blocking::ClientBuilder::new().timeout(timeout);
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
             .map_err(|e| format!("SourceSparql::run:1 {:?}", e))?;
         let result = api

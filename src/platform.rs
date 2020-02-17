@@ -131,6 +131,7 @@ impl Platform {
     pub fn run(&mut self) -> Result<(), String> {
         Platform::profile("begin run", None);
         let start_time = SystemTime::now();
+        self.output_redlinks = self.has_param("show_redlinks");
         let mut candidate_sources: Vec<Arc<Mutex<Box<dyn DataSource + Send + Sync>>>> = vec![];
         candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceDatabase::new(
             SourceDatabaseParameters::db_params(self),
@@ -401,7 +402,7 @@ impl Platform {
     }
 
     fn process_redlinks(&self, result: &PageList) -> Result<(), String> {
-        if result.is_empty() || !self.has_param("show_redlinks") || result.is_wikidata() {
+        if result.is_empty() || !self.do_output_redlinks() || result.is_wikidata() {
             return Ok(());
         }
         let ns0_only = self.has_param("article_redlinks_only");
@@ -458,7 +459,7 @@ impl Platform {
                     }
                 };
 
-                let result = match conn.prep_exec(&sql.0, &sql.1) {
+                let new_result = match conn.prep_exec(&sql.0, &sql.1) {
                     Ok(r) => r,
                     Err(e) => {
                         *error.lock().unwrap() = Some(format!("{:?}", e));
@@ -466,7 +467,7 @@ impl Platform {
                     }
                 };
                 let mut redlink_counter = redlink_counter.lock().unwrap();
-                for row in result {
+                for row in new_result {
                     match row {
                         Ok(row) => {
                             let (page_title, namespace_id, _count) =
@@ -1375,10 +1376,14 @@ impl Platform {
             None => return Err(format!("Platform::get_response: No wiki in result")),
         };
 
-        let mut pages = result.drain_into_sorted_vec(PageListSort::new_from_params(
-            &self.get_param_blank("sortby"),
-            self.get_param_blank("sortorder") == "descending".to_string(),
-        ));
+        let mut sortby = self.get_param_blank("sortby");
+        let mut sort_order = self.get_param_blank("sortorder") == "descending".to_string();
+        if self.do_output_redlinks() && (sortby.is_empty() || sortby == "none") {
+            sortby = "redlinks".to_string();
+            sort_order = true;
+        }
+        let mut pages =
+            result.drain_into_sorted_vec(PageListSort::new_from_params(&sortby, sort_order));
         drop(result);
         self.apply_results_limit(&mut pages);
 
