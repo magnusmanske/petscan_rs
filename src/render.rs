@@ -116,7 +116,7 @@ pub trait Render {
         }
         columns.push("title");
         if params.do_output_redlinks {
-            columns.push("namespace");
+            //columns.push("namespace");
             columns.push("redlink_count");
         } else {
             columns.push("page_id");
@@ -313,7 +313,7 @@ impl Render for RenderWiki {
         rows.push(format!("Last updated on {}.", utc.to_rfc2822()));
 
         rows.push(format!(
-            "[{} Regenerate this table] or [{}&format=html&run=0 edit the query].\n",
+            "[{} Regenerate this table] or [{} edit the query].\n",
             &petscan_query_url, &petscan_query_url_no_doit
         ));
         rows.push("{| border=1 class='wikitable'".to_string());

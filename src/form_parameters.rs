@@ -98,6 +98,7 @@ impl FormParameters {
         self.params
             .iter()
             .filter(|(k, _v)| *k != "doit")
+            .filter(|(k, _v)| *k != "format")
             .map(|(k, v)| {
                 Uri::percent_encode(k).to_string() + "=" + &Uri::percent_encode(v).to_string()
             })
