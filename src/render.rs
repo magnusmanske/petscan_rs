@@ -414,7 +414,10 @@ impl RenderWiki {
                 .title()
                 .full_pretty(&params.api)
                 .unwrap_or(entry.title().pretty().to_string());
-            ret += "|]]";
+            if !params.do_output_redlinks {
+                ret += "|";
+            }
+            ret += "]]";
             ret
         }
     }
