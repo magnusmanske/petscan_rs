@@ -693,6 +693,7 @@ impl Render for RenderHTML {
             params,
             true,
             &entry.wikidata_description,
+            entry.redlink_count.is_some(),
         )
     }
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, params: &RenderParams) -> String {
@@ -704,13 +705,14 @@ impl Render for RenderHTML {
                 params,
                 false,
                 &entry.wikidata_description,
+                entry.redlink_count.is_some(),
             ),
             None => "".to_string(),
         }
     }
     fn render_user_name(&self, user: &String, params: &RenderParams) -> String {
         let title = Title::new(user, 2);
-        self.render_wikilink(&title, &params.wiki, &None, params, false, &None)
+        self.render_wikilink(&title, &params.wiki, &None, params, false, &None, false)
     }
     fn render_cell_image(&self, image: &Option<String>, params: &RenderParams) -> String {
         match image {
@@ -758,6 +760,7 @@ impl Render for RenderHTML {
                             params,
                             false,
                             &entry.wikidata_description,
+                            entry.redlink_count.is_some(),
                         )
                         + "</div>";
                     rows.push(html);
@@ -861,6 +864,7 @@ impl RenderHTML {
         params: &RenderParams,
         is_page_link: bool,
         wikidata_description: &Option<String>,
+        is_redlink: bool,
     ) -> String {
         let server = match params.state.get_server_url_for_wiki(wiki) {
             Ok(url) => url,
@@ -883,7 +887,9 @@ impl RenderHTML {
             },
         };
         let mut ret = "<a".to_string();
-        if is_page_link {
+        if is_redlink {
+            ret += " class='redlink'";
+        } else if is_page_link {
             ret += " class='pagelink'";
         }
         ret += &(" target='_blank' href='".to_string() + &url + "'>" + &label + "</a>");
