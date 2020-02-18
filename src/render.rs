@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::pagelist::PageListEntry;
 use crate::platform::*;
+use chrono::prelude::*;
 use htmlescape::encode_minimal;
 use rocket::http::uri::Uri;
 use rocket::http::ContentType;
@@ -302,11 +303,19 @@ impl Render for RenderWiki {
         let mut params = RenderParams::new(platform, wiki)?;
         let mut rows: Vec<String> = vec![];
         rows.push("== ".to_string() + &platform.combination().to_string() + " ==");
-        rows.push(
-            "[https://petscan.wmflabs.org/?".to_string()
-                + &platform.form_parameters().to_string()
-                + " Regenerate this table].\n",
-        );
+
+        let petscan_query_url =
+            "https://petscan.wmflabs.org/?".to_string() + &platform.form_parameters().to_string();
+        let petscan_query_url_no_doit = "https://petscan.wmflabs.org/?".to_string()
+            + &platform.form_parameters().to_string_no_doit();
+
+        let utc: DateTime<Utc> = Utc::now();
+        rows.push(format!("Last updated on {}.", utc.to_rfc2822()));
+
+        rows.push(format!(
+            "[{} Regenerate this table] or [{}&format=html&run=0 edit the query].\n",
+            &petscan_query_url, &petscan_query_url_no_doit
+        ));
         rows.push("{| border=1 class='wikitable'".to_string());
         let mut header: Vec<(&str, &str)> = vec![
             ("title", "Title"),
@@ -315,9 +324,6 @@ impl Render for RenderWiki {
             ("size", "Size (bytes)"),
             ("timestamp", "Last change"),
         ];
-        if params.do_output_redlinks {
-            header.insert(0, ("redlink_count", "Incoming links"));
-        }
         if params.show_wikidata_item {
             header.push(("wikidata_item", "Wikidata"));
         }
@@ -325,6 +331,9 @@ impl Render for RenderWiki {
             self.file_data_keys()
                 .iter()
                 .for_each(|k| header.push((k, k)));
+        }
+        if params.do_output_redlinks {
+            header = vec![("redlink_count", "Wanted"), ("title", "Title")];
         }
         let mut header: Vec<(String, String)> = header
             .iter()

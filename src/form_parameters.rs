@@ -94,6 +94,17 @@ impl FormParameters {
             .join("&")
     }
 
+    pub fn to_string_no_doit(&self) -> String {
+        self.params
+            .iter()
+            .filter(|(k, _v)| *k != "doit")
+            .map(|(k, v)| {
+                Uri::percent_encode(k).to_string() + "=" + &Uri::percent_encode(v).to_string()
+            })
+            .collect::<Vec<String>>()
+            .join("&")
+    }
+
     fn has_param(&self, key: &str) -> bool {
         self.params.contains_key(&key.to_string())
     }
