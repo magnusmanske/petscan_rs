@@ -494,8 +494,13 @@ impl AppState {
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
         let sql = (
-            "INSERT INTO `started_queries` (querystring,created) VALUES (?,?)".to_string(),
-            vec![query_string.to_owned(), now],
+            "INSERT INTO `started_queries` (querystring,created,process_id) VALUES (?,?,?)"
+                .to_string(),
+            vec![
+                query_string.to_owned(),
+                now,
+                format!("{}", std::process::id()),
+            ],
         );
         let ret = match conn.prep_exec(sql.0, sql.1) {
             Ok(r) => Ok(r.last_insert_id()),
