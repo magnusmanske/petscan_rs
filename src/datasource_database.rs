@@ -701,16 +701,18 @@ impl SourceDatabase {
         if before.is_empty() && after.is_empty() {
             is_before_after_done = true;
         } else {
-            sql_before_after.0 = " INNER JOIN (revision r) on r.rev_page=p.page_id".to_string();
+            sql_before_after.0 = " INNER JOIN (revision r) ON r.rev_page=p.page_id".to_string();
             if self.params.only_new_since {
                 sql_before_after.0 += " AND r.rev_parent_id=0";
+            } else {
+                sql_before_after.0 += " AND r.rev_id=p.page_latest";
             }
             if !before.is_empty() {
-                sql_before_after.0 += " AND rev_timestamp<=?";
+                sql_before_after.0 += " AND r.rev_timestamp<=?";
                 sql_before_after.1.push(before);
             }
             if !after.is_empty() {
-                sql_before_after.0 += " AND rev_timestamp>=?";
+                sql_before_after.0 += " AND r.rev_timestamp>=?";
                 sql_before_after.1.push(after);
             }
             sql_before_after.0 += " ";
@@ -746,7 +748,7 @@ impl SourceDatabase {
                         let mut sql = Platform::sql_tuple();
                         match self.params.combine.as_str() {
                             "subset" => {
-                                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
+                                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
                                 sql.0 += link_count_sql;
                                 sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
                                 Platform::append_sql(
@@ -774,7 +776,7 @@ impl SourceDatabase {
                                     .par_iter()
                                     .map(|s| s.to_owned())
                                     .collect::<Vec<String>>();
-                                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
+                                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
                                 sql.0 += link_count_sql;
                                 sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
                                 Platform::append_sql(&mut sql, Platform::prep_quote(&tmp));
@@ -834,7 +836,7 @@ impl SourceDatabase {
                 return Ok(ret);
             }
             "no_wikidata" => {
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
                 sql.0 += link_count_sql;
                 sql.0 += " FROM page p";
                 if !is_before_after_done {
@@ -844,7 +846,7 @@ impl SourceDatabase {
                 sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')" ;
             }
             "templates" | "links_from" => {
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len ".to_string() ;
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
                 sql.0 += link_count_sql;
                 sql.0 += " FROM page p";
                 if !is_before_after_done {
@@ -868,7 +870,7 @@ impl SourceDatabase {
                 nslist.iter().for_each(|nsgroup| {
                     nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
                         let mut sql = Platform::sql_tuple();
-                        sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len ".to_string() ;
+                        sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
                         sql.0 += link_count_sql;
                         sql.0 += " FROM page p";
                         if !is_before_after_done {
@@ -1171,6 +1173,7 @@ impl SourceDatabase {
             sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')" ;
         }
 
+        // Last edit/created before/after
         if !*is_before_after_done {
             Platform::append_sql(sql, sql_before_after);
             *is_before_after_done = true;

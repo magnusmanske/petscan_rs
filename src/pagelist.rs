@@ -716,7 +716,7 @@ impl PageList {
                 .par_iter_mut()
                 .map(|mut sql_batch| {
                     sql_batch.0 =
-                        "SELECT page_title,page_namespace,page_id,page_len,page_touched FROM page WHERE"
+                        "SELECT page_title,page_namespace,page_id,page_len,(SELECT rev_timestamp FROM revision WHERE rev_id=page_latest LIMIT 1) AS page_touched FROM page WHERE"
                             .to_string() + &sql_batch.0;
                     sql_batch.to_owned()
                 })
