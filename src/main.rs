@@ -74,9 +74,11 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
     }
 
     // "psid" parameter? Load, and patch in, existing query
+    let mut just_a_psid = false;
     match form_parameters.params.get("psid") {
         Some(psid) => {
             if !psid.trim().is_empty() {
+                just_a_psid = form_parameters.params.len() == 1;
                 match state.get_query_from_psid(&psid.to_string()) {
                     Ok(psid_query) => {
                         let psid_params = match FormParameters::outcome_from_query(&psid_query) {
@@ -140,14 +142,16 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
     }
 
     // Generate and store a new PSID
-    platform.psid = match state.get_or_create_psid_for_query(&form_parameters.to_string()) {
-        Ok(psid) => Some(psid),
-        Err(e) => {
-            state.log_query_end(started_query_id);
-            return state.render_error(e, &form_parameters);
-        }
-    };
-    Platform::profile("PSID created", None);
+    if !just_a_psid {
+        platform.psid = match state.get_or_create_psid_for_query(&form_parameters.to_string()) {
+            Ok(psid) => Some(psid),
+            Err(e) => {
+                state.log_query_end(started_query_id);
+                return state.render_error(e, &form_parameters);
+            }
+        };
+        Platform::profile("PSID created", None);
+    }
 
     // Render response
     match platform.get_response() {
