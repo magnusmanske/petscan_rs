@@ -481,14 +481,11 @@ impl SourceDatabase {
         let mut sql = Platform::sql_tuple();
         if use_talk_page {
             sql.0 += if find_not {
-                " AND NOT EXISTS "
+                " AND p.page_id NOT IN "
             } else {
-                " AND EXISTS "
+                " AND p.page_id IN "
             };
-            //sql.0 += "(SELECT * FROM templatelinks,page pt WHERE MOD(p.page_namespace,2)=0 AND pt.page_title=p.page_title AND pt.page_namespace=p.page_namespace+1 AND tl_from=pt.page_id AND tl_namespace=10 AND tl_title";
-            sql.0 += "(SELECT * FROM page pt WHERE pt.page_title=p.page_title AND pt.page_namespace-1=p.page_namespace AND pt.page_id IN (SELECT tl_from FROM templatelinks WHERE tl_namespace=10 AND tl_from_namespace IN (";
-            sql.0 += &self.talk_namespace_ids;
-            sql.0 += ")  AND tl_title";
+            sql.0 += "(SELECT pt2.page_id FROM page pt,page pt2,templatelinks WHERE pt2.page_namespace=pt.page_namespace-1 AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_namespace=10 AND tl_title";
         } else {
             sql.0 += if find_not {
                 " AND p.page_id NOT IN "
@@ -516,9 +513,6 @@ impl SourceDatabase {
         }
 
         sql.0 += ")";
-        if use_talk_page {
-            sql.0 += ")";
-        }
 
         sql
     }
@@ -755,13 +749,11 @@ impl SourceDatabase {
                                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,p.page_touched,p.page_len".to_string() ;
                                 sql.0 += link_count_sql;
                                 sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
-                                //println!("\nSTART:\n{:?}", &sql);
                                 Platform::append_sql(
                                     &mut sql,
                                     Platform::prep_quote(&category_batch[0]),
                                 );
                                 sql.0 += ")) cl0";
-                                //println!("\nAPPENDED:\n{:?}", &sql);
                                 for a in 1..category_batch.len() {
                                     sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
                                     Platform::append_sql(
@@ -769,7 +761,6 @@ impl SourceDatabase {
                                         Platform::prep_quote(&category_batch[a]),
                                     );
                                     sql.0 += ")";
-                                    //println!("\nINNER:\n{:?}", &sql);
                                 }
                             }
                             "union" => {
