@@ -485,6 +485,47 @@ impl AppState {
         }
     }
 
+    pub fn log_query_start(&self, query_string: &String) -> Result<u64, String> {
+        let tool_db_user_pass = match self.tool_db_mutex.lock() {
+            Ok(x) => x,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
+        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
+        let utc: DateTime<Utc> = Utc::now();
+        let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
+        let sql = (
+            "INSERT INTO `started_queries` (querystring,created) VALUES (?,?)".to_string(),
+            vec![query_string.to_owned(), now],
+        );
+        let ret = match conn.prep_exec(sql.0, sql.1) {
+            Ok(r) => Ok(r.last_insert_id()),
+            Err(e) => Err(format!(
+                "AppState::get_new_psid_for_query query error: {:?}",
+                e
+            )),
+        };
+        ret
+    }
+
+    pub fn log_query_end(&self, query_id: u64) {
+        let tool_db_user_pass = match self.tool_db_mutex.lock() {
+            Ok(x) => x,
+            Err(_e) => return,
+        };
+        let mut conn = match self.get_tool_db_connection(tool_db_user_pass.clone()) {
+            Ok(conn) => conn,
+            _ => return,
+        };
+        let sql = (
+            "DELETE FROM `started_queries` WHERE id=?".to_string(),
+            vec![format!("{}", query_id)],
+        );
+        match conn.prep_exec(sql.0, sql.1) {
+            Ok(_r) => {}
+            Err(_e) => {}
+        };
+    }
+
     pub fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
         let tool_db_user_pass = match self.tool_db_mutex.lock() {
             Ok(x) => x,
@@ -513,7 +554,7 @@ impl AppState {
 
         // Create new entry
         let utc: DateTime<Utc> = Utc::now();
-        let now = utc.format("%Y-%m-%d- %H:%M:%S").to_string();
+        let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
         let sql = (
             "INSERT IGNORE INTO `query` (querystring,created) VALUES (?,?)".to_string(),
             vec![query_string.to_owned(), now],
