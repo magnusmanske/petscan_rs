@@ -20,6 +20,13 @@ pub struct FormParameters {
 }
 
 impl FormParameters {
+    pub fn new() -> Self {
+        Self {
+            params: HashMap::new(),
+            ns: HashSet::new(),
+        }
+    }
+
     /// Extracts namespaces from parameter list
     fn ns_from_params(params: &HashMap<String, String>) -> HashSet<usize> {
         lazy_static! {
@@ -117,7 +124,7 @@ impl FormParameters {
         }
     }
 
-    fn set_param(&mut self, key: &str, value: &str) {
+    pub fn set_param(&mut self, key: &str, value: &str) {
         self.params.insert(key.to_string(), value.to_string());
     }
 
@@ -209,10 +216,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for FormParameters {
                         Err(e) => Outcome::Failure((Status::BadRequest, format!("{}", &e))),
                     },
                     None => {
-                        let mut ret = FormParameters {
-                            params: HashMap::new(),
-                            ns: HashSet::new(),
-                        };
+                        let mut ret = FormParameters::new();
                         ret.params
                             .insert("show_main_page".to_string(), "1".to_string());
                         Outcome::Success(ret)

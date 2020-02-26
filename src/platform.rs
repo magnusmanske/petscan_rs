@@ -84,6 +84,7 @@ pub struct Platform {
     wiki_by_source: HashMap<String, String>,
     wdfist_result: Option<Value>,
     warnings: Arc<RwLock<Vec<String>>>,
+    namespace_case_sensitivity_cache: Arc<RwLock<HashMap<(String, NamespaceID), bool>>>,
 }
 
 impl Platform {
@@ -100,6 +101,7 @@ impl Platform {
             wiki_by_source: HashMap::new(),
             wdfist_result: None,
             warnings: Arc::new(RwLock::new(vec![])),
+            namespace_case_sensitivity_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -126,6 +128,45 @@ impl Platform {
 
     pub fn query_time(&self) -> Option<Duration> {
         self.query_time.to_owned()
+    }
+
+    // Returns true if "case" in namespace info is "case-sensitive", false otherwise (default)
+    pub fn get_namespace_case_sensitivity(&self, namespace_id: NamespaceID) -> bool {
+        let wiki = match self.get_main_wiki() {
+            Some(wiki) => wiki,
+            None => return false,
+        };
+        match self
+            .namespace_case_sensitivity_cache
+            .read()
+            .unwrap()
+            .get(&(wiki.to_owned(), namespace_id))
+        {
+            Some(ret) => return *ret,
+            None => {}
+        }
+        let state = self.state();
+        let api = match state.get_api_for_wiki(wiki.to_owned()) {
+            Ok(api) => api,
+            _ => {
+                self.namespace_case_sensitivity_cache
+                    .write()
+                    .unwrap()
+                    .insert((wiki.to_owned(), namespace_id), false);
+                return false;
+            }
+        };
+        let namespace_info =
+            api.get_site_info_value("namespaces", format!("{}", namespace_id).as_str());
+        let ret = match namespace_info["case"].as_str() {
+            Some(c) => (c == "case-sensitive"),
+            None => false,
+        };
+        self.namespace_case_sensitivity_cache
+            .write()
+            .unwrap()
+            .insert((wiki.to_owned(), namespace_id), ret);
+        ret
     }
 
     pub fn run(&mut self) -> Result<(), String> {

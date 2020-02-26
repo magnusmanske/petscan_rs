@@ -61,6 +61,8 @@ pub struct SourceDatabaseParameters {
     before: String,
     after: String,
     use_new_category_mode: bool,
+    category_namespace_is_case_insensitive: bool,
+    template_namespace_is_case_insensitive: bool,
 }
 
 impl SourceDatabaseParameters {
@@ -104,6 +106,8 @@ impl SourceDatabaseParameters {
             before: "".to_string(),
             after: "".to_string(),
             use_new_category_mode: true,
+            category_namespace_is_case_insensitive: true,
+            template_namespace_is_case_insensitive: true,
         }
     }
 
@@ -132,7 +136,7 @@ impl SourceDatabaseParameters {
         if cat_pos.len() == 1 && combine == "subset" {
             combine = "union".to_string(); // Easier to construct
         }
-        let ret = SourceDatabaseParameters {
+        let mut ret = SourceDatabaseParameters {
             combine: combine,
             only_new_since: platform.has_param("only_new"),
             max_age: platform
@@ -140,9 +144,9 @@ impl SourceDatabaseParameters {
                 .map(|x| x.parse::<i64>().unwrap_or(0)),
             before: platform.get_param_blank("before"),
             after: platform.get_param_blank("after"),
-            templates_yes: Self::vec_to_ucfirst(platform.get_param_as_vec("templates_yes", "\n")),
-            templates_any: Self::vec_to_ucfirst(platform.get_param_as_vec("templates_any", "\n")),
-            templates_no: Self::vec_to_ucfirst(platform.get_param_as_vec("templates_no", "\n")),
+            templates_yes: vec![],
+            templates_any: vec![],
+            templates_no: vec![],
             templates_yes_talk_page: platform.has_param("templates_use_talk_yes"),
             templates_any_talk_page: platform.has_param("templates_use_talk_any"),
             templates_no_talk_page: platform.has_param("templates_use_talk_no"),
@@ -182,14 +186,35 @@ impl SourceDatabaseParameters {
                 .cloned()
                 .collect::<Vec<usize>>(),
             use_new_category_mode: true,
+            category_namespace_is_case_insensitive: !platform.get_namespace_case_sensitivity(14),
+            template_namespace_is_case_insensitive: !platform.get_namespace_case_sensitivity(10),
         };
+        ret.templates_yes = Self::vec_to_ucfirst(
+            platform.get_param_as_vec("templates_yes", "\n"),
+            ret.template_namespace_is_case_insensitive,
+        );
+        ret.templates_any = Self::vec_to_ucfirst(
+            platform.get_param_as_vec("templates_any", "\n"),
+            ret.template_namespace_is_case_insensitive,
+        );
+        ret.templates_no = Self::vec_to_ucfirst(
+            platform.get_param_as_vec("templates_no", "\n"),
+            ret.template_namespace_is_case_insensitive,
+        );
         ret
     }
 
-    fn vec_to_ucfirst(input: Vec<String>) -> Vec<String> {
+    pub fn s2u_ucfirst(s: &String, is_case_insensitive: bool) -> String {
+        match is_case_insensitive {
+            true => Title::spaces_to_underscores(&Title::first_letter_uppercase(s)),
+            false => Title::spaces_to_underscores(s),
+        }
+    }
+
+    fn vec_to_ucfirst(input: Vec<String>, is_case_insensitive: bool) -> Vec<String> {
         input
             .iter()
-            .map(|s| Title::spaces_to_underscores(&Title::first_letter_uppercase(s)))
+            .map(|s| Self::s2u_ucfirst(s, is_case_insensitive))
             .collect()
     }
 
@@ -390,7 +415,11 @@ impl SourceDatabase {
         depth: u16,
     ) -> Result<Vec<String>, String> {
         let categories_done = Arc::new(Mutex::new(HashSet::new()));
-        let title = Title::spaces_to_underscores(&Title::first_letter_uppercase(title));
+        let title = SourceDatabaseParameters::s2u_ucfirst(
+            title,
+            self.params.category_namespace_is_case_insensitive,
+        );
+        //Title::spaces_to_underscores(&Title::first_letter_uppercase(title));
         (*categories_done.lock().unwrap()).insert(title.to_owned());
         self.go_depth(state, wiki, categories_done.clone(), &vec![title], depth)?;
         let mut tmp = Arc::try_unwrap(categories_done)
@@ -1216,6 +1245,7 @@ impl SourceDatabase {
 mod tests {
     use super::*;
     use crate::app_state::AppState;
+    use crate::form_parameters::FormParameters;
     use serde_json::Value;
     use std::env;
     use std::fs::File;
@@ -1233,15 +1263,27 @@ mod tests {
         Arc::new(AppState::new_from_config(&petscan_config))
     }
 
+    fn simulate_category_query(url_params: Vec<(&str, &str)>) -> Result<PageList, String> {
+        let state = get_state();
+        let mut fp = FormParameters::new();
+        fp.params = url_params
+            .iter()
+            .map(|pair| (pair.0.to_string(), pair.1.to_string()))
+            .collect();
+        let platform = Platform::new_from_parameters(&fp, &state);
+        let params = SourceDatabaseParameters::db_params(&platform);
+        let mut dbs = SourceDatabase::new(params);
+        dbs.get_pages(&state, None)
+    }
+
     #[test]
     fn test_category_subset() {
-        let mut params = SourceDatabaseParameters::new();
-        params.wiki = Some("enwiki".to_string());
-        params.cat_pos = vec!["1974_births".to_string(), "Bioinformaticians".to_string()];
-        let mut dbs = SourceDatabase::new(params);
-        let state = get_state();
-        let result = dbs.get_pages(&state, None).unwrap();
-        //println!("{:?}", &result);
+        let params = vec![
+            ("categories", "1974_births\nBioinformaticians"),
+            ("language", "en"),
+            ("project", "wikipedia"),
+        ];
+        let result = simulate_category_query(params).unwrap();
         assert_eq!(result.wiki(), Some("enwiki".to_string()));
         assert!(result.len() < 5); // This may change as more articles are written/categories added, please adjust!
         assert!(result
@@ -1250,5 +1292,52 @@ mod tests {
             .unwrap()
             .iter()
             .any(|entry| entry.title().pretty() == "Magnus Manske"));
+    }
+
+    #[test]
+    fn test_category_union() {
+        let params = vec![
+            ("categories", "1974_births"),
+            ("language", "en"),
+            ("project", "wikipedia"),
+        ];
+        let result_size1 = simulate_category_query(params).unwrap().len();
+        let params = vec![
+            ("categories", "Bioinformaticians"),
+            ("language", "en"),
+            ("project", "wikipedia"),
+        ];
+        let result_size2 = simulate_category_query(params).unwrap().len();
+        let params = vec![
+            ("categories", "1974_births\nBioinformaticians"),
+            ("language", "en"),
+            ("project", "wikipedia"),
+            ("combination", "union"),
+        ];
+        let result = simulate_category_query(params).unwrap();
+        assert!(result.len() > result_size1);
+        assert!(result.len() > result_size2);
+    }
+
+    #[test]
+    fn test_category_case_sensitive() {
+        let params = vec![
+            ("categories", "français de France"),
+            ("language", "fr"),
+            ("project", "wiktionary"),
+        ];
+        let result = simulate_category_query(params).unwrap();
+        assert!(result.len() > 0);
+    }
+
+    #[test]
+    fn test_category_case_insensitive() {
+        let params = vec![
+            ("categories", "biology"),
+            ("language", "en"),
+            ("project", "wikipedia"),
+        ];
+        let result = simulate_category_query(params).unwrap();
+        assert!(result.len() > 0);
     }
 }
