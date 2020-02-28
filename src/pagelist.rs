@@ -396,6 +396,11 @@ impl PageList {
         }
     }
 
+    pub fn clear(&mut self) {
+        *self.wiki.write().unwrap() = None;
+        self.entries.write().unwrap().clear();
+    }
+
     pub fn set_from(&self, other: Self) {
         *self.wiki.write().unwrap() = other.wiki.read().unwrap().clone();
         *self.entries.write().unwrap() = other.entries.read().unwrap().clone();
