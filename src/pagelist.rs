@@ -625,7 +625,8 @@ impl PageList {
                 Some(platform) => {
                     Platform::profile(
                         format!(
-                            "PageList::check_before_merging Converting {} to {}",
+                            "PageList::check_before_merging Converting {} entries from {} to {}",
+                            pagelist.len(),
                             pagelist.wiki().unwrap(),
                             &my_wiki
                         )
@@ -996,7 +997,8 @@ impl PageList {
         if !self.is_wikidata() {
             return Ok(());
         }
-        let batches = self.to_sql_batches(PAGE_BATCH_SIZE)
+        Platform::profile("PageList::convert_from_wikidata START", None);
+        let batches = self.to_sql_batches(PAGE_BATCH_SIZE*2)
             .par_iter_mut()
             .map(|sql|{
                 sql.0 = "SELECT ips_site_page FROM wb_items_per_site,page WHERE ips_item_id=substr(page_title,2)*1 AND ".to_owned()+&sql.0+" AND ips_site_id=?";
@@ -1005,16 +1007,30 @@ impl PageList {
             })
             .collect::<Vec<SQLtuple>>();
 
+        Platform::profile(
+            "PageList::convert_from_wikidata BATCHES CREATED",
+            Some(batches.len()),
+        );
+
         self.clear_entries();
         let api = platform.state().get_api_for_wiki(wiki.to_string())?;
-        self.process_batch_results(platform.state(), batches, &|row: my::Row| {
-            let ips_site_page: String = my::from_row(row);
-            Some(PageListEntry::new(Title::new_from_full(
-                &ips_site_page,
-                &api,
-            )))
-        })?;
+        Platform::profile("PageList::convert_from_wikidata STARTING BATCHES", None);
+
+        batches.chunks(5).for_each(|batch_chunk| {
+            Platform::profile("PageList::convert_from_wikidata STARTING BATCH CHUNK", None);
+            self.process_batch_results(platform.state(), batch_chunk.to_vec(), &|row: my::Row| {
+                let ips_site_page: String = my::from_row(row);
+                Some(PageListEntry::new(Title::new_from_full(
+                    &ips_site_page,
+                    &api,
+                )))
+            })
+            .unwrap();
+            Platform::profile("PageList::convert_from_wikidata ENDING BATCH CHUNK", None);
+        });
+        Platform::profile("PageList::convert_from_wikidata ALL BATCHES COMPLETE", None);
         self.set_wiki(Some(wiki.to_string()));
+        Platform::profile("PageList::convert_from_wikidata END", None);
         Ok(())
     }
 

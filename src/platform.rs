@@ -1696,9 +1696,7 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    let mut r2 = r2.lock().unwrap();
-                    r1.lock().unwrap().union(&r2, Some(&self))?;
-                    r2.clear();
+                    r1.lock().unwrap().union(&r2.lock().unwrap(), Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1712,9 +1710,9 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    let mut r2 = r2.lock().unwrap();
-                    r1.lock().unwrap().intersection(&r2, Some(&self))?;
-                    r2.clear();
+                    r1.lock()
+                        .unwrap()
+                        .intersection(&r2.lock().unwrap(), Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1724,9 +1722,9 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    let mut r2 = r2.lock().unwrap();
-                    r1.lock().unwrap().difference(&r2, Some(&self))?;
-                    r2.clear();
+                    r1.lock()
+                        .unwrap()
+                        .difference(&r2.lock().unwrap(), Some(&self))?;
                     Ok(r1)
                 }
             },

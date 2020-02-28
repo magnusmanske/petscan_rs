@@ -796,7 +796,7 @@ impl SourceDatabase {
                                 return ;
                             }
                         };
-                        Platform::profile("DSDB::get_pages [primary:categories] START BATCH",None);
+                        Platform::profile("DSDB::get_pages [primary:categories] START BATCH",Some(sql.1.len()));
                         match self.get_pages_for_primary_new_connection(
                             state,
                             &wiki,
@@ -961,6 +961,10 @@ impl SourceDatabase {
             Err(e) => return Err(format!("Bad mutex: {:?}", e)),
         };
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
+        Platform::profile(
+            "DSDB::get_pages_for_primary_new_connection STARTING",
+            Some(sql.1.len()),
+        );
         self.get_pages_for_primary(
             &mut conn,
             primary,
@@ -982,6 +986,8 @@ impl SourceDatabase {
         is_before_after_done: &mut bool,
         api: Api,
     ) -> Result<(), String> {
+        Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
+
         // Namespaces
         if !self.params.namespace_ids.is_empty() {
             let namespace_ids = &self
@@ -1208,6 +1214,11 @@ impl SourceDatabase {
             }
         };
 
+        Platform::profile(
+            "DSDB::get_pages_for_primary STARTING RUN",
+            Some(sql.1.len()),
+        );
+
         let result = match conn.prep_exec(sql.0.to_owned(), sql.1.to_owned()) {
             Ok(r) => r,
             Err(e) => {
@@ -1215,8 +1226,18 @@ impl SourceDatabase {
             }
         };
 
+        Platform::profile(
+            "DSDB::get_pages_for_primary RUN FINISHED",
+            Some(sql.1.len()),
+        );
+
         pages_sublist.set_wiki(Some(wiki.to_string()));
         pages_sublist.clear_entries();
+
+        Platform::profile(
+            "DSDB::get_pages_for_primary RETRIEVING RESULT",
+            Some(sql.1.len()),
+        );
         result
             .filter_map(|row_result| row_result.ok())
             .for_each(|row| {
@@ -1231,6 +1252,8 @@ impl SourceDatabase {
                 }
                 pages_sublist.add_entry(entry)
             });
+
+        Platform::profile("DSDB::get_pages_for_primary COMPLETE", Some(sql.1.len()));
 
         Ok(())
     }
