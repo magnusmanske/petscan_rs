@@ -1220,11 +1220,11 @@ impl SourceDatabase {
             .filter_map(|row_result| row_result.ok())
             .for_each(|row| {
                 let (page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count) =
-                    my::from_row::<(usize, String, NamespaceID, String, usize, usize)>(row);
+                    my::from_row::<(u32, String, NamespaceID, String, u32, LinkCount)>(row);
                 let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
                 entry.page_id = Some(page_id);
                 entry.page_bytes = Some(page_bytes);
-                entry.page_timestamp = Some(page_timestamp);
+                entry.set_page_timestamp(Some(page_timestamp));
                 if self.params.gather_link_count {
                     entry.link_count = Some(link_count);
                 }

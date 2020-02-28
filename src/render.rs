@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::pagelist::PageListEntry;
+use crate::pagelist::{LinkCount, PageListEntry};
 use crate::platform::*;
 use chrono::prelude::*;
 use htmlescape::encode_minimal;
@@ -162,7 +162,7 @@ pub trait Render {
         "".to_string()
     }
     fn render_cell_fileusage(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
-        match &entry.file_info {
+        match &entry.get_file_info() {
             Some(fi) => {
                 let mut rows: Vec<String> = vec![];
                 for fu in &fi.file_usage {
@@ -181,13 +181,21 @@ pub trait Render {
         }
     }
     fn render_coordinates(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
-        match &entry.coordinates {
+        match &entry.get_coordinates() {
             Some(coords) => format!("{}/{}", coords.lat, coords.lon),
             None => "".to_string(),
         }
     }
 
     fn opt_usize(&self, o: &Option<usize>) -> String {
+        o.map(|x| x.to_string()).unwrap_or("".to_string())
+    }
+
+    fn opt_u32(&self, o: &Option<u32>) -> String {
+        o.map(|x| x.to_string()).unwrap_or("".to_string())
+    }
+
+    fn opt_linkcount(&self, o: &Option<LinkCount>) -> String {
         o.map(|x| x.to_string()).unwrap_or("".to_string())
     }
 
@@ -220,50 +228,50 @@ pub trait Render {
         for (k, _) in header {
             let cell = match k.as_str() {
                 "title" => self.render_cell_title(entry, params),
-                "page_id" => self.opt_usize(&entry.page_id),
+                "page_id" => self.opt_u32(&entry.page_id),
                 "namespace" => self.render_cell_namespace(entry, params),
-                "size" => self.opt_usize(&entry.page_bytes),
-                "timestamp" => self.opt_string(&entry.page_timestamp),
+                "size" => self.opt_u32(&entry.page_bytes),
+                "timestamp" => self.opt_string(&entry.get_page_timestamp()),
                 "wikidata_item" => self.render_cell_wikidata_item(entry, params),
-                "image" => self.render_cell_image(&entry.page_image, params),
+                "image" => self.render_cell_image(&entry.get_page_image(), params),
                 "number" => params.row_number.to_string(),
-                "defaultsort" => self.opt_string(&entry.defaultsort),
-                "disambiguation" => self.opt_bool(&entry.disambiguation),
-                "incoming_links" => self.opt_usize(&entry.incoming_links),
+                "defaultsort" => self.opt_string(&entry.get_defaultsort()),
+                "disambiguation" => self.opt_bool(&entry.disambiguation.as_option_bool()),
+                "incoming_links" => self.opt_linkcount(&entry.incoming_links),
 
-                "img_size" => match &entry.file_info {
+                "img_size" => match &entry.get_file_info() {
                     Some(fi) => self.opt_usize(&fi.img_size),
                     None => "".to_string(),
                 },
-                "img_width" => match &entry.file_info {
+                "img_width" => match &entry.get_file_info() {
                     Some(fi) => self.opt_usize(&fi.img_width),
                     None => "".to_string(),
                 },
-                "img_height" => match &entry.file_info {
+                "img_height" => match &entry.get_file_info() {
                     Some(fi) => self.opt_usize(&fi.img_height),
                     None => "".to_string(),
                 },
-                "img_media_type" => match &entry.file_info {
+                "img_media_type" => match &entry.get_file_info() {
                     Some(fi) => self.opt_string(&fi.img_media_type),
                     None => "".to_string(),
                 },
-                "img_major_mime" => match &entry.file_info {
+                "img_major_mime" => match &entry.get_file_info() {
                     Some(fi) => self.opt_string(&fi.img_major_mime),
                     None => "".to_string(),
                 },
-                "img_minor_mime" => match &entry.file_info {
+                "img_minor_mime" => match &entry.get_file_info() {
                     Some(fi) => self.opt_string(&fi.img_minor_mime),
                     None => "".to_string(),
                 },
-                "img_user_text" => match &entry.file_info {
+                "img_user_text" => match &entry.get_file_info() {
                     Some(fi) => self.render_user_name(&self.opt_string(&fi.img_user_text), &params),
                     None => "".to_string(),
                 },
-                "img_timestamp" => match &entry.file_info {
+                "img_timestamp" => match &entry.get_file_info() {
                     Some(fi) => self.opt_string(&fi.img_timestamp),
                     None => "".to_string(),
                 },
-                "img_sha1" => match &entry.file_info {
+                "img_sha1" => match &entry.get_file_info() {
                     Some(fi) => self.opt_string(&fi.img_sha1),
                     None => "".to_string(),
                 },
@@ -381,7 +389,7 @@ impl Render for RenderWiki {
     }
 
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
-        match &entry.wikidata_item {
+        match entry.get_wikidata_item() {
             Some(q) => "[[:d:".to_string() + &q + "|]]",
             None => "".to_string(),
         }
@@ -410,7 +418,7 @@ impl RenderWiki {
 
     fn render_wikilink(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         if params.is_wikidata {
-            match &entry.wikidata_label {
+            match &entry.get_wikidata_label() {
                 Some(label) => "[[".to_string() + &entry.title().pretty() + "|" + &label + "]]",
                 None => "[[".to_string() + &entry.title().pretty() + "]]",
             }
@@ -506,7 +514,7 @@ impl Render for RenderTSV {
     }
 
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
-        match &entry.wikidata_item {
+        match entry.get_wikidata_item() {
             Some(q) => q.to_string(),
             None => "".to_string(),
         }
@@ -689,22 +697,22 @@ impl Render for RenderHTML {
         self.render_wikilink(
             &entry.title(),
             &params.wiki,
-            &entry.wikidata_label,
+            &entry.get_wikidata_label(),
             params,
             true,
-            &entry.wikidata_description,
+            &entry.get_wikidata_description(),
             entry.redlink_count.is_some(),
         )
     }
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, params: &RenderParams) -> String {
-        match &entry.wikidata_item {
+        match entry.get_wikidata_item() {
             Some(q) => self.render_wikilink(
                 &Title::new(&q, 0),
                 &"wikidatawiki".to_string(),
                 &None,
                 params,
                 false,
-                &entry.wikidata_description,
+                &entry.get_wikidata_description(),
                 entry.redlink_count.is_some(),
             ),
             None => "".to_string(),
@@ -746,7 +754,7 @@ impl Render for RenderHTML {
     }
 
     fn render_cell_fileusage(&self, entry: &PageListEntry, params: &RenderParams) -> String {
-        match &entry.file_info {
+        match &entry.get_file_info() {
             Some(fi) => {
                 let mut rows: Vec<String> = vec![];
                 for fu in &fi.file_usage {
@@ -759,7 +767,7 @@ impl Render for RenderHTML {
                             &None,
                             params,
                             false,
-                            &entry.wikidata_description,
+                            &entry.get_wikidata_description(),
                             entry.redlink_count.is_some(),
                         )
                         + "</div>";
@@ -772,7 +780,7 @@ impl Render for RenderHTML {
     }
 
     fn render_coordinates(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
-        match &entry.coordinates {
+        match &entry.get_coordinates() {
             Some(coords) => {
                 let lang = "en"; // TODO
                 let mut url = format!(
@@ -1109,10 +1117,10 @@ impl RenderJSON {
                     "id":entry.page_id.unwrap_or(0),
                     "namespace":entry.title().namespace_id(),
                     "len":entry.page_bytes.unwrap_or(0),
-                    "touched":entry.page_timestamp.as_ref().unwrap_or(&"".to_string()),
+                    "touched":entry.get_page_timestamp().unwrap_or("".to_string()),
                     "nstext":params.api.get_canonical_namespace_name(entry.title().namespace_id()).unwrap_or("".to_string())
                 });
-                match &entry.wikidata_item {
+                match entry.get_wikidata_item() {
                     Some(q) => {
                         o["q"] = json!(q);
                         o["metadata"]["wikidata"] = json!(q);
@@ -1194,7 +1202,7 @@ impl RenderJSON {
                         "page_id" : entry.page_id.unwrap_or(0),
                         "page_namespace" : entry.title().namespace_id(),
                         "page_title" : entry.title().with_underscores(),
-                        "page_latest" : entry.page_timestamp.as_ref().unwrap_or(&"".to_string()),
+                        "page_latest" : entry.get_page_timestamp().unwrap_or("".to_string()),
                         "page_len" : entry.page_bytes.unwrap_or(0),
                         //"meta" : {}
                     });
@@ -1214,7 +1222,7 @@ impl RenderJSON {
     }
 
     fn get_file_info_value(&self, entry: &PageListEntry, key: &str) -> Option<Value> {
-        match &entry.file_info {
+        match &entry.get_file_info() {
             Some(fi) => match key {
                 "img_size" => fi.img_size.as_ref().map(|s| json!(s)),
                 "img_width" => fi.img_width.as_ref().map(|s| json!(s)),
@@ -1235,7 +1243,7 @@ impl RenderJSON {
     }
 
     fn get_file_usage(&self, entry: &PageListEntry) -> Option<Value> {
-        match &entry.file_info {
+        match &entry.get_file_info() {
             Some(fi) => match fi.file_usage.is_empty() {
                 true => None,
                 false => Some(
@@ -1256,7 +1264,7 @@ impl RenderJSON {
     }
 
     fn get_file_usage_as_string(&self, entry: &PageListEntry) -> Option<Value> {
-        match &entry.file_info {
+        match &entry.get_file_info() {
             Some(fi) => match fi.file_usage.is_empty() {
                 true => None,
                 false => Some(json!(fi
@@ -1283,13 +1291,13 @@ impl RenderJSON {
             let value = match head.to_string().as_str() {
                 "checkbox" | "number" | "page_id" | "title" | "namespace" | "size"
                 | "timestamp" => None,
-                "image" => entry.page_image.as_ref().map(|s| json!(s)),
+                "image" => entry.get_page_image().map(|s| json!(s)),
                 "linknumber" => entry.link_count.as_ref().map(|s| json!(s)),
-                "wikidata" => entry.wikidata_item.as_ref().map(|s| json!(s)),
-                "defaultsort" => entry.defaultsort.as_ref().map(|s| json!(s)),
-                "disambiguation" => entry.disambiguation.as_ref().map(|s| json!(s)),
+                "wikidata" => entry.get_wikidata_item().map(|s| json!(s)),
+                "defaultsort" => entry.get_defaultsort().map(|s| json!(s)),
+                "disambiguation" => Some(entry.disambiguation.as_json()),
                 "incoming_links" => entry.incoming_links.as_ref().map(|s| json!(s)),
-                "coordinates" => match &entry.coordinates {
+                "coordinates" => match &entry.get_coordinates() {
                     Some(coord) => Some(json!(format!("{}/{}", coord.lat, coord.lon))),
                     None => None,
                 },

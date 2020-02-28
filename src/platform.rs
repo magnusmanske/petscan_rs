@@ -456,7 +456,7 @@ impl Platform {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-        let redlink_counter: HashMap<Title, usize> = HashMap::new();
+        let redlink_counter: HashMap<Title, LinkCount> = HashMap::new();
         let redlink_counter = Arc::new(Mutex::new(redlink_counter));
 
         let wiki = match result.wiki() {
@@ -522,7 +522,7 @@ impl Platform {
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
-            .parse::<usize>()
+            .parse::<LinkCount>()
             .unwrap_or(1);
         let mut redlink_counter = redlink_counter.lock().unwrap();
         redlink_counter.retain(|_, &mut v| v >= min_redlinks);
@@ -654,35 +654,36 @@ impl Platform {
                 parts.remove(0); // page_title
                 parts.remove(0); // page_namespace
                 if add_image {
-                    entry.page_image = match parts.remove(0) {
+                    entry.set_page_image(match parts.remove(0) {
                         my::Value::Bytes(s) => String::from_utf8(s).ok(),
                         _ => None,
-                    };
+                    });
                 }
                 if add_coordinates {
-                    entry.coordinates = match parts.remove(0) {
+                    let coordinates = match parts.remove(0) {
                         my::Value::Bytes(s) => match String::from_utf8(s) {
                             Ok(lat_lon) => PageCoordinates::new_from_lat_lon(&lat_lon),
                             _ => None,
                         },
                         _ => None,
                     };
+                    entry.set_coordinates(coordinates);
                 }
                 if add_defaultsort {
-                    entry.defaultsort = match parts.remove(0) {
+                    entry.set_defaultsort(match parts.remove(0) {
                         my::Value::Bytes(s) => String::from_utf8(s).ok(),
                         _ => None,
-                    };
+                    });
                 }
                 if add_disambiguation {
                     entry.disambiguation = match parts.remove(0) {
-                        my::Value::NULL => Some(false),
-                        _ => Some(true),
+                        my::Value::NULL => TriState::No,
+                        _ => TriState::Yes,
                     }
                 }
                 if add_incoming_links {
                     entry.incoming_links = match parts.remove(0) {
-                        my::Value::Int(i) => Some(i as usize),
+                        my::Value::Int(i) => Some(i as LinkCount),
                         _ => None,
                     };
                 }
@@ -721,7 +722,8 @@ impl Platform {
                 &|row: my::Row, entry: &mut PageListEntry| match PageList::string_from_row(&row, 2)
                 {
                     Some(gil_group) => {
-                        entry.file_info = Some(FileInfo::new_from_gil_group(&gil_group))
+                        let fi = FileInfo::new_from_gil_group(&gil_group);
+                        entry.set_file_info(Some(fi));
                     }
                     None => {}
                 },
@@ -772,23 +774,20 @@ impl Platform {
                         String,
                         String,
                     )>(row);
-                    if entry.file_info.is_none() {
-                        entry.file_info = Some(<FileInfo>::new());
-                    }
-                    match entry.file_info.as_mut() {
-                        Some(file_info) => {
-                            (*file_info).img_size = Some(img_size);
-                            (*file_info).img_width = Some(img_width);
-                            (*file_info).img_height = Some(img_height);
-                            (*file_info).img_media_type = Some(img_media_type);
-                            (*file_info).img_major_mime = Some(img_major_mime);
-                            (*file_info).img_minor_mime = Some(img_minor_mime);
-                            (*file_info).img_user_text = Some(img_user_text);
-                            (*file_info).img_timestamp = Some(img_timestamp);
-                            (*file_info).img_sha1 = Some(img_sha1);
-                        }
-                        None => {}
-                    }
+                    let mut file_info = match entry.get_file_info() {
+                        Some(fi) => fi,
+                        None => FileInfo::new(),
+                    };
+                    file_info.img_size = Some(img_size);
+                    file_info.img_width = Some(img_width);
+                    file_info.img_height = Some(img_height);
+                    file_info.img_media_type = Some(img_media_type);
+                    file_info.img_major_mime = Some(img_major_mime);
+                    file_info.img_minor_mime = Some(img_minor_mime);
+                    file_info.img_user_text = Some(img_user_text);
+                    file_info.img_timestamp = Some(img_timestamp);
+                    file_info.img_sha1 = Some(img_sha1);
+                    entry.set_file_info(Some(file_info));
                 },
             )?;
         }
@@ -903,7 +902,7 @@ impl Platform {
             //f(row.clone(), &mut entry);
             //let (ips_site_page,ips_item_id) = my::from_row::<(String, u64)>(*row);
             let q = "Q".to_string() + &ips_item_id.to_string();
-            entry.wikidata_item = Some(q);
+            entry.set_wikidata_item(Some(q));
 
             result.add_entry(entry);
         });
@@ -945,10 +944,10 @@ impl Platform {
         }
         self.annotate_with_wikidata_item(result)?;
         if wdi == "with" {
-            result.retain_entries(&|entry| entry.wikidata_item.is_some());
+            result.retain_entries(&|entry| entry.get_wikidata_item().is_some());
         }
         if wdi == "without" {
-            result.retain_entries(&|entry| entry.wikidata_item.is_none());
+            result.retain_entries(&|entry| entry.get_wikidata_item().is_none());
         }
         Ok(())
     }
@@ -1883,8 +1882,9 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id, Some(1340715));
-        assert!(entry.file_info.is_some());
-        let fi = entry.file_info.as_ref().unwrap();
+        let fi = entry.get_file_info();
+        assert!(fi.is_some());
+        let fi = fi.unwrap();
         assert!(fi.file_usage.len() > 10);
         assert_eq!(fi.img_size, Some(223131));
         assert_eq!(fi.img_width, Some(1025));
@@ -1912,15 +1912,15 @@ mod tests {
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id, Some(36995));
         assert!(entry.page_bytes.is_some());
-        assert!(entry.page_timestamp.is_some());
+        assert!(entry.get_page_timestamp().is_some());
         assert_eq!(
-            entry.page_image,
+            entry.get_page_image(),
             Some("KingsCollegeChapelWest.jpg".to_string())
         );
-        assert_eq!(entry.disambiguation, Some(false));
+        assert_eq!(entry.disambiguation, TriState::No);
         assert!(entry.incoming_links.is_some());
         assert!(entry.incoming_links.unwrap() > 7500);
-        assert!(entry.coordinates.is_some());
+        assert!(entry.get_coordinates().is_some());
     }
 
     #[test]
@@ -1938,7 +1938,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id, Some(239794));
-        assert_eq!(entry.wikidata_item, Some("Q12345".to_string()));
+        assert_eq!(entry.get_wikidata_item(), Some("Q12345".to_string()));
     }
 
     #[test]
@@ -1975,9 +1975,9 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id, Some(13925));
-        assert_eq!(entry.wikidata_label, Some("Graaf Tel".to_string()));
+        assert_eq!(entry.get_wikidata_label(), Some("Graaf Tel".to_string()));
         assert_eq!(
-            entry.wikidata_description,
+            entry.get_wikidata_description(),
             Some("figuur van Sesamstraat".to_string())
         );
     }

@@ -4,6 +4,7 @@ use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use mysql as my;
 use rayon::prelude::*;
 use regex::Regex;
+use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -101,7 +102,7 @@ pub struct FileInfo {
 
 impl FileInfo {
     pub fn new_from_gil_group(gil_group: &String) -> Self {
-        let mut ret = FileInfo::new();
+        let mut ret = Self::new();
         ret.file_usage = gil_group
             .split("|")
             .filter_map(|part| FileUsage::new_from_part(&part.to_string()))
@@ -144,23 +145,50 @@ impl PageCoordinates {
 
 //________________________________________________________________________________________________________________________
 
+pub type LinkCount = u32;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TriState {
+    Yes,
+    No,
+    Unknown,
+}
+
+impl TriState {
+    pub fn as_json(&self) -> Value {
+        match self {
+            Self::Yes => json!(true),
+            Self::No => json!(false),
+            Self::Unknown => Value::Null,
+        }
+    }
+
+    pub fn as_option_bool(&self) -> Option<bool> {
+        match self {
+            Self::Yes => Some(true),
+            Self::No => Some(false),
+            Self::Unknown => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PageListEntry {
     title: Title,
-    pub page_id: Option<usize>,
-    pub page_bytes: Option<usize>,
-    pub page_timestamp: Option<String>,
-    pub page_image: Option<String>,
-    pub defaultsort: Option<String>,
-    pub disambiguation: Option<bool>,
-    pub incoming_links: Option<usize>,
-    pub coordinates: Option<PageCoordinates>,
-    pub link_count: Option<usize>,
-    pub file_info: Option<FileInfo>,
-    pub wikidata_item: Option<String>,
-    pub wikidata_label: Option<String>,
-    pub wikidata_description: Option<String>,
-    pub redlink_count: Option<usize>,
+    pub disambiguation: TriState,
+    pub page_id: Option<u32>,
+    pub page_bytes: Option<u32>,
+    pub incoming_links: Option<LinkCount>,
+    pub link_count: Option<LinkCount>,
+    pub redlink_count: Option<LinkCount>,
+    page_timestamp: Option<Box<String>>,
+    page_image: Option<Box<String>>,
+    wikidata_item: Option<Box<String>>,
+    wikidata_label: Option<Box<String>>,
+    wikidata_description: Option<Box<String>>,
+    defaultsort: Option<Box<String>>,
+    coordinates: Option<Box<PageCoordinates>>,
+    file_info: Option<Box<FileInfo>>,
 }
 
 impl Hash for PageListEntry {
@@ -187,7 +215,7 @@ impl PageListEntry {
             page_bytes: None,
             page_timestamp: None,
             defaultsort: None,
-            disambiguation: None,
+            disambiguation: TriState::Unknown,
             incoming_links: None,
             page_image: None,
             coordinates: None,
@@ -196,6 +224,118 @@ impl PageListEntry {
             wikidata_label: None,
             wikidata_description: None,
             redlink_count: None,
+        }
+    }
+
+    pub fn get_file_info(&self) -> Option<FileInfo> {
+        match &self.file_info {
+            Some(file_info) => Some(*(file_info.clone())),
+            None => None,
+        }
+    }
+
+    pub fn set_file_info(&mut self, file_info_option: Option<FileInfo>) {
+        self.file_info = match file_info_option {
+            Some(file_info) => Some(Box::new(file_info)),
+            None => None,
+        }
+    }
+
+    pub fn get_coordinates(&self) -> Option<PageCoordinates> {
+        match &self.coordinates {
+            Some(coordinates) => Some(*(coordinates.clone())),
+            None => None,
+        }
+    }
+
+    pub fn set_coordinates(&mut self, coordinates_option: Option<PageCoordinates>) {
+        self.coordinates = match coordinates_option {
+            Some(coordinates) => Some(Box::new(coordinates)),
+            None => None,
+        }
+    }
+
+    pub fn get_defaultsort(&self) -> Option<String> {
+        match &self.defaultsort {
+            Some(defaultsort) => Some(*(defaultsort.clone())),
+            None => None,
+        }
+    }
+
+    pub fn set_defaultsort(&mut self, defaultsort_option: Option<String>) {
+        self.defaultsort = match defaultsort_option {
+            Some(defaultsort) => Some(Box::new(defaultsort)),
+            None => None,
+        }
+    }
+
+    pub fn get_wikidata_description(&self) -> Option<String> {
+        match &self.wikidata_description {
+            Some(wikidata_description) => Some(*(wikidata_description.clone())),
+            None => None,
+        }
+    }
+
+    pub fn set_wikidata_description(&mut self, wikidata_description_option: Option<String>) {
+        self.wikidata_description = match wikidata_description_option {
+            Some(wikidata_description) => Some(Box::new(wikidata_description)),
+            None => None,
+        }
+    }
+
+    pub fn get_wikidata_label(&self) -> Option<String> {
+        match &self.wikidata_label {
+            Some(wikidata_label) => Some(*(wikidata_label.clone())),
+            None => None,
+        }
+    }
+
+    pub fn set_wikidata_label(&mut self, wikidata_label_option: Option<String>) {
+        self.wikidata_label = match wikidata_label_option {
+            Some(wikidata_label) => Some(Box::new(wikidata_label)),
+            None => None,
+        }
+    }
+
+    pub fn get_wikidata_item(&self) -> Option<String> {
+        match &self.wikidata_item {
+            Some(wikidata_item) => Some(*(wikidata_item.clone())),
+            None => None,
+        }
+    }
+
+    pub fn set_wikidata_item(&mut self, wikidata_item_option: Option<String>) {
+        self.wikidata_item = match wikidata_item_option {
+            Some(wikidata_item) => Some(Box::new(wikidata_item)),
+            None => None,
+        }
+    }
+
+    pub fn get_page_image(&self) -> Option<String> {
+        match &self.page_image {
+            Some(page_image) => Some(*(page_image.clone())),
+            None => None,
+        }
+    }
+
+    pub fn set_page_image(&mut self, page_image_option: Option<String>) {
+        self.page_image = match page_image_option {
+            Some(page_image) => Some(Box::new(page_image)),
+            None => None,
+        }
+    }
+
+    pub fn get_page_timestamp(&self) -> Option<String> {
+        match &self.page_timestamp {
+            Some(page_timestamp) => Some(*(page_timestamp.clone())),
+            None => None,
+        }
+    }
+
+    pub fn set_page_timestamp(&mut self, page_timestamp_option: Option<String>) {
+        self.page_timestamp = match page_timestamp_option {
+            Some(page_timestamp) => Some(Box::new(page_timestamp)),
+            None => None,
         }
     }
 
@@ -265,7 +405,11 @@ impl PageListEntry {
     }
 
     fn compare_by_date(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
-        self.compare_by_opt(&self.page_timestamp, &other.page_timestamp, descending)
+        self.compare_by_opt(
+            &self.get_page_timestamp(),
+            &other.get_page_timestamp(),
+            descending,
+        )
     }
 
     fn compare_by_file_size(
@@ -273,7 +417,7 @@ impl PageListEntry {
         other: &PageListEntry,
         descending: bool,
     ) -> Ordering {
-        match (&self.file_info, &other.file_info) {
+        match (&self.get_file_info(), &other.get_file_info()) {
             (Some(f1), Some(f2)) => self.compare_by_opt(&f1.img_size, &f2.img_size, descending),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
@@ -286,7 +430,7 @@ impl PageListEntry {
         other: &PageListEntry,
         descending: bool,
     ) -> Ordering {
-        match (&self.file_info, &other.file_info) {
+        match (&self.get_file_info(), &other.get_file_info()) {
             (Some(f1), Some(f2)) => {
                 self.compare_by_opt(&f1.img_timestamp, &f2.img_timestamp, descending)
             }
@@ -333,14 +477,12 @@ impl PageListEntry {
 
     fn compare_by_label(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
         let l1 = self
-            .wikidata_label
-            .clone()
+            .get_wikidata_label()
             .or_else(|| Some(self.title.pretty().to_owned()))
             .unwrap()
             .to_lowercase();
         let l2 = other
-            .wikidata_label
-            .clone()
+            .get_wikidata_label()
             .or_else(|| Some(self.title.pretty().to_owned()))
             .unwrap()
             .to_lowercase();
@@ -712,7 +854,9 @@ impl PageList {
 
     fn load_missing_page_metadata(&self, platform: &Platform) -> Result<(), String> {
         if self.entries.read().unwrap().par_iter().any(|entry| {
-            entry.page_id.is_none() || entry.page_bytes.is_none() || entry.page_timestamp.is_none()
+            entry.page_id.is_none()
+                || entry.page_bytes.is_none()
+                || entry.get_page_timestamp().is_none()
         }) {
             let batches: Vec<SQLtuple> = self
                 .to_sql_batches(PAGE_BATCH_SIZE)
@@ -732,10 +876,10 @@ impl PageList {
                 1,
                 &|row: my::Row, entry: &mut PageListEntry| {
                     let (_page_title, _page_namespace, page_id, page_len, page_touched) =
-                        my::from_row::<(String, NamespaceID, usize, usize, String)>(row);
+                        my::from_row::<(String, NamespaceID, u32, u32, String)>(row);
                     entry.page_id = Some(page_id);
                     entry.page_bytes = Some(page_len);
-                    entry.page_timestamp = Some(page_touched);
+                    entry.set_page_timestamp(Some(page_touched));
                 },
             )?;
         }
@@ -803,8 +947,8 @@ impl PageList {
                 let (_page_title, _page_namespace, term_text, term_type) =
                     my::from_row::<(String, NamespaceID, String, String)>(row);
                 match term_type.as_str() {
-                    "label" => entry.wikidata_label = Some(term_text),
-                    "description" => entry.wikidata_description = Some(term_text),
+                    "label" => entry.set_wikidata_label(Some(term_text)),
+                    "description" => entry.set_wikidata_description(Some(term_text)),
                     _ => {}
                 }
             },
