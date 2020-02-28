@@ -8,24 +8,20 @@ use crate::wdfist::*;
 use chrono::Local;
 use mysql as my;
 use rayon::prelude::*;
-use serde_json::Value;
-use std::sync::mpsc;
-use std::sync::mpsc::channel;
-use std::sync::Mutex;
-use std::thread;
-use wikibase::mediawiki::api::NamespaceID;
-use wikibase::mediawiki::title::Title;
-//use rayon::prelude::*;
 use regex::Regex;
 use rocket::http::ContentType;
 use rocket::http::Status;
 use rocket::response::Responder;
 use rocket::Request;
 use rocket::Response;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
+use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
+use wikibase::mediawiki::api::NamespaceID;
+use wikibase::mediawiki::title::Title;
 
 pub static PAGE_BATCH_SIZE: usize = 20000;
 
@@ -197,41 +193,25 @@ impl Platform {
             }
         }
 
-        // Start each source as a thread
         Platform::profile("begin threads 1", None);
-        let (tx, rx) = channel();
-        let mut threads_running: usize = 0;
-        for source in &candidate_sources {
-            if (*source.lock().unwrap()).can_run(&self) {
-                threads_running += 1;
-                let tx = mpsc::Sender::clone(&tx);
-                let ds = source.clone();
-                let platform = self.clone(); // Ugly, but it works
-                thread::spawn(move || {
-                    let mut ds = ds.lock().unwrap();
-                    let data = ds.run(&platform);
-                    tx.send((ds.name(), data))
-                        .expect("Platform::run: Can't send data to thread");
-                });
-            }
-        }
-
-        // Collect results
-        let mut results: HashMap<String, PageList> = HashMap::new();
-        for _ in 0..threads_running {
-            let thread_response = rx.recv().or(Err(format!(
-                "Platform::run: Can't receive data from thread"
-            )))?;
-            let data = thread_response.1?;
-            match data.wiki() {
-                Some(wiki) => {
-                    self.wiki_by_source
-                        .insert(thread_response.0.to_owned(), wiki.to_string());
+        let results: HashMap<String, Arc<Mutex<PageList>>> = candidate_sources
+            .par_iter()
+            .filter(|ds| ds.lock().unwrap().can_run(&self))
+            .filter_map(|ds| {
+                let mut ds = ds.lock().unwrap();
+                match ds.run(&self) {
+                    Ok(data) => Some((ds.name(), Arc::new(Mutex::new(data)))),
+                    _ => None,
                 }
-                None => {}
-            }
-            results.insert(thread_response.0, data);
-        }
+            })
+            .collect();
+        self.wiki_by_source = results
+            .iter()
+            .filter_map(|(name, data)| match data.lock().unwrap().wiki() {
+                Some(wiki) => Some((name.to_string(), wiki.to_string())),
+                None => None,
+            })
+            .collect();
         Platform::profile("end threads 1", None);
 
         let available_sources = candidate_sources
@@ -241,7 +221,15 @@ impl Platform {
             .collect();
         self.combination = self.get_combination(&available_sources);
         Platform::profile("before combine_results", None);
-        self.result = Some(self.combine_results(&mut results, &self.combination)?);
+        let result = self.combine_results(&results, &self.combination)?;
+        drop(results);
+
+        let result = match Arc::try_unwrap(result) {
+            Ok(result) => result,
+            _ => return Err(format!("Can't unwrap arc")),
+        };
+        let result = result.into_inner().unwrap();
+        self.result = Some(result);
         Platform::profile("after combine_results", None);
         self.post_process_result(&available_sources)?;
         Platform::profile("after post_process_result", None);
@@ -1696,12 +1684,12 @@ impl Platform {
 
     fn combine_results(
         &self,
-        results: &HashMap<String, PageList>,
+        results: &HashMap<String, Arc<Mutex<PageList>>>,
         combination: &Combination,
-    ) -> Result<PageList, String> {
+    ) -> Result<Arc<Mutex<PageList>>, String> {
         match combination {
             Combination::Source(s) => match results.get(s) {
-                Some(r) => Ok(r.to_owned()),
+                Some(r) => Ok(r.clone()),
                 None => Err(format!("No result for source {}", &s)),
             },
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
@@ -1710,7 +1698,8 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.union(r2, Some(&self))?;
+                    let r2 = r2.lock().unwrap();
+                    r1.lock().unwrap().union(&r2, Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1724,7 +1713,8 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.intersection(r2, Some(&self))?;
+                    let r2 = r2.lock().unwrap();
+                    r1.lock().unwrap().intersection(&r2, Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1734,7 +1724,8 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.difference(r2, Some(&self))?;
+                    let r2 = r2.lock().unwrap();
+                    r1.lock().unwrap().difference(&r2, Some(&self))?;
                     Ok(r1)
                 }
             },

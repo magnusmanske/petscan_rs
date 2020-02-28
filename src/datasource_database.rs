@@ -817,7 +817,7 @@ impl SourceDatabase {
                             *ret = pl2 ;
                             //ret.swap_entries(&mut pl2);
                         } else {
-                            ret.union(pl2, None).unwrap();
+                            ret.union(&pl2, None).unwrap();
                         }
                         Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE",None);
                     });
@@ -915,7 +915,7 @@ impl SourceDatabase {
                         ret = pl2;
                     //ret.swap_entries(&mut pl2);
                     } else {
-                        ret.union(pl2, None)?;
+                        ret.union(&pl2, None)?;
                     }
                 }
                 return Ok(ret);

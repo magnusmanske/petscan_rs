@@ -389,16 +389,16 @@ impl PageList {
         }
     }
 
+    pub fn new_from_wiki_with_capacity(wiki: &str, capacity: usize) -> Self {
+        Self {
+            wiki: Arc::new(RwLock::new(Some(wiki.to_string()))),
+            entries: Arc::new(RwLock::new(HashSet::with_capacity(capacity))),
+        }
+    }
+
     pub fn set_from(&self, other: Self) {
         *self.wiki.write().unwrap() = other.wiki.read().unwrap().clone();
         *self.entries.write().unwrap() = other.entries.read().unwrap().clone();
-        /*
-        self.clear_entries();
-        std::mem::swap(
-            &mut self.entries.write().unwrap(),
-            &mut other.entries.write().unwrap(),
-        );
-        */
     }
 
     pub fn entries(&self) -> Arc<RwLock<HashSet<PageListEntry>>> {
@@ -463,7 +463,7 @@ impl PageList {
 
     fn check_before_merging(
         &self,
-        pagelist: PageList,
+        pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<Arc<RwLock<HashSet<PageListEntry>>>, String> {
         let my_wiki = match self.wiki() {
@@ -493,50 +493,48 @@ impl PageList {
         Ok(pagelist.entries())
     }
 
-    pub fn union(&self, pagelist: PageList, platform: Option<&Platform>) -> Result<(), String> {
-        let other_entries = self.check_before_merging(pagelist, platform)?;
-        let new_entries = self
-            .entries
+    pub fn union(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<(), String> {
+        let other_entries = self.check_before_merging(&pagelist, platform)?;
+        let me = self.entries.read().unwrap();
+        let mut tmp_vec: Vec<PageListEntry> = other_entries
             .read()
             .unwrap()
-            .union(&other_entries.read().unwrap())
+            .par_iter()
+            .filter(|x| !me.contains(&x))
             .cloned()
             .collect();
-        *self.entries.write().unwrap() = new_entries;
+        let mut me = self.entries.write().unwrap();
+        tmp_vec.drain(..).for_each(|x| {
+            me.replace(x);
+        });
         Ok(())
     }
 
     pub fn intersection(
         &self,
-        pagelist: PageList,
+        pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
-        let other_entries = self.check_before_merging(pagelist, platform)?;
-        let new_entries = self
-            .entries
-            .read()
+        let other_entries = self.check_before_merging(&pagelist, platform)?;
+        let other_entries = other_entries.read().unwrap();
+        self.entries
+            .write()
             .unwrap()
-            .intersection(&other_entries.read().unwrap())
-            .cloned()
-            .collect();
-        *self.entries.write().unwrap() = new_entries;
+            .retain(|x| other_entries.contains(&x));
         Ok(())
     }
 
     pub fn difference(
         &self,
-        pagelist: PageList,
+        pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
-        let other_entries = self.check_before_merging(pagelist, platform)?;
-        let new_entries = self
-            .entries
-            .read()
+        let other_entries = self.check_before_merging(&pagelist, platform)?;
+        let other_entries = other_entries.read().unwrap();
+        self.entries
+            .write()
             .unwrap()
-            .difference(&other_entries.read().unwrap())
-            .cloned()
-            .collect();
-        *self.entries.write().unwrap() = new_entries;
+            .retain(|x| !other_entries.contains(&x));
         Ok(())
     }
 

@@ -3,6 +3,9 @@ use crate::platform::Platform;
 use mysql as my;
 use rayon::prelude::*;
 use serde_json::value::Value;
+use std::collections::HashMap;
+use std::io::prelude::*;
+use std::io::BufReader;
 use std::time;
 use wikibase::mediawiki::api::Api;
 use wikibase::mediawiki::title::Title;
@@ -331,6 +334,89 @@ impl DataSource for SourceSparql {
         let sparql = platform
             .get_param("sparql")
             .ok_or(format!("Missing parameter 'sparql'"))?;
+
+        let timeout = Some(time::Duration::from_secs(120));
+        let builder = reqwest::blocking::ClientBuilder::new().timeout(timeout);
+        let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
+            .map_err(|e| format!("SourceSparql::run:1 {:?}", e))?;
+
+        let sparql_url = api.get_site_info_string("general", "wikibase-sparql")?;
+        let mut params: HashMap<String, String> = HashMap::new();
+        params.insert("query".to_string(), sparql.to_string());
+        params.insert("format".to_string(), "json".to_string());
+
+        let response = match api
+            .client()
+            .post(&sparql_url)
+            .header(reqwest::header::USER_AGENT, "rust testing")
+            .form(&params)
+            .send()
+        {
+            Ok(resp) => resp,
+            Err(e) => return Err(format!("SPAQL: {:?}", e)),
+        };
+
+        let ret = PageList::new_from_wiki("wikidatawiki");
+        let reader = BufReader::new(response);
+        let mut mode: u8 = 0;
+        let mut header = String::new();
+        let mut binding = String::new();
+        let mut first_var = String::new();
+        for line in reader.lines() {
+            let line = match line {
+                Ok(line) => line,
+                _ => continue,
+            };
+            match line.as_str() {
+                "{" => continue,
+                "}" => continue,
+                "  \"results\" : {" => {}
+                "    \"bindings\" : [ {" => {
+                    mode = mode + 1;
+                    header = "{".to_string() + &header + "\"dummy\": {}}";
+                    let j: Value = serde_json::from_str(&header).unwrap();
+                    first_var = j["head"]["vars"][0]
+                        .as_str()
+                        .ok_or(format!("No variables found in SPARQL result"))?
+                        .to_string();
+                }
+                "    }, {" | "    } ]" => match mode {
+                    0 => header += &line,
+                    1 => {
+                        binding = "{".to_string() + &binding + "}";
+                        let j: Value = serde_json::from_str(&binding).unwrap();
+                        binding.clear();
+                        match j[&first_var]["value"].as_str() {
+                            Some(entity_url) => match api.extract_entity_from_uri(entity_url) {
+                                Ok(entity) => match Platform::entry_from_entity(&entity) {
+                                    Some(entry) => ret.add_entry(entry),
+                                    None => {}
+                                },
+                                _ => {}
+                            },
+                            None => {}
+                        }
+                    }
+                    _ => {}
+                },
+                other => match mode {
+                    0 => header += other,
+                    1 => binding += other,
+                    _ => {}
+                },
+            }
+        }
+
+        Ok(ret)
+    }
+
+    /*
+    // using serde, obsolete because of high memory usage
+    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+        let sparql = platform
+            .get_param("sparql")
+            .ok_or(format!("Missing parameter 'sparql'"))?;
+
         let timeout = Some(time::Duration::from_secs(120));
         let builder = reqwest::blocking::ClientBuilder::new().timeout(timeout);
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
@@ -351,6 +437,7 @@ impl DataSource for SourceSparql {
         }
         Ok(ret)
     }
+    */
 }
 
 impl SourceSparql {
