@@ -748,7 +748,7 @@ impl PageList {
             .map_err(|e| format!("PageList::run_batch_query: get_wiki_db_connection: {:?}", e))?;
         let result = conn
             .prep_exec(&sql.0, &sql.1)
-            .map_err(|e| format!("PageList::run_batch_queries: SQL query error: {:?}", e))?;
+            .map_err(|e| format!("PageList::run_batch_query: SQL query error: {:?}", e))?;
         Ok(result.filter_map(|row| row.ok()).collect())
     }
 
@@ -863,7 +863,7 @@ impl PageList {
                 .par_iter_mut()
                 .map(|mut sql_batch| {
                     sql_batch.0 =
-                        "SELECT page_title,page_namespace,page_id,page_len,(SELECT rev_timestamp FROM revision WHERE rev_id=page_latest LIMIT 1) AS page_touched FROM page WHERE"
+                        "SELECT page_title,page_namespace,page_id,page_len,(SELECT rev_timestamp FROM revision WHERE rev_id=page_latest LIMIT 1) AS page_last_rev_timestamp FROM page WHERE"
                             .to_string() + &sql_batch.0;
                     sql_batch.to_owned()
                 })
@@ -875,11 +875,11 @@ impl PageList {
                 0,
                 1,
                 &|row: my::Row, entry: &mut PageListEntry| {
-                    let (_page_title, _page_namespace, page_id, page_len, page_touched) =
+                    let (_page_title, _page_namespace, page_id, page_len, page_last_rev_timestamp) =
                         my::from_row::<(String, NamespaceID, u32, u32, String)>(row);
                     entry.page_id = Some(page_id);
                     entry.page_bytes = Some(page_len);
-                    entry.set_page_timestamp(Some(page_touched));
+                    entry.set_page_timestamp(Some(page_last_rev_timestamp));
                 },
             )?;
         }

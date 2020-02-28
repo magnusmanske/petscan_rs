@@ -1162,7 +1162,6 @@ impl Platform {
         let sitelinks_min = self.get_param_blank("min_sitelink_count");
         let sitelinks_max = self.get_param_blank("max_sitelink_count");
 
-        //if ( trim(sitelinks_min) == "0" ) sitelinks_min.clear() ;
         if sitelinks_yes.is_empty()
             && sitelinks_any.is_empty()
             && sitelinks_no.is_empty()
