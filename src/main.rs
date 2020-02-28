@@ -158,10 +158,12 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
     Platform::profile("PSID set", None);
 
     // Render response
-    match platform.get_response() {
+    let response = match platform.get_response() {
         Ok(response) => response,
         Err(error) => state.render_error(error, &form_parameters),
-    }
+    };
+    drop(platform);
+    response
 }
 
 #[post("/", data = "<params>")]

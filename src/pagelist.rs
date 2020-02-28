@@ -623,6 +623,15 @@ impl PageList {
         if self.wiki() != pagelist.wiki() {
             match platform {
                 Some(platform) => {
+                    Platform::profile(
+                        format!(
+                            "PageList::check_before_merging Converting {} to {}",
+                            pagelist.wiki().unwrap(),
+                            &my_wiki
+                        )
+                        .as_str(),
+                        None,
+                    );
                     pagelist.convert_to_wiki(&my_wiki, platform)?;
                 }
                 None => {
@@ -642,18 +651,13 @@ impl PageList {
 
     pub fn union(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<(), String> {
         let other_entries = self.check_before_merging(&pagelist, platform)?;
-        let me = self.entries.read().unwrap();
-        let mut tmp_vec: Vec<PageListEntry> = other_entries
-            .read()
-            .unwrap()
-            .par_iter()
-            .filter(|x| !me.contains(&x))
-            .cloned()
-            .collect();
+        Platform::profile("PageList::union START UNION/1", None);
         let mut me = self.entries.write().unwrap();
-        tmp_vec.drain(..).for_each(|x| {
-            me.replace(x);
+        Platform::profile("PageList::union START UNION/2", None);
+        other_entries.read().unwrap().iter().for_each(|x| {
+            me.insert(x.to_owned());
         });
+        Platform::profile("PageList::union UNION DONE", None);
         Ok(())
     }
 

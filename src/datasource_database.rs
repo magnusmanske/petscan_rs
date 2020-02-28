@@ -796,6 +796,7 @@ impl SourceDatabase {
                                 return ;
                             }
                         };
+                        Platform::profile("DSDB::get_pages [primary:categories] START BATCH",None);
                         match self.get_pages_for_primary_new_connection(
                             state,
                             &wiki,
@@ -812,10 +813,10 @@ impl SourceDatabase {
                                 return ;
                             }
                         }
+                        Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH",None);
                         let mut ret = ret.lock().unwrap();
                         if ret.is_empty() {
                             *ret = pl2 ;
-                            //ret.swap_entries(&mut pl2);
                         } else {
                             ret.union(&pl2, None).unwrap();
                         }
