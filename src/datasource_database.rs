@@ -593,7 +593,7 @@ impl SourceDatabase {
     ) -> Vec<Vec<Vec<String>>> {
         let mut ret: Vec<Vec<Vec<String>>> = vec![];
         categories[start]
-            .chunks(MAX_CATEGORY_BATCH_SIZE)
+            .chunks(MAX_CATEGORY_BATCH_SIZE * 10)
             .for_each(|c| {
                 if start + 1 >= categories.len() {
                     let to_add = vec![c.to_vec()];
