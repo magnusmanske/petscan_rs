@@ -879,12 +879,28 @@ impl PageList {
                 batches,
                 0,
                 1,
-                &|row: my::Row, entry: &mut PageListEntry| {
-                    let (_page_title, _page_namespace, page_id, page_len, page_last_rev_timestamp) =
-                        my::from_row::<(String, NamespaceID, u32, u32, String)>(row);
-                    entry.page_id = Some(page_id);
-                    entry.page_bytes = Some(page_len);
-                    entry.set_page_timestamp(Some(page_last_rev_timestamp));
+                &|row: my::Row, entry: &mut PageListEntry| match my::from_row_opt::<(
+                    Vec<u8>,
+                    NamespaceID,
+                    u32,
+                    u32,
+                    Vec<u8>,
+                )>(row)
+                {
+                    Ok((
+                        _page_title,
+                        _page_namespace,
+                        page_id,
+                        page_len,
+                        page_last_rev_timestamp,
+                    )) => {
+                        let page_last_rev_timestamp =
+                            String::from_utf8_lossy(&page_last_rev_timestamp).into_owned();
+                        entry.page_id = Some(page_id);
+                        entry.page_bytes = Some(page_len);
+                        entry.set_page_timestamp(Some(page_last_rev_timestamp));
+                    }
+                    Err(_e) => {}
                 },
             )?;
         }
@@ -948,14 +964,22 @@ impl PageList {
             batches,
             0,
             1,
-            &|row: my::Row, entry: &mut PageListEntry| {
-                let (_page_title, _page_namespace, term_text, term_type) =
-                    my::from_row::<(String, NamespaceID, String, String)>(row);
-                match term_type.as_str() {
-                    "label" => entry.set_wikidata_label(Some(term_text)),
-                    "description" => entry.set_wikidata_description(Some(term_text)),
-                    _ => {}
+            &|row: my::Row, entry: &mut PageListEntry| match my::from_row_opt::<(
+                Vec<u8>,
+                NamespaceID,
+                Vec<u8>,
+                Vec<u8>,
+            )>(row)
+            {
+                Ok((_page_title, _page_namespace, term_text, term_type)) => {
+                    let term_text = String::from_utf8_lossy(&term_text).into_owned();
+                    match String::from_utf8_lossy(&term_type).into_owned().as_str() {
+                        "label" => entry.set_wikidata_label(Some(term_text)),
+                        "description" => entry.set_wikidata_description(Some(term_text)),
+                        _ => {}
+                    }
                 }
+                _ => {}
             },
         )
     }
@@ -985,10 +1009,17 @@ impl PageList {
             })
             .collect::<Vec<SQLtuple>>();
         self.clear_entries();
-        self.process_batch_results(platform.state(), batches, &|row: my::Row| {
-            let pp_value: String = my::from_row(row);
-            Some(PageListEntry::new(Title::new(&pp_value, 0)))
-        })?;
+        self.process_batch_results(
+            platform.state(),
+            batches,
+            &|row: my::Row| match my::from_row_opt::<Vec<u8>>(row) {
+                Ok(pp_value) => {
+                    let pp_value = String::from_utf8_lossy(&pp_value).into_owned();
+                    Some(PageListEntry::new(Title::new(&pp_value, 0)))
+                }
+                Err(_e) => None,
+            },
+        )?;
         self.set_wiki(Some("wikidatawiki".to_string()));
         Ok(())
     }
@@ -1019,7 +1050,8 @@ impl PageList {
         batches.chunks(5).for_each(|batch_chunk| {
             Platform::profile("PageList::convert_from_wikidata STARTING BATCH CHUNK", None);
             self.process_batch_results(platform.state(), batch_chunk.to_vec(), &|row: my::Row| {
-                let ips_site_page: String = my::from_row(row);
+                let ips_site_page = my::from_row_opt::<Vec<u8>>(row).ok()?;
+                let ips_site_page = String::from_utf8_lossy(&ips_site_page).into_owned();
                 Some(PageListEntry::new(Title::new_from_full(
                     &ips_site_page,
                     &api,

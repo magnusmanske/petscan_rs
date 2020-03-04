@@ -477,10 +477,10 @@ impl AppState {
         };
         let ret = result
             .filter_map(|row_result| row_result.ok())
-            .map(|row| my::from_row::<String>(row))
+            .filter_map(|row| my::from_row_opt::<Vec<u8>>(row).ok())
             .next();
         match ret {
-            Some(ret) => Ok(ret),
+            Some(ret) => Ok(String::from_utf8_lossy(&ret).into_owned()),
             None => Err("No such PSID in the database".to_string()),
         }
     }
@@ -547,7 +547,7 @@ impl AppState {
             Ok(result) => {
                 let ret = result
                     .filter_map(|row_result| row_result.ok())
-                    .map(|row| my::from_row::<u64>(row))
+                    .filter_map(|row| my::from_row_opt::<u64>(row).ok())
                     .next();
                 match ret {
                     Some(ret) => return Ok(ret),

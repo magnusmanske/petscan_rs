@@ -50,7 +50,9 @@ impl DataSource for SourceLabels {
         let ret = PageList::new_from_wiki("wikidatawiki");
         result
             .filter_map(|row_result| row_result.ok())
-            .filter_map(|row| Platform::entry_from_entity(&my::from_row::<String>(row)))
+            .filter_map(|row| my::from_row_opt::<Vec<u8>>(row).ok())
+            .map(|row| String::from_utf8_lossy(&row).into_owned())
+            .filter_map(|row| Platform::entry_from_entity(&row))
             .for_each(|entry| ret.add_entry(entry));
         Ok(ret)
     }
@@ -115,10 +117,15 @@ impl DataSource for SourceWikidata {
         let ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
         result
             .filter_map(|row| row.ok())
-            .filter_map(|row_inner| {
-                let ips_item_id: usize = my::from_row(row_inner);
-                let term_full_entity_id = format!("Q{}", ips_item_id);
-                Platform::entry_from_entity(&term_full_entity_id)
+            .filter_map(|row_inner| match my::from_row_opt::<usize>(row_inner) {
+                Ok(ips_item_id) => {
+                    let term_full_entity_id = format!("Q{}", ips_item_id);
+                    Platform::entry_from_entity(&term_full_entity_id)
+                }
+                Err(_e) => {
+                    // TODO error log for failed usize conversion?
+                    None
+                }
             })
             .for_each(|entry| ret.add_entry(entry));
         Ok(ret)

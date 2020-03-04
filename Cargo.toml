@@ -16,7 +16,7 @@ url = "*"
 rayon = "*"
 htmlescape = "*"
 rand = "*"
-mysql = { version="*" , features = ["ssl"] }
+mysql = { version="^17" }#, features = ["ssl"] }
 reqwest = { version = "0.10", features = ["blocking", "json"] }
 rocket = "*"
 rocket_contrib = "*"
@@ -27,3 +27,9 @@ rocket_contrib = "*"
 #wikibase = { path='../wikibase_rs' }
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
 
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+#target-cpu = "native"
+panic = "abort"

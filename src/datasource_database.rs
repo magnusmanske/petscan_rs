@@ -335,8 +335,9 @@ impl SourceDatabase {
 
         result
             .filter_map(|row_result| row_result.ok())
-            .for_each(|row| {
-                let page_title: String = my::from_row(row);
+            .filter_map(|row| my::from_row_opt::<Vec<u8>>(row).ok())
+            .map(|row| String::from_utf8_lossy(&row).into_owned())
+            .for_each(|page_title| {
                 if !(*categories_done.lock().unwrap()).contains(&page_title) {
                     (*new_categories.lock().unwrap()).push(page_title.to_owned());
                     (*categories_done.lock().unwrap()).insert(page_title);
@@ -466,7 +467,7 @@ impl SourceDatabase {
             )
             .map_err(|e| format!("datasource_database::get_talk_namespace_ids: {:?}", e))?
             .filter_map(|row| row.ok())
-            .map(|row| my::from_row::<NamespaceID>(row))
+            .filter_map(|row| my::from_row_opt::<NamespaceID>(row).ok())
             .map(|id| id.to_string())
             .collect::<Vec<String>>()
             .join(","))
@@ -1240,18 +1241,23 @@ impl SourceDatabase {
         );
         result
             .filter_map(|row_result| row_result.ok())
-            .for_each(|row| {
-                let (page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count) =
-                    my::from_row::<(u32, String, NamespaceID, String, u32, LinkCount)>(row);
-                let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
-                entry.page_id = Some(page_id);
-                entry.page_bytes = Some(page_bytes);
-                entry.set_page_timestamp(Some(page_timestamp));
-                if self.params.gather_link_count {
-                    entry.link_count = Some(link_count);
-                }
-                pages_sublist.add_entry(entry)
-            });
+            .filter_map(|row| {
+                my::from_row_opt::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>(row).ok()
+            })
+            .for_each(
+                |(page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count)| {
+                    let page_title = String::from_utf8_lossy(&page_title).into_owned();
+                    let page_timestamp = String::from_utf8_lossy(&page_timestamp).into_owned();
+                    let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
+                    entry.page_id = Some(page_id);
+                    entry.page_bytes = Some(page_bytes);
+                    entry.set_page_timestamp(Some(page_timestamp));
+                    if self.params.gather_link_count {
+                        entry.link_count = Some(link_count);
+                    }
+                    pages_sublist.add_entry(entry)
+                },
+            );
 
         Platform::profile("DSDB::get_pages_for_primary COMPLETE", Some(sql.1.len()));
 

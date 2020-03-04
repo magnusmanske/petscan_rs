@@ -416,10 +416,13 @@ impl Platform {
             };
             for row in result {
                 match row {
-                    Ok(row) => {
-                        let term_text = my::from_row::<String>(row);
-                        self.existing_labels.lock().unwrap().insert(term_text);
-                    }
+                    Ok(row) => match my::from_row_opt::<Vec<u8>>(row) {
+                        Ok(term_text) => {
+                            let term_text = String::from_utf8_lossy(&term_text).into_owned();
+                            self.existing_labels.lock().unwrap().insert(term_text);
+                        }
+                        Err(_e) => {}
+                    },
                     _ => {} // Ignore error
                 }
             }
@@ -584,8 +587,10 @@ impl Platform {
                         return;
                     }
                 };
-                db_result.filter_map(|row_result|row_result.ok()).for_each(|row|{
-                    let (page_title,page_namespace) = my::from_row::<(String,NamespaceID)>(row);
+                db_result.filter_map(|row_result|row_result.ok())
+                .filter_map(|row| my::from_row_opt::<(Vec<u8>,NamespaceID)>(row).ok() )
+                .for_each(|(page_title,page_namespace)|{
+                    let page_title = String::from_utf8_lossy(&page_title).into_owned();
                     result.add_entry(PageListEntry::new(Title::new(&page_title,page_namespace)));
                 });
             });
