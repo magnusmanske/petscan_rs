@@ -12,7 +12,7 @@ use rocket::http::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::{thread, time};
 use wikibase::mediawiki::api::Api;
 
@@ -28,8 +28,8 @@ pub struct AppState {
     pub db_pool: Vec<Arc<Mutex<DbUserPass>>>,
     pub config: Value,
     tool_db_mutex: Arc<Mutex<DbUserPass>>,
-    threads_running: Arc<Mutex<i64>>,
-    shutting_down: Arc<Mutex<bool>>,
+    threads_running: Arc<RwLock<i64>>,
+    shutting_down: Arc<RwLock<bool>>,
     site_matrix: Value,
     main_page: String,
 }
@@ -50,8 +50,8 @@ impl AppState {
         let mut ret = Self {
             db_pool: vec![],
             config: config.to_owned(),
-            threads_running: Arc::new(Mutex::new(0)),
-            shutting_down: Arc::new(Mutex::new(false)),
+            threads_running: Arc::new(RwLock::new(0)),
+            shutting_down: Arc::new(RwLock::new(false)),
             site_matrix: AppState::load_site_matrix(),
             tool_db_mutex: Arc::new(Mutex::new(tool_db_access_tuple)),
             main_page: String::from_utf8_lossy(
@@ -585,22 +585,22 @@ impl AppState {
     }
 
     pub fn try_shutdown(&self) {
-        if self.is_shutting_down() && *self.threads_running.lock().unwrap() == 0 {
+        if self.is_shutting_down() && *self.threads_running.read().unwrap() == 0 {
             ::std::process::exit(0);
         }
     }
 
     pub fn modify_threads_running(&self, diff: i64) {
-        *self.threads_running.lock().unwrap() += diff;
+        *self.threads_running.write().unwrap() += diff;
         self.try_shutdown()
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        *self.shutting_down.lock().unwrap()
+        *self.shutting_down.read().unwrap()
     }
 
     pub fn shut_down(&self) {
-        *self.shutting_down.lock().unwrap() = true;
+        *self.shutting_down.write().unwrap() = true;
     }
 }
 
