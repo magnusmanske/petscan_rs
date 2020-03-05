@@ -187,7 +187,13 @@ impl WDfist {
 
             // Run batches
             let pagelist = PageList::new_from_wiki("commonswiki");
-            let rows = pagelist.run_batch_queries(self.state.clone(), batches).unwrap() ;
+            let rows = match pagelist.run_batch_queries(self.state.clone(), batches) {
+                Ok(rows) => rows ,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(e.to_string());
+                    return;
+                }
+            } ;
 
             // Collect pages and items, per wiki
             let page_file: Vec<(String, String)> = rows
@@ -256,7 +262,7 @@ impl WDfist {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(MAX_WIKI_API_THREADS)
             .build()
-            .unwrap();
+            .expect("follow_coords: Can't build ThreadPool");
         pool.install(|| {
             page_coords.par_iter().for_each(|(q, lat, lon)| {
                 let api = match Api::new("https://commons.wikimedia.org/w/api.php") {
@@ -350,7 +356,7 @@ impl WDfist {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(MAX_WIKI_API_THREADS)
             .build()
-            .unwrap();
+            .expect("follow_search_commons: Can't build ThreadPool");
         pool.install(|| {
             item2label.par_iter().for_each(|(q, label)| {
                 let api = match Api::new("https://commons.wikimedia.org/w/api.php") {
