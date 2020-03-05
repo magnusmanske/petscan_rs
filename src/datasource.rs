@@ -381,7 +381,7 @@ impl DataSource for SourceSparql {
                 "    \"bindings\" : [ {" => {
                     mode = mode + 1;
                     header = "{".to_string() + &header + "\"dummy\": {}}";
-                    let j: Value = serde_json::from_str(&header).unwrap();
+                    let j: Value = serde_json::from_str(&header).unwrap_or(json!({}));
                     first_var = j["head"]["vars"][0]
                         .as_str()
                         .ok_or(format!("No variables found in SPARQL result"))?
@@ -391,7 +391,7 @@ impl DataSource for SourceSparql {
                     0 => header += &line,
                     1 => {
                         binding = "{".to_string() + &binding + "}";
-                        let j: Value = serde_json::from_str(&binding).unwrap();
+                        let j: Value = serde_json::from_str(&binding).unwrap_or(json!({}));
                         binding.clear();
                         match j[&first_var]["value"].as_str() {
                             Some(entity_url) => match api.extract_entity_from_uri(entity_url) {

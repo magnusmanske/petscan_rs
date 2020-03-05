@@ -1078,16 +1078,27 @@ impl PageList {
 
         batches.chunks(5).for_each(|batch_chunk| {
             Platform::profile("PageList::convert_from_wikidata STARTING BATCH CHUNK", None);
-            self.process_batch_results(platform.state(), batch_chunk.to_vec(), &|row: my::Row| {
-                let ips_site_page = my::from_row_opt::<Vec<u8>>(row).ok()?;
-                let ips_site_page = String::from_utf8_lossy(&ips_site_page).into_owned();
-                Some(PageListEntry::new(Title::new_from_full(
-                    &ips_site_page,
-                    &api,
-                )))
-            })
-            .unwrap();
-            Platform::profile("PageList::convert_from_wikidata ENDING BATCH CHUNK", None);
+            let res = self.process_batch_results(
+                platform.state(),
+                batch_chunk.to_vec(),
+                &|row: my::Row| {
+                    let ips_site_page = my::from_row_opt::<Vec<u8>>(row).ok()?;
+                    let ips_site_page = String::from_utf8_lossy(&ips_site_page).into_owned();
+                    Some(PageListEntry::new(Title::new_from_full(
+                        &ips_site_page,
+                        &api,
+                    )))
+                },
+            );
+            match res {
+                Ok(_) => {
+                    Platform::profile("PageList::convert_from_wikidata ENDING BATCH CHUNK", None)
+                }
+                _ => Platform::profile(
+                    "PageList::convert_from_wikidata ENDING BATCH CHUNK FAILED",
+                    None,
+                ),
+            }
         });
         Platform::profile("PageList::convert_from_wikidata ALL BATCHES COMPLETE", None);
         self.set_wiki(Some(wiki.to_string()));

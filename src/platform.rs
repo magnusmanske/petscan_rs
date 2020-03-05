@@ -227,7 +227,10 @@ impl Platform {
             Ok(result) => result,
             _ => return Err(format!("Can't unwrap arc")),
         };
-        let result = result.into_inner().unwrap();
+        let result = match result.into_inner() {
+            Ok(result) => result,
+            _ => return Err(format!("Can't into_inner")),
+        };
         self.result = Some(result);
         Platform::profile("after combine_results", None);
         self.post_process_result(&available_sources)?;
@@ -472,7 +475,7 @@ impl Platform {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(5) // TODO More? Less?
             .build()
-            .unwrap();
+            .expect("process_redlinks: can't build ThreadPool");
         pool.install(|| {
             batches.par_iter().for_each(|sql| {
                 let db_user_pass = match self.state.get_db_mutex().lock() {
@@ -855,19 +858,15 @@ impl Platform {
             };
 
             // Run query
-            let result = match conn.prep_exec(&sql.0, &sql.1) {
-                Ok(r) => r,
+            let mut result = match conn.prep_exec(&sql.0, &sql.1) {
+                Ok(r) => r.filter_map(|row| row.ok()).collect(),
                 Err(e) => {
                     *error.lock().unwrap() = Some(format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e));
                     return;
                 }
             };
 
-            // Add to row list
-            let mut rows_lock = rows.lock().unwrap();
-            result
-                .filter_map(|row| row.ok())
-                .for_each(|row| rows_lock.push(row.clone()));
+            rows.lock().unwrap().append(&mut result);
         });
 
         // Check error
