@@ -17,8 +17,7 @@ use rocket::Response;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
-use std::sync::Mutex;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 use wikibase::mediawiki::api::NamespaceID;
 use wikibase::mediawiki::title::Title;
@@ -73,7 +72,7 @@ pub struct Platform {
     state: Arc<AppState>,
     result: Option<PageList>,
     pub psid: Option<u64>,
-    existing_labels: Arc<Mutex<HashSet<String>>>,
+    existing_labels: Arc<RwLock<HashSet<String>>>,
     combination: Combination,
     output_redlinks: bool,
     query_time: Option<Duration>,
@@ -90,7 +89,7 @@ impl Platform {
             state: Arc::new(state.clone()),
             result: None,
             psid: None,
-            existing_labels: Arc::new(Mutex::new(HashSet::new())),
+            existing_labels: Arc::new(RwLock::new(HashSet::new())),
             combination: Combination::None,
             output_redlinks: false,
             query_time: None,
@@ -111,7 +110,7 @@ impl Platform {
 
     pub fn label_exists(&self, label: &String) -> bool {
         // TODO normalization?
-        self.existing_labels.lock().unwrap().contains(label)
+        self.existing_labels.read().unwrap().contains(label)
     }
 
     pub fn combination(&self) -> Combination {
@@ -169,45 +168,45 @@ impl Platform {
         Platform::profile("begin run", None);
         let start_time = SystemTime::now();
         self.output_redlinks = self.has_param("show_redlinks");
-        let mut candidate_sources: Vec<Arc<Mutex<Box<dyn DataSource + Send + Sync>>>> = vec![];
-        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceDatabase::new(
+        let mut candidate_sources: Vec<Arc<RwLock<Box<dyn DataSource + Send + Sync>>>> = vec![];
+        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceDatabase::new(
             SourceDatabaseParameters::db_params(self),
         )))));
-        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceSparql::new()))));
-        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceManual::new()))));
-        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourcePagePile::new()))));
-        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceSearch::new()))));
-        candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceWikidata::new()))));
+        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceSparql::new()))));
+        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceManual::new()))));
+        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourcePagePile::new()))));
+        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceSearch::new()))));
+        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceWikidata::new()))));
 
         if !candidate_sources
             .par_iter()
-            .any(|source| (*source.lock().unwrap()).can_run(&self))
+            .any(|source| (*source.read().unwrap()).can_run(&self))
         {
             candidate_sources = vec![];
-            candidate_sources.push(Arc::new(Mutex::new(Box::new(SourceLabels::new()))));
+            candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceLabels::new()))));
             if !candidate_sources
                 .par_iter()
-                .any(|source| (*source.lock().unwrap()).can_run(&self))
+                .any(|source| (*source.read().unwrap()).can_run(&self))
             {
                 return Err(format!("No possible data source found in parameters"));
             }
         }
 
         Platform::profile("begin threads 1", None);
-        let results: HashMap<String, Arc<Mutex<PageList>>> = candidate_sources
+        let results: HashMap<String, Arc<RwLock<PageList>>> = candidate_sources
             .par_iter()
-            .filter(|ds| ds.lock().unwrap().can_run(&self))
+            .filter(|ds| ds.read().unwrap().can_run(&self))
             .filter_map(|ds| {
-                let mut ds = ds.lock().unwrap();
+                let mut ds = ds.write().unwrap();
                 match ds.run(&self) {
-                    Ok(data) => Some((ds.name(), Arc::new(Mutex::new(data)))),
+                    Ok(data) => Some((ds.name(), Arc::new(RwLock::new(data)))),
                     _ => None,
                 }
             })
             .collect();
         self.wiki_by_source = results
             .iter()
-            .filter_map(|(name, data)| match data.lock().unwrap().wiki() {
+            .filter_map(|(name, data)| match data.read().unwrap().wiki() {
                 Some(wiki) => Some((name.to_string(), wiki.to_string())),
                 None => None,
             })
@@ -216,8 +215,8 @@ impl Platform {
 
         let available_sources = candidate_sources
             .par_iter()
-            .filter(|s| (*s.lock().unwrap()).can_run(&self))
-            .map(|s| (*s.lock().unwrap()).name())
+            .filter(|s| (*s.read().unwrap()).can_run(&self))
+            .map(|s| (*s.read().unwrap()).name())
             .collect();
         self.combination = self.get_combination(&available_sources);
         Platform::profile("before combine_results", None);
@@ -419,7 +418,7 @@ impl Platform {
                     Ok(row) => match my::from_row_opt::<Vec<u8>>(row) {
                         Ok(term_text) => {
                             let term_text = String::from_utf8_lossy(&term_text).into_owned();
-                            self.existing_labels.lock().unwrap().insert(term_text);
+                            self.existing_labels.write().unwrap().insert(term_text);
                         }
                         Err(_e) => {}
                     },
@@ -460,7 +459,7 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
         let redlink_counter: HashMap<Title, LinkCount> = HashMap::new();
-        let redlink_counter = Arc::new(Mutex::new(redlink_counter));
+        let redlink_counter = Arc::new(RwLock::new(redlink_counter));
 
         let wiki = match result.wiki() {
             Some(wiki) => wiki.to_owned(),
@@ -498,18 +497,17 @@ impl Platform {
                         return;
                     }
                 };
-                let mut redlink_counter = redlink_counter.lock().unwrap();
                 for row in new_result {
                     match row {
                         Ok(row) => {
                             let (page_title, namespace_id, _count) =
                                 my::from_row::<(String, NamespaceID, u8)>(row);
                             let title = Title::new(&page_title, namespace_id);
-                            let new_value = match &redlink_counter.get(&title) {
+                            let new_value = match &redlink_counter.read().unwrap().get(&title) {
                                 Some(x) => *x + 1,
                                 None => 1,
                             };
-                            redlink_counter.insert(title, new_value);
+                            redlink_counter.write().unwrap().insert(title, new_value);
                         }
                         _ => {} // Ignore error
                     }
@@ -527,7 +525,7 @@ impl Platform {
             .get_param_default("min_redlink_count", "1")
             .parse::<LinkCount>()
             .unwrap_or(1);
-        let mut redlink_counter = redlink_counter.lock().unwrap();
+        let mut redlink_counter = redlink_counter.write().unwrap();
         redlink_counter.retain(|_, &mut v| v >= min_redlinks);
         result.set_entries(
             redlink_counter
@@ -1687,9 +1685,9 @@ impl Platform {
 
     fn combine_results(
         &self,
-        results: &HashMap<String, Arc<Mutex<PageList>>>,
+        results: &HashMap<String, Arc<RwLock<PageList>>>,
         combination: &Combination,
-    ) -> Result<Arc<Mutex<PageList>>, String> {
+    ) -> Result<Arc<RwLock<PageList>>, String> {
         match combination {
             Combination::Source(s) => match results.get(s) {
                 Some(r) => Ok(r.clone()),
@@ -1701,7 +1699,9 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.lock().unwrap().union(&r2.lock().unwrap(), Some(&self))?;
+                    r1.write()
+                        .unwrap()
+                        .union(&r2.read().unwrap(), Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1715,9 +1715,9 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.lock()
+                    r1.write()
                         .unwrap()
-                        .intersection(&r2.lock().unwrap(), Some(&self))?;
+                        .intersection(&r2.read().unwrap(), Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1727,9 +1727,9 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.lock()
+                    r1.write()
                         .unwrap()
-                        .difference(&r2.lock().unwrap(), Some(&self))?;
+                        .difference(&r2.read().unwrap(), Some(&self))?;
                     Ok(r1)
                 }
             },

@@ -9,7 +9,7 @@ use core::ops::Sub;
 use mysql as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use wikibase::mediawiki::api::{Api, NamespaceID};
 use wikibase::mediawiki::title::Title;
 
@@ -310,8 +310,8 @@ impl SourceDatabase {
         state: &Arc<AppState>,
         wiki: &String,
         categories_batch: &Vec<String>,
-        categories_done: Arc<Mutex<HashSet<String>>>,
-        new_categories: Arc<Mutex<Vec<String>>>,
+        categories_done: Arc<RwLock<HashSet<String>>>,
+        new_categories: Arc<RwLock<Vec<String>>>,
     ) -> Result<(), String> {
         let db_user_pass = match state.get_db_mutex().lock() {
             Ok(db) => db,
@@ -321,7 +321,7 @@ impl SourceDatabase {
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         categories_batch.iter().for_each(|c| {
             // Don't par_iter, already in pool!
-            (*categories_done.lock().unwrap()).insert(c.to_string());
+            (*categories_done.write().unwrap()).insert(c.to_string());
         });
         Platform::append_sql(&mut sql, Platform::prep_quote(&categories_batch));
         sql.0 += ")";
@@ -338,9 +338,9 @@ impl SourceDatabase {
             .filter_map(|row| my::from_row_opt::<Vec<u8>>(row).ok())
             .map(|row| String::from_utf8_lossy(&row).into_owned())
             .for_each(|page_title| {
-                if !(*categories_done.lock().unwrap()).contains(&page_title) {
-                    (*new_categories.lock().unwrap()).push(page_title.to_owned());
-                    (*categories_done.lock().unwrap()).insert(page_title);
+                if !(*categories_done.read().unwrap()).contains(&page_title) {
+                    (*new_categories.write().unwrap()).push(page_title.to_owned());
+                    (*categories_done.write().unwrap()).insert(page_title);
                 }
             });
         Ok(())
@@ -350,7 +350,7 @@ impl SourceDatabase {
         &self,
         state: &Arc<AppState>,
         wiki: &String,
-        categories_done: Arc<Mutex<HashSet<String>>>,
+        categories_done: Arc<RwLock<HashSet<String>>>,
         categories_to_check: &Vec<String>,
         depth: u16,
     ) -> Result<(), String> {
@@ -361,7 +361,7 @@ impl SourceDatabase {
 
         let error = Arc::new(Mutex::new(None));
         let new_categories: Vec<String> = vec![];
-        let new_categories = Arc::new(Mutex::new(new_categories));
+        let new_categories = Arc::new(RwLock::new(new_categories));
 
         let pool = match rayon::ThreadPoolBuilder::new()
             .num_threads(5) // TODO More? Less?
@@ -395,13 +395,13 @@ impl SourceDatabase {
             Some(e) => return Err(e.to_string()),
             None => {}
         }
-        let new_categories = new_categories.lock().unwrap();
+        let new_categories = new_categories.read().unwrap();
 
         Platform::profile("DSDB::do_depth new categories", Some(new_categories.len()));
 
         Platform::profile(
             "DSDB::do_depth end, categories done",
-            Some(categories_done.lock().unwrap().len()),
+            Some(categories_done.read().unwrap().len()),
         );
 
         self.go_depth(state, wiki, categories_done, &new_categories, depth - 1)?;
@@ -415,13 +415,12 @@ impl SourceDatabase {
         title: &String,
         depth: u16,
     ) -> Result<Vec<String>, String> {
-        let categories_done = Arc::new(Mutex::new(HashSet::new()));
+        let categories_done = Arc::new(RwLock::new(HashSet::new()));
         let title = SourceDatabaseParameters::s2u_ucfirst(
             title,
             self.params.category_namespace_is_case_insensitive,
         );
-        //Title::spaces_to_underscores(&Title::first_letter_uppercase(title));
-        (*categories_done.lock().unwrap()).insert(title.to_owned());
+        (*categories_done.write().unwrap()).insert(title.to_owned());
         self.go_depth(state, wiki, categories_done.clone(), &vec![title], depth)?;
         let mut tmp = Arc::try_unwrap(categories_done)
             .map_err(|_| format!("get_categories_in_tree"))?
@@ -829,7 +828,7 @@ impl SourceDatabase {
                     Some(e) => return Err(e.to_string()),
                     None => {}
                 }
-                let lock = Arc::try_unwrap(ret).expect("Lock still has multiple owners");
+                let lock = Arc::try_unwrap(ret).expect("Arc still has multiple owners");
                 let ret = lock.into_inner().expect("Mutex cannot be locked");
                 Platform::profile(
                     "DSDB::get_pages [primary:categories] RESULTS end",

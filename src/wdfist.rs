@@ -8,8 +8,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use wikibase::mediawiki::api::Api;
 
 pub static MIN_IGNORE_DB_FILE_COUNT: usize = 3;
@@ -110,29 +109,24 @@ impl WDfist {
 
         // Collect pages and items, per wiki
         let mut wiki2title_q: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        match rows.lock() {
-            Ok(rows) => {
-                rows.iter()
-                    .map(|row| my::from_row::<(u64, String, String)>(row.to_owned()))
-                    .for_each(|(item_id, wiki, page)| {
-                        if wiki == "wikidatawiki" {
-                            return;
-                        }
-                        let q = format!("Q{}", item_id);
-                        let page = page.replace(" ", "_");
-                        if !wiki2title_q.contains_key(&wiki) {
-                            wiki2title_q.insert(wiki.to_owned(), vec![]);
-                        }
-                        match wiki2title_q.get_mut(&wiki) {
-                            Some(ref mut title_q) => {
-                                title_q.push((page, q));
-                            }
-                            None => {}
-                        }
-                    });
-            }
-            Err(e) => return Err(e.to_string()),
-        }
+        rows.iter()
+            .map(|row| my::from_row::<(u64, String, String)>(row.to_owned()))
+            .for_each(|(item_id, wiki, page)| {
+                if wiki == "wikidatawiki" {
+                    return;
+                }
+                let q = format!("Q{}", item_id);
+                let page = page.replace(" ", "_");
+                if !wiki2title_q.contains_key(&wiki) {
+                    wiki2title_q.insert(wiki.to_owned(), vec![]);
+                }
+                match wiki2title_q.get_mut(&wiki) {
+                    Some(ref mut title_q) => {
+                        title_q.push((page, q));
+                    }
+                    None => {}
+                }
+            });
         Ok(wiki2title_q)
     }
 
@@ -162,14 +156,11 @@ impl WDfist {
         // Run batches
         let pagelist = PageList::new_from_wiki(wiki);
         let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
-        let ret: Vec<(String, String)> = match rows.lock() {
-            Ok(rows) => rows
-                .par_iter()
-                .map(|row| my::from_row::<(String, String)>(row.to_owned()))
-                .filter(|(page, image)| page_file.contains(&(page.to_owned(), image.to_owned())))
-                .collect(),
-            Err(e) => return Err(e.to_string()),
-        };
+        let ret: Vec<(String, String)> = rows
+            .par_iter()
+            .map(|row| my::from_row::<(String, String)>(row.to_owned()))
+            .filter(|(page, image)| page_file.contains(&(page.to_owned(), image.to_owned())))
+            .collect();
 
         Ok(ret)
     }
@@ -196,25 +187,13 @@ impl WDfist {
 
             // Run batches
             let pagelist = PageList::new_from_wiki("commonswiki");
-            let rows = match pagelist.run_batch_queries(self.state.clone(), batches) {
-                Ok(rows) => rows,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(e.to_string());
-                    return;
-                }
-            };
+            let rows = pagelist.run_batch_queries(self.state.clone(), batches).unwrap() ;
 
             // Collect pages and items, per wiki
-            let page_file: Vec<(String, String)> = match rows.lock() {
-                Ok(rows) => rows
+            let page_file: Vec<(String, String)> = rows
                     .par_iter()
                     .map(|row| my::from_row::<(String, String)>(row.to_owned()))
-                    .collect(),
-                Err(e) => {
-                    *error.lock().unwrap() = Some(e.to_string());
-                    return;
-                }
-            };
+                    .collect();
             let page_file = match self.filter_page_images(wiki, page_file) {
                 Ok(page_file) => page_file,
                 Err(e) => {
@@ -222,14 +201,15 @@ impl WDfist {
                     return;
                 }
             };
-            page_file
+            let mut tmp = page_file
                 .par_iter()
-                .for_each(|(page, file)| match page2q.get(page) {
+                .filter_map(|(page, file)| match page2q.get(page) {
                     Some(q) => {
-                        add_item_file.lock().unwrap().push((q.to_string(),file.to_string()));
+                        Some((q.to_string(),file.to_string()))
                     }
-                    None => {}
-                });
+                    None => None
+                }).collect();
+            add_item_file.lock().unwrap().append(&mut tmp);
         });
 
         // Check error
@@ -265,13 +245,10 @@ impl WDfist {
         let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
 
         // Process results
-        let page_coords: Vec<(String, f64, f64)> = match rows.lock() {
-            Ok(rows) => rows
-                .par_iter()
-                .map(|row| my::from_row::<(String, f64, f64)>(row.to_owned()))
-                .collect(),
-            Err(e) => return Err(e.to_string()),
-        };
+        let page_coords: Vec<(String, f64, f64)> = rows
+            .par_iter()
+            .map(|row| my::from_row::<(String, f64, f64)>(row.to_owned()))
+            .collect();
 
         // Get nearby files
         let error: Mutex<Option<String>> = Mutex::new(None);
@@ -362,13 +339,10 @@ impl WDfist {
         let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
 
         // Process results
-        let item2label: Vec<(String, String)> = match rows.lock() {
-            Ok(rows) => rows
-                .par_iter()
-                .map(|row| my::from_row::<(String, String)>(row.to_owned()))
-                .collect(),
-            Err(e) => return Err(e.to_string()),
-        };
+        let item2label: Vec<(String, String)> = rows
+            .par_iter()
+            .map(|row| my::from_row::<(String, String)>(row.to_owned()))
+            .collect();
 
         // Get search results
         let error: Mutex<Option<String>> = Mutex::new(None);
@@ -533,16 +507,10 @@ impl WDfist {
         let pagelist = PageList::new_from_wiki("wikidatawiki");
         let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
 
-        match rows.lock() {
-            Ok(rows) => {
-                self.items = rows
-                    .par_iter()
-                    .map(|row| my::from_row::<String>(row.to_owned()))
-                    .collect();
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-
+        self.items = rows
+            .par_iter()
+            .map(|row| my::from_row::<String>(row.to_owned()))
+            .collect();
         Ok(())
     }
 
@@ -658,13 +626,10 @@ impl WDfist {
             // Run batches, and get a list of files to remove
             let pagelist = PageList::new_from_wiki("wikidatawiki");
             let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
-            files_to_remove = match rows.lock() {
-                Ok(rows) => rows
-                    .par_iter()
-                    .map(|row| my::from_row::<String>(row.to_owned()))
-                    .collect(),
-                Err(e) => return Err(e.to_string()),
-            };
+            files_to_remove = rows
+                .par_iter()
+                .map(|row| my::from_row::<String>(row.to_owned()))
+                .collect();
         }
 
         // Remove max files returned

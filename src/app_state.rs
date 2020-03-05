@@ -12,8 +12,7 @@ use rocket::http::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::{thread, time};
 use wikibase::mediawiki::api::Api;
 
