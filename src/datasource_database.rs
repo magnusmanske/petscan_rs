@@ -395,7 +395,13 @@ impl SourceDatabase {
             Some(e) => return Err(e.to_string()),
             None => {}
         }
-        let new_categories = new_categories.read().unwrap();
+        let mut new_categories = new_categories.write().unwrap();
+
+        // Paranoia
+        {
+            let cd = categories_done.read().unwrap();
+            new_categories.retain(|category| !cd.contains(category));
+        }
 
         Platform::profile("DSDB::do_depth new categories", Some(new_categories.len()));
 
