@@ -389,7 +389,6 @@ impl Platform {
                 .to_sql_batches(PAGE_BATCH_SIZE)
                 .par_iter_mut()
                 .map(|mut sql_batch| {
-                    //sql_batch.0 = "SELECT DISTINCT term_text FROM wb_terms WHERE term_entity_type='item' AND term_type IN ('label','alias') AND term_text IN (".to_string() ;
                     // Text for any label or alias used in an item
                     sql_batch.0 = "SELECT wbx_text FROM wbt_text WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id = wby_id AND wby_name IN ('label','alias') AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id) AND wbx_text IN (".to_string() ;
                     // One of these
