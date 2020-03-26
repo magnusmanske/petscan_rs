@@ -977,14 +977,39 @@ impl PageList {
     ) -> Result<(), String> {
         let batches: Vec<SQLtuple> = self
             .to_sql_batches_namespace(PAGE_BATCH_SIZE,namespace_id)
-            .par_iter_mut()
-            .map(|mut sql_batch| {
+            .iter_mut()
+            .filter_map(|mut sql_batch| {
                 // entity_type and namespace_id are "database safe"
-                sql_batch.0 = format!("SELECT term_full_entity_id,{} AS dummy_namespace,term_text,term_type FROM wb_terms WHERE term_entity_type='{}' AND term_language=? AND term_full_entity_id IN (",namespace_id,&entity_type);
-                sql_batch.0 += &sql_batch.1.par_iter().map(|_|"?").collect::<Vec<&str>>().join(",") ;
-                sql_batch.0 += ")" ;
-                sql_batch.1.insert(0,wikidata_language.to_string());
-                sql_batch.to_owned()
+                let prefix = match entity_type {
+                    "item" => "Q",
+                    "property" => "P",
+                    _ => return None
+                };
+                let table = match entity_type {
+                    "item" => "wbt_item_terms",
+                    "property" => "wbt_property_terms",
+                    _ => return None
+                } ;
+                let field_name = match entity_type {
+                    "item" => "wbit_item_id",
+                    "property" => "wbpt_property_id",
+                    _ => return None
+                } ;
+                let term_in_lang_id = match entity_type {
+                    "item" => "wbit_term_in_lang_id",
+                    "property" => "wbpt_term_in_lang_id",
+                    _ => return None
+                } ;
+                let item_ids = sql_batch.1.iter().map(|s|s[1..].to_string()).collect::<Vec<String>>().join(",");
+                sql_batch.1 = vec![wikidata_language.to_string()];
+                sql_batch.0 = format!("SELECT concat('{}',{}) AS term_full_entity_id,{} AS dummy_namespace,wbx_text as term_text,wby_name as term_type
+FROM {}
+INNER JOIN wbt_term_in_lang ON {} = wbtl_id
+INNER JOIN wbt_type ON wbtl_type_id = wby_id
+INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id
+INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language=?
+WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_name,item_ids);
+                Some(sql_batch.to_owned())
             })
             .collect::<Vec<SQLtuple>>();
 
