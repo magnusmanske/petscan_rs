@@ -22,6 +22,7 @@ rocket = "*"
 rocket_contrib = "*"
 #rocket =  { git = "https://github.com/SergioBenitez/Rocket" }
 #rocket_contrib =  { git = "https://github.com/SergioBenitez/Rocket" }
+time = "^0.2.9"
 
 #wikibase = "0.5"
 #wikibase = { path='../wikibase_rs' }

@@ -335,8 +335,8 @@ impl WDfist {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(&chunk);
-            sql.0 = format!("SELECT term_full_entity_id,term_text FROM wb_terms WHERE term_entity_type='item' AND term_language='en' AND term_type='label' AND term_full_entity_id IN ({})",&sql.0) ;
+            let mut sql = Platform::full_entity_id_to_number(&chunk);
+            sql.0 = format!("SELECT concat('Q',wbit_item_id) AS term_full_entity_id, wbx_text as term_text FROM wbt_item_terms INNER JOIN wbt_term_in_lang ON wbit_term_in_lang_id = wbtl_id INNER JOIN wbt_type ON wbtl_type_id = wby_id AND wby_name='label' INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language='en' WHERE wbit_item_id IN ({})",&sql.0) ;
             batches.push(sql);
         });
 
@@ -935,6 +935,14 @@ mod tests {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec!["Q66711783"]);
         wdfist.follow_search_commons().unwrap();
+        println!(
+            "{} results",
+            wdfist
+                .item2files
+                .get(&"Q66711783".to_string())
+                .unwrap()
+                .len()
+        );
         assert!(
             wdfist
                 .item2files

@@ -1468,6 +1468,17 @@ impl Platform {
         (Platform::get_questionmarks(escaped.len()), escaped)
     }
 
+    pub fn full_entity_id_to_number(strings: &[String]) -> SQLtuple {
+        let escaped: Vec<String> = strings
+            .par_iter()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s[1..].to_string())
+            .collect();
+        (Platform::get_questionmarks(escaped.len()), escaped)
+    }
+
+    // Generates a string with `len` comma-separated question marks
     pub fn get_questionmarks(len: usize) -> String {
         let mut questionmarks: Vec<String> = Vec::new();
         questionmarks.resize(len, "?".to_string());
