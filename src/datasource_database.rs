@@ -1310,7 +1310,7 @@ mod tests {
     #[test]
     fn test_category_subset() {
         let params = vec![
-            ("categories", "1974_births\nBioinformaticians"),
+            ("categories", "1974_births\nGerman bioinformaticians"),
             ("language", "en"),
             ("project", "wikipedia"),
         ];

@@ -373,6 +373,8 @@ impl Platform {
         }
     }
 
+    // Prepares for JS "creator" mode
+    // Chackes which labels already exist on Wikidata
     fn process_creator(&self, result: &PageList) -> Result<(), String> {
         if result.is_empty() || result.is_wikidata() {
             return Ok(());
@@ -387,7 +389,10 @@ impl Platform {
                 .to_sql_batches(PAGE_BATCH_SIZE)
                 .par_iter_mut()
                 .map(|mut sql_batch| {
-                    sql_batch.0 = "SELECT DISTINCT term_text FROM wb_terms WHERE term_entity_type='item' AND term_type IN ('label','alias') AND term_text IN (".to_string() ;
+                    //sql_batch.0 = "SELECT DISTINCT term_text FROM wb_terms WHERE term_entity_type='item' AND term_type IN ('label','alias') AND term_text IN (".to_string() ;
+                    // Text for any label or alias used in an item
+                    sql_batch.0 = "SELECT wbx_text FROM wbt_text WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id = wby_id AND wby_name IN ('label','alias') AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id) AND wbx_text IN (".to_string() ;
+                    // One of these
                     sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
                     sql_batch.0 += ")";
                     // Looking for labels, so spaces instead of underscores
@@ -419,9 +424,9 @@ impl Platform {
             for row in result {
                 match row {
                     Ok(row) => match my::from_row_opt::<Vec<u8>>(row) {
-                        Ok(term_text) => {
-                            let term_text = String::from_utf8_lossy(&term_text).into_owned();
-                            self.existing_labels.write().unwrap().insert(term_text);
+                        Ok(wbx_text) => {
+                            let wbx_text = String::from_utf8_lossy(&wbx_text).into_owned();
+                            self.existing_labels.write().unwrap().insert(wbx_text);
                         }
                         Err(_e) => {}
                     },
@@ -2024,7 +2029,7 @@ mod tests {
 
     #[test]
     fn test_en_categories_sparql_common_wiki_other() {
-        check_results_for_psid(11515666, "frwiki", vec![Title::new("Magnus Manske", 0)]);
+        check_results_for_psid(15960820, "frwiki", vec![Title::new("Magnus Manske", 0)]);
     }
 
     #[test]
