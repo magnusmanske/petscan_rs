@@ -1528,26 +1528,23 @@ impl Platform {
         let langs_any = self.get_param_as_vec("langs_labels_any", ",");
         let langs_no = self.get_param_as_vec("langs_labels_no", ",");
 
-        ret.0 =
-            //"SELECT DISTINCT term_full_entity_id FROM wb_terms t1 WHERE term_entity_type='item'"
-            "
-            SELECT DISTINCT concat('Q',wbit_item_id) AS term_full_entity_id FROM wbt_text,wbt_item_terms wbt_item_terms1,wbt_type,wbt_term_in_lang,wbt_text_in_lang 
-            WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id = wby_id AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id
-            "
-                .to_string();
+        ret.0 = "SELECT DISTINCT concat('Q',wbit_item_id) AS term_full_entity_id 
+            FROM wbt_text,wbt_item_terms wbt_item_terms1,wbt_type,wbt_term_in_lang,wbt_text_in_lang 
+            WHERE wbit_term_in_lang_id = wbtl_id 
+            AND wbtl_type_id = wby_id 
+            AND wbtl_text_in_lang_id = wbxl_id 
+            AND wbxl_text_id = wbx_id"
+            .to_string();
 
         yes.iter().for_each(|s| {
             if s != "%" {
-                //ret.0 += &(" AND term_text LIKE ?".to_owned());
                 ret.0 += &(" AND wbx_text LIKE ?".to_owned());
                 ret.1.push(s.to_string());
             }
             if !langs_yes.is_empty() {
                 let mut tmp = Self::prep_quote(&langs_yes);
-                //ret.0 += &(" AND term_language IN (".to_owned() + &tmp.0 + ")");
                 ret.0 += &(" AND wbxl_language IN (".to_owned() + &tmp.0 + ")");
                 ret.1.append(&mut tmp.1);
-                //self.get_label_sql_helper(&mut ret, "yes", "term_type");
                 self.get_label_sql_helper(&mut ret, "yes", "wby_name");
             }
         });
@@ -1562,16 +1559,13 @@ impl Platform {
                     ret.0 += " OR "
                 }
                 if s != "%" {
-                    //ret.0 += &(" ( term_text LIKE ?".to_owned());
                     ret.0 += &(" ( wbx_text LIKE ?".to_owned());
                     ret.1.push(s.to_string());
                 }
                 if !langs_any.is_empty() {
                     let mut tmp = Self::prep_quote(&langs_any);
-                    //ret.0 += &(" AND term_language IN (".to_owned() + &tmp.0 + ")");
                     ret.0 += &(" AND wbxl_language IN (".to_owned() + &tmp.0 + ")");
                     ret.1.append(&mut tmp.1);
-                    //self.get_label_sql_helper(&mut ret, "any", "term_type");
                     self.get_label_sql_helper(&mut ret, "any", "wby_name");
                 }
                 ret.0 += ")";
@@ -1580,7 +1574,6 @@ impl Platform {
         }
 
         no.iter().for_each(|s| {
-            //ret.0 += " AND NOT EXISTS (SELECT t2.term_full_entity_id FROM wb_terms t2 WHERE";
             ret.0 += " AND NOT EXISTS (
                 SELECT * FROM 
                 wbt_text wbt_text2,
