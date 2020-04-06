@@ -1140,7 +1140,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                     Some(s) => re.is_match(s.as_str()),
                     None => false,
                 },
-                false => re.is_match(entry.title().pretty().as_str()),
+                false => re.is_match(entry.title().pretty()),
             }),
             _ => {}
         }

@@ -160,7 +160,7 @@ impl DataSource for SourcePagePile {
         let builder = reqwest::blocking::ClientBuilder::new().timeout(timeout);
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
             .map_err(|e| e.to_string())?;
-        let params = api.params_into(&vec![
+        let params = api.params_into(&[
             ("id", &pagepile.to_string()),
             ("action", "get_data"),
             ("format", "json"),
@@ -354,7 +354,7 @@ impl DataSource for SourceSparql {
 
         let response = match api
             .client()
-            .post(&sparql_url)
+            .post(sparql_url)
             .header(reqwest::header::USER_AGENT, "rust testing")
             .form(&params)
             .send()

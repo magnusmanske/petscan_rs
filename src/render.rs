@@ -535,7 +535,8 @@ impl Render for RenderTSV {
         entry
             .title()
             .namespace_name(&params.api)
-            .unwrap_or("UNKNOWN_NAMESPACE".to_string())
+            .unwrap_or(&"UNKNOWN_NAMESPACE".to_string())
+            .to_string()
     }
 }
 
@@ -745,11 +746,12 @@ impl Render for RenderHTML {
         let namespace_name = entry
             .title()
             .namespace_name(&params.api)
-            .unwrap_or("UNKNOWN NAMESPACE".to_string());
+            .unwrap_or("UNKNOWN NAMESPACE")
+            .to_string();
         if namespace_name.is_empty() {
             "<span tt='namespace_0'>Article</span>".to_string()
         } else {
-            namespace_name
+            namespace_name.to_string()
         }
     }
 
@@ -816,7 +818,7 @@ impl Render for RenderHTML {
         let mut q = "".to_string();
         let checked: &str;
         if params.autolist_creator_mode {
-            if platform.label_exists(&entry.title().pretty()) {
+            if platform.label_exists(&entry.title().pretty().to_string()) {
                 checked = "";
             } else {
                 if entry.title().pretty().contains('(') {
@@ -1118,7 +1120,7 @@ impl RenderJSON {
                     "namespace":entry.title().namespace_id(),
                     "len":entry.page_bytes.unwrap_or(0),
                     "touched":entry.get_page_timestamp().unwrap_or("".to_string()),
-                    "nstext":params.api.get_canonical_namespace_name(entry.title().namespace_id()).unwrap_or("".to_string())
+                    "nstext":params.api.get_canonical_namespace_name(entry.title().namespace_id()).unwrap_or("")
                 });
                 match entry.get_wikidata_item() {
                     Some(q) => {

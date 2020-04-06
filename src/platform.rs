@@ -301,6 +301,8 @@ impl Platform {
         Platform::profile("after process_pages", Some(result.len()));
         self.process_subpages(&result)?;
         Platform::profile("after process_subpages", Some(result.len()));
+        self.annotate_with_wikidata_item(result)?;
+        Platform::profile("after annotate_with_wikidata_item [2]", Some(result.len()));
 
         let wikidata_label_language = self.get_param_default(
             "wikidata_label_language",
