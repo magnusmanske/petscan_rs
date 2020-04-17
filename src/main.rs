@@ -1,11 +1,7 @@
-#![feature(proc_macro_hygiene, decl_macro)]
-
 extern crate chrono;
 extern crate reqwest;
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate rocket;
 extern crate regex;
 #[macro_use]
 extern crate serde_json;
@@ -19,19 +15,14 @@ pub mod platform;
 pub mod render;
 pub mod wdfist;
 
+use actix_web::{web, App, HttpRequest, HttpServer, Responder};
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
 use platform::{MyResponse, Platform};
-use rocket::config::{Config, Environment};
-use rocket::http::ContentType;
-use rocket::State;
-use rocket_contrib::serve::StaticFiles;
 use serde_json::Value;
 use std::env;
 use std::fs::File;
-//use mysql as my;
-//use std::sync::Arc;
-
+/*
 fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> MyResponse {
     // Restart command?
     match form_parameters.params.get("restart") {
@@ -165,7 +156,9 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
     drop(platform);
     response
 }
+*/
 
+/*
 #[post("/", data = "<params>")]
 fn process_form_post(params: FormParameters, state: State<AppState>) -> MyResponse {
     process_form(params, state)
@@ -175,8 +168,17 @@ fn process_form_post(params: FormParameters, state: State<AppState>) -> MyRespon
 fn process_form_get(params: FormParameters, state: State<AppState>) -> MyResponse {
     process_form(params, state)
 }
+*/
 
-fn main() {
+async fn greet(req: HttpRequest) -> impl Responder {
+    let name = req.match_info().get("name").unwrap_or("World");
+    println!("{:?}", req.query_string());
+    format!("Hello {}!", &name)
+}
+
+#[actix_rt::main]
+async fn main() -> std::io::Result<()> {
+
     let basedir = env::current_dir()
         .expect("Can't get CWD")
         .to_str()
@@ -187,22 +189,17 @@ fn main() {
     let petscan_config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
-    let mut rocket_config = Config::build(Environment::Production);
-    match petscan_config["http_server"].as_str() {
-        Some(address) => rocket_config = rocket_config.address(address),
-        None => {} // 0.0.0.0; default
-    }
-    let rocket_config = rocket_config
-        .workers(32)
-        .log_level(rocket::config::LoggingLevel::Normal) // Critical
-        .port(petscan_config["http_port"].as_u64().unwrap_or(80) as u16)
-        .finalize()
-        .expect("Can't finalize rocket_config");
+    let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0");
+    let port = petscan_config["http_port"].as_u64().unwrap_or(80);
 
-    rocket::custom(rocket_config)
-        .manage(AppState::new_from_config(&petscan_config))
-        .mount("/", StaticFiles::from(basedir + "/html"))
-        .mount("/", routes![process_form_get, process_form_post])
-        //.attach(DbConn::fairing())
-        .launch();
+    //let static_files = warp::path("/").and(warp::fs::dir("./html/"));
+
+    HttpServer::new(|| {
+        App::new()
+            .route("/", web::get().to(greet))
+            .route("/", web::post().to(greet))
+    })
+    .bind(format!("{}:{}",&ip_address,port))?
+    .run()
+    .await
 }

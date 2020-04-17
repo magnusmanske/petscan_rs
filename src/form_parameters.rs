@@ -1,11 +1,4 @@
 use regex::Regex;
-use rocket::data::Outcome as DataOutcome;
-use rocket::data::{FromData, Transform, Transformed};
-use rocket::http::uri::Uri;
-use rocket::http::{Method, Status};
-use rocket::request::{self, FromRequest};
-use rocket::Outcome;
-use rocket::{Data, Outcome::*, Request};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::Read;
@@ -56,7 +49,6 @@ impl FormParameters {
 
     /// Parses a query string into a new object
     pub fn outcome_from_query(query: &str) -> Result<Self, String> {
-        // TODO PSID IMPORTANT for parsing see https://api.rocket.rs/v0.4/rocket/request/struct.Request.html#method.uri
         let parsed_url = match Url::parse(&("https://127.0.0.1/?".to_string() + query)) {
             Ok(url) => url,
             Err(e) => return Err(format!("{:?}", &e)),
@@ -94,9 +86,7 @@ impl FormParameters {
     pub fn to_string(&self) -> String {
         self.params
             .iter()
-            .map(|(k, v)| {
-                Uri::percent_encode(k).to_string() + "=" + &Uri::percent_encode(v).to_string()
-            })
+            .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
             .collect::<Vec<String>>()
             .join("&")
     }
@@ -106,11 +96,13 @@ impl FormParameters {
             .iter()
             .filter(|(k, _v)| *k != "doit")
             .filter(|(k, _v)| *k != "format")
-            .map(|(k, v)| {
-                Uri::percent_encode(k).to_string() + "=" + &Uri::percent_encode(v).to_string()
-            })
+            .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
             .collect::<Vec<String>>()
             .join("&")
+    }
+
+    pub fn percent_encode(s: &str) -> String {
+        s.to_string() // TODO FIXME
     }
 
     fn has_param(&self, key: &str) -> bool {
@@ -202,6 +194,7 @@ impl FormParameters {
     }
 }
 
+/*
 // GET
 impl<'a, 'r> FromRequest<'a, 'r> for FormParameters {
     type Error = String;
@@ -255,3 +248,4 @@ impl<'b> FromData<'b> for FormParameters {
         }
     }
 }
+*/

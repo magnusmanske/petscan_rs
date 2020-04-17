@@ -18,16 +18,11 @@ htmlescape = "*"
 rand = "*"
 mysql = { version="^17" }#, features = ["ssl"] }
 reqwest = { version = "^0.10", features = ["blocking", "json"] }
-rocket = "*"
-rocket_contrib = "*"
-#rocket =  { git = "https://github.com/SergioBenitez/Rocket" }
-#rocket_contrib =  { git = "https://github.com/SergioBenitez/Rocket" }
 time = "^0.2.9"
-
-#wikibase = "0.5"
-#wikibase = { path='../wikibase_rs' }
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
-
+actix-web = { git = "https://github.com/actix/actix-web" }
+#actix-web = "^2.0.0"
+actix-rt = "^1"
 
 [profile.release]
 lto = "fat"

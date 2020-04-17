@@ -1,10 +1,9 @@
 use crate::app_state::AppState;
+use crate::form_parameters::FormParameters;
 use crate::pagelist::{LinkCount, PageListEntry};
 use crate::platform::*;
 use chrono::prelude::*;
 use htmlescape::encode_minimal;
-use rocket::http::uri::Uri;
-use rocket::http::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -500,10 +499,8 @@ impl Render for RenderTSV {
         Ok(MyResponse {
             s: rows.join("\n"),
             content_type: match self.separator.as_str() {
-                "," => ContentType::parse_flexible("text/csv; charset=utf-8")
-                    .expect("Can't parse content type text/csv"),
-                "\t" => ContentType::parse_flexible("text/tab-separated-values; charset=utf-8")
-                    .expect("Can't parse content type text/csv"),
+                "," => ContentType::CSV,
+                "\t" => ContentType::TSV,
                 _ => ContentType::Plain, // Fallback
             },
         })
@@ -858,7 +855,7 @@ impl RenderHTML {
     }
 
     fn escape_attribute(&self, s: &String) -> String {
-        Uri::percent_encode(s)
+        FormParameters::percent_encode(s)
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('"', "&quot;")
@@ -993,9 +990,9 @@ impl Render for RenderJSON {
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let mut params = RenderParams::new(platform, wiki)?;
-        let mut content_type = "application/json; charset=utf-8".to_string();
+        let mut content_type = ContentType::JSON;
         if params.json_pretty {
-            content_type = "text/plain; charset=utf-8".to_owned();
+            content_type = ContentType::Plain;
         }
         params.file_usage = params.giu || params.file_usage;
         if params.giu {
@@ -1064,10 +1061,7 @@ impl Render for RenderJSON {
 
         Ok(MyResponse {
             s: out.to_string(),
-            content_type: match ContentType::parse_flexible(&content_type) {
-                Some(ct) => ct,
-                _ => ContentType::Plain,
-            },
+            content_type: content_type,
         })
     }
 
