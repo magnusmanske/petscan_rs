@@ -5,6 +5,7 @@ use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
 use crate::render::*;
 use crate::wdfist::*;
+use actix_web::{Error, HttpResponse};
 use chrono::Local;
 use mysql as my;
 use rayon::prelude::*;
@@ -46,16 +47,15 @@ pub struct MyResponse {
     pub s: String,
     pub content_type: ContentType,
 }
-/*
-impl Responder<'static> for MyResponse {
-    fn respond_to(self, _: &Request) -> Result<Reply<'static>, Status> {
-        Response::build()
-            .header(self.content_type)
-            .sized_body(Cursor::new(self.s))
-            .ok()
+
+impl MyResponse {
+    pub fn respond(&self) -> Result<HttpResponse, Error> {
+        Ok(HttpResponse::Ok()
+            .content_type(self.content_type.as_str())
+            .body(self.s.to_owned())) // TODO FIXME duplication of output
     }
 }
-*/
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Combination {
     None,

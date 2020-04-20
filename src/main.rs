@@ -166,8 +166,8 @@ async fn query_handler_get(req: HttpRequest,app_state: web::Data<AppState>) -> R
     let parameter_pairs = QString::from(req.query_string()) ;
     let parameter_pairs = parameter_pairs.to_pairs() ;
     let form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
-    let _response = process_form ( form_parameters , &app_state ) ;
-    Ok(HttpResponse::Ok().finish())
+    let response = process_form ( form_parameters , &app_state ) ;
+    response.respond()
 }
 
 async fn query_handler_post(mut body: web::Payload,app_state: web::Data<AppState>) -> Result<HttpResponse, Error> {
@@ -178,8 +178,8 @@ async fn query_handler_post(mut body: web::Payload,app_state: web::Data<AppState
     let parameter_pairs = QString::from(std::str::from_utf8(&bytes).unwrap_or("")) ;
     let parameter_pairs = parameter_pairs.to_pairs() ;
     let form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
-    let _response = process_form ( form_parameters , &app_state ) ;
-    Ok(HttpResponse::Ok().finish())
+    let response = process_form ( form_parameters , &app_state ) ;
+    response.respond()
 }
 
 #[actix_rt::main]
