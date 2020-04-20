@@ -275,7 +275,7 @@ impl Platform {
     }
 
     pub fn profile(label: &str, num: Option<usize>) {
-        if true {
+        if false {
             println!(
                 "{} [{}]: {}",
                 Local::now().format("%Y-%m-%d %H:%M:%S"),

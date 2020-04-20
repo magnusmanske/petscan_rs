@@ -28,7 +28,7 @@ use std::env;
 use std::fs::File;
 
 fn process_form(mut form_parameters: FormParameters, state: &AppState) -> MyResponse {
-    println!("{:?}",&form_parameters) ;
+
     // Restart command?
     match form_parameters.params.get("restart") {
         Some(code) => {

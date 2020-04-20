@@ -22,8 +22,9 @@ impl FormParameters {
         let mut ret = Self::new();
         ret.params = parameter_pairs
             .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .map(|(k, v)| (k.to_string(), v.to_string().replace("+", " ")))
             .collect();
+        ret.ns = Self::ns_from_params(&ret.params);
         ret
     }
 
