@@ -1,11 +1,7 @@
-#![feature(proc_macro_hygiene, decl_macro)]
-
 extern crate chrono;
 extern crate reqwest;
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate rocket;
 extern crate regex;
 #[macro_use]
 extern crate serde_json;
@@ -19,20 +15,20 @@ pub mod platform;
 pub mod render;
 pub mod wdfist;
 
+use actix_files as fs;
+use futures::{StreamExt};
+use actix_web::{web, App, Error, HttpResponse};
+use qstring::QString;
+use actix_web::{HttpRequest, HttpServer};
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
-use platform::{MyResponse, Platform};
-use rocket::config::{Config, Environment};
-use rocket::http::ContentType;
-use rocket::State;
-use rocket_contrib::serve::StaticFiles;
+use platform::{MyResponse, Platform, ContentType};
 use serde_json::Value;
 use std::env;
 use std::fs::File;
-//use mysql as my;
-//use std::sync::Arc;
 
-fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> MyResponse {
+fn process_form(mut form_parameters: FormParameters, state: &AppState) -> MyResponse {
+
     // Restart command?
     match form_parameters.params.get("restart") {
         Some(code) => {
@@ -127,7 +123,7 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
 
     // Actually do something useful!
     state.modify_threads_running(1);
-    let mut platform = Platform::new_from_parameters(&form_parameters, &state.inner());
+    let mut platform = Platform::new_from_parameters(&form_parameters, &state);
     Platform::profile("platform initialized", None);
     let platform_result = platform.run();
     state.log_query_end(started_query_id);
@@ -166,17 +162,29 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
     response
 }
 
-#[post("/", data = "<params>")]
-fn process_form_post(params: FormParameters, state: State<AppState>) -> MyResponse {
-    process_form(params, state)
+async fn query_handler_get(req: HttpRequest,app_state: web::Data<AppState>) -> Result<HttpResponse, Error> {
+    let parameter_pairs = QString::from(req.query_string()) ;
+    let parameter_pairs = parameter_pairs.to_pairs() ;
+    let form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
+    let response = process_form ( form_parameters , &app_state ) ;
+    response.respond()
 }
 
-#[get("/")]
-fn process_form_get(params: FormParameters, state: State<AppState>) -> MyResponse {
-    process_form(params, state)
+async fn query_handler_post(mut body: web::Payload,app_state: web::Data<AppState>) -> Result<HttpResponse, Error> {
+    let mut bytes = web::BytesMut::new();
+    while let Some(item) = body.next().await {
+        bytes.extend_from_slice(&item?);
+    }
+    let parameter_pairs = QString::from(std::str::from_utf8(&bytes).unwrap_or("")) ;
+    let parameter_pairs = parameter_pairs.to_pairs() ;
+    let form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
+    let response = process_form ( form_parameters , &app_state ) ;
+    response.respond()
 }
 
-fn main() {
+#[actix_rt::main]
+async fn main() -> std::io::Result<()> {
+
     let basedir = env::current_dir()
         .expect("Can't get CWD")
         .to_str()
@@ -187,22 +195,17 @@ fn main() {
     let petscan_config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
-    let mut rocket_config = Config::build(Environment::Production);
-    match petscan_config["http_server"].as_str() {
-        Some(address) => rocket_config = rocket_config.address(address),
-        None => {} // 0.0.0.0; default
-    }
-    let rocket_config = rocket_config
-        .workers(32)
-        .log_level(rocket::config::LoggingLevel::Normal) // Critical
-        .port(petscan_config["http_port"].as_u64().unwrap_or(80) as u16)
-        .finalize()
-        .expect("Can't finalize rocket_config");
+    let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
+    let port = petscan_config["http_port"].as_u64().unwrap_or(80);
 
-    rocket::custom(rocket_config)
-        .manage(AppState::new_from_config(&petscan_config))
-        .mount("/", StaticFiles::from(basedir + "/html"))
-        .mount("/", routes![process_form_get, process_form_post])
-        //.attach(DbConn::fairing())
-        .launch();
+    HttpServer::new(move || {
+        App::new()
+            .data(AppState::new_from_config(&petscan_config))
+            .route("/", web::get().to(query_handler_get))
+            .route("/", web::post().to(query_handler_post))
+            .service(fs::Files::new("/", "./html").show_files_listing())
+    })
+    .bind(format!("{}:{}",&ip_address,port))?
+    .run()
+    .await
 }

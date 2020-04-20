@@ -1,14 +1,11 @@
-extern crate rocket;
-
 use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
-use crate::platform::MyResponse;
+use crate::platform::{ContentType, MyResponse};
 use chrono::prelude::*;
 use mysql as my;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use regex::Regex;
-use rocket::http::ContentType;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -293,8 +290,7 @@ impl AppState {
                 text += ")";
                 MyResponse {
                     s: text,
-                    content_type: ContentType::parse_flexible("application/javascript")
-                        .expect("AppState::output_json: can't parse application/javascript"),
+                    content_type: ContentType::JSONP,
                 }
             }
             None => MyResponse {

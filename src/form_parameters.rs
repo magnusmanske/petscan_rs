@@ -1,17 +1,8 @@
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use regex::Regex;
-use rocket::data::Outcome as DataOutcome;
-use rocket::data::{FromData, Transform, Transformed};
-use rocket::http::uri::Uri;
-use rocket::http::{Method, Status};
-use rocket::request::{self, FromRequest};
-use rocket::Outcome;
-use rocket::{Data, Outcome::*, Request};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::Read;
 use url::*;
-
-static FORM_SIZE_LIMIT: u64 = 1024 * 1024 * 50; // 50MB
 
 #[derive(Debug, Clone)]
 pub struct FormParameters {
@@ -25,6 +16,16 @@ impl FormParameters {
             params: HashMap::new(),
             ns: HashSet::new(),
         }
+    }
+
+    pub fn new_from_pairs(parameter_pairs: Vec<(&str, &str)>) -> Self {
+        let mut ret = Self::new();
+        ret.params = parameter_pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string().replace("+", " ")))
+            .collect();
+        ret.ns = Self::ns_from_params(&ret.params);
+        ret
     }
 
     /// Extracts namespaces from parameter list
@@ -56,7 +57,6 @@ impl FormParameters {
 
     /// Parses a query string into a new object
     pub fn outcome_from_query(query: &str) -> Result<Self, String> {
-        // TODO PSID IMPORTANT for parsing see https://api.rocket.rs/v0.4/rocket/request/struct.Request.html#method.uri
         let parsed_url = match Url::parse(&("https://127.0.0.1/?".to_string() + query)) {
             Ok(url) => url,
             Err(e) => return Err(format!("{:?}", &e)),
@@ -94,9 +94,7 @@ impl FormParameters {
     pub fn to_string(&self) -> String {
         self.params
             .iter()
-            .map(|(k, v)| {
-                Uri::percent_encode(k).to_string() + "=" + &Uri::percent_encode(v).to_string()
-            })
+            .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
             .collect::<Vec<String>>()
             .join("&")
     }
@@ -106,11 +104,13 @@ impl FormParameters {
             .iter()
             .filter(|(k, _v)| *k != "doit")
             .filter(|(k, _v)| *k != "format")
-            .map(|(k, v)| {
-                Uri::percent_encode(k).to_string() + "=" + &Uri::percent_encode(v).to_string()
-            })
+            .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
             .collect::<Vec<String>>()
             .join("&")
+    }
+
+    pub fn percent_encode(s: &str) -> String {
+        utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
     }
 
     fn has_param(&self, key: &str) -> bool {
@@ -198,60 +198,6 @@ impl FormParameters {
         }
         if self.has_param("wikidata_no_item") {
             self.set_param("wikidata_item", "without");
-        }
-    }
-}
-
-// GET
-impl<'a, 'r> FromRequest<'a, 'r> for FormParameters {
-    type Error = String;
-
-    fn from_request(request: &'a Request<'r>) -> request::Outcome<Self, Self::Error> {
-        match request.method() {
-            // TODO Not sure if method check is really necessary
-            Method::Get => {
-                match request.uri().query() {
-                    Some(query) => match FormParameters::outcome_from_query(query) {
-                        Ok(fp) => Outcome::Success(fp),
-                        Err(e) => Outcome::Failure((Status::BadRequest, format!("{}", &e))),
-                    },
-                    None => {
-                        let mut ret = FormParameters::new();
-                        ret.params
-                            .insert("show_main_page".to_string(), "1".to_string());
-                        Outcome::Success(ret)
-                        //Outcome::Failure((Status::BadRequest, "No query found".to_string()))
-                    }
-                }
-            }
-            _ => Outcome::Failure((Status::BadRequest, "Unsupported method".to_string())),
-        }
-    }
-}
-
-// POST
-impl<'b> FromData<'b> for FormParameters {
-    type Error = String;
-    type Owned = String;
-    type Borrowed = str;
-
-    fn transform(_: &Request, data: Data) -> Transform<DataOutcome<Self::Owned, Self::Error>> {
-        let mut stream = data.open().take(FORM_SIZE_LIMIT);
-        let mut string = String::with_capacity((FORM_SIZE_LIMIT / 2) as usize);
-        let outcome = match stream.read_to_string(&mut string) {
-            Ok(_) => Success(string),
-            Err(e) => Failure((Status::InternalServerError, format!("{:?}", e))),
-        };
-
-        // Returning `Borrowed` here means we get `Borrowed` in `from_data`.
-        Transform::Borrowed(outcome)
-    }
-
-    fn from_data(_: &Request, outcome: Transformed<'b, Self>) -> DataOutcome<Self, Self::Error> {
-        let query = outcome.borrowed().unwrap(); //FIXME
-        match FormParameters::outcome_from_query(query) {
-            Ok(fp) => Outcome::Success(fp),
-            Err(e) => Outcome::Failure((Status::BadRequest, format!("{}", &e))),
         }
     }
 }

@@ -5,18 +5,13 @@ use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
 use crate::render::*;
 use crate::wdfist::*;
+use actix_web::{Error, HttpResponse};
 use chrono::Local;
 use mysql as my;
 use rayon::prelude::*;
 use regex::Regex;
-use rocket::http::ContentType;
-use rocket::http::Status;
-use rocket::response::Responder;
-use rocket::Request;
-use rocket::Response;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 use wikibase::mediawiki::api::NamespaceID;
@@ -25,17 +20,39 @@ use wikibase::mediawiki::title::Title;
 pub static PAGE_BATCH_SIZE: usize = 20000;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ContentType {
+    HTML,
+    Plain,
+    JSON,
+    JSONP,
+    CSV,
+    TSV,
+}
+
+impl ContentType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::HTML => "text/html; charset=utf-8",
+            Self::Plain => "text/plain; charset=utf-8",
+            Self::JSON => " application/json",
+            Self::JSONP => "application/javascript",
+            Self::CSV => "text/csv; charset=utf-8",
+            Self::TSV => "text/tab-separated-values; charset=utf-8",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct MyResponse {
     pub s: String,
     pub content_type: ContentType,
 }
 
-impl Responder<'static> for MyResponse {
-    fn respond_to(self, _: &Request) -> Result<Response<'static>, Status> {
-        Response::build()
-            .header(self.content_type)
-            .sized_body(Cursor::new(self.s))
-            .ok()
+impl MyResponse {
+    pub fn respond(&self) -> Result<HttpResponse, Error> {
+        Ok(HttpResponse::Ok()
+            .content_type(self.content_type.as_str())
+            .body(self.s.to_owned())) // TODO FIXME duplication of output
     }
 }
 
