@@ -26,6 +26,7 @@ use platform::{MyResponse, Platform, ContentType};
 use serde_json::Value;
 use std::env;
 use std::fs::File;
+use std::sync::Arc;
 
 fn process_form(mut form_parameters: FormParameters, state: &AppState) -> MyResponse {
 
@@ -198,9 +199,11 @@ async fn main() -> std::io::Result<()> {
     let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
     let port = petscan_config["http_port"].as_u64().unwrap_or(80);
 
+    let app_state = Arc::new(AppState::new_from_config(&petscan_config));
+
     HttpServer::new(move || {
         App::new()
-            .data(AppState::new_from_config(&petscan_config))
+            .data(app_state.clone())
             .route("/", web::get().to(query_handler_get))
             .route("/", web::post().to(query_handler_post))
             .service(fs::Files::new("/", "./html").show_files_listing())
