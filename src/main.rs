@@ -15,15 +15,20 @@ pub mod platform;
 pub mod render;
 pub mod wdfist;
 
-use actix_web::{web, App, HttpRequest, HttpServer, Responder};
+use actix_files as fs;
+use futures::{StreamExt};
+use actix_web::{web, App, Error, HttpResponse};
+use qstring::QString;
+use actix_web::{HttpRequest, HttpServer};
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
-use platform::{MyResponse, Platform};
+use platform::{MyResponse, Platform, ContentType};
 use serde_json::Value;
 use std::env;
 use std::fs::File;
-/*
-fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> MyResponse {
+
+fn process_form(mut form_parameters: FormParameters, state: &AppState) -> MyResponse {
+    println!("{:?}",&form_parameters) ;
     // Restart command?
     match form_parameters.params.get("restart") {
         Some(code) => {
@@ -118,7 +123,7 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
 
     // Actually do something useful!
     state.modify_threads_running(1);
-    let mut platform = Platform::new_from_parameters(&form_parameters, &state.inner());
+    let mut platform = Platform::new_from_parameters(&form_parameters, &state);
     Platform::profile("platform initialized", None);
     let platform_result = platform.run();
     state.log_query_end(started_query_id);
@@ -156,7 +161,7 @@ fn process_form(mut form_parameters: FormParameters, state: State<AppState>) -> 
     drop(platform);
     response
 }
-*/
+
 
 /*
 #[post("/", data = "<params>")]
@@ -170,10 +175,28 @@ fn process_form_get(params: FormParameters, state: State<AppState>) -> MyRespons
 }
 */
 
-async fn greet(req: HttpRequest) -> impl Responder {
-    let name = req.match_info().get("name").unwrap_or("World");
-    println!("{:?}", req.query_string());
-    format!("Hello {}!", &name)
+async fn query_handler_get(req: HttpRequest,app_state: web::Data<AppState>) -> Result<HttpResponse, Error> {
+    //let app_state = req.app_data::<AppState>().expect("query_handler_get: app_state is None");
+    println!("GET PATH: {}",req.path());
+    let parameter_pairs = QString::from(req.query_string()) ;
+    let parameter_pairs = parameter_pairs.to_pairs() ;
+    let form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
+    let _response = process_form ( form_parameters , &app_state ) ;
+    Ok(HttpResponse::Ok().finish())
+}
+
+async fn query_handler_post(req: HttpRequest, mut body: web::Payload,app_state: web::Data<AppState>) -> Result<HttpResponse, Error> {
+    //let app_state = req.app_data::<AppState>().expect("query_handler_post: app_state is None");
+    println!("POST PATH: {}",req.path());
+    let mut bytes = web::BytesMut::new();
+    while let Some(item) = body.next().await {
+        bytes.extend_from_slice(&item?);
+    }
+    let parameter_pairs = QString::from(std::str::from_utf8(&bytes).unwrap_or("")) ;
+    let parameter_pairs = parameter_pairs.to_pairs() ;
+    let form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
+    let _response = process_form ( form_parameters , &app_state ) ;
+    Ok(HttpResponse::Ok().finish())
 }
 
 #[actix_rt::main]
@@ -189,15 +212,16 @@ async fn main() -> std::io::Result<()> {
     let petscan_config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
-    let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0");
+    let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
     let port = petscan_config["http_port"].as_u64().unwrap_or(80);
 
-    //let static_files = warp::path("/").and(warp::fs::dir("./html/"));
-
-    HttpServer::new(|| {
+    HttpServer::new(move || {
         App::new()
-            .route("/", web::get().to(greet))
-            .route("/", web::post().to(greet))
+            .data(AppState::new_from_config(&petscan_config))
+            .route("/", web::get().to(query_handler_get))
+            .route("/", web::post().to(query_handler_post))
+            .service(fs::Files::new("/", "./html").show_files_listing())
+            //.route("/{filename:.+}", web::get().to(static_file))
     })
     .bind(format!("{}:{}",&ip_address,port))?
     .run()

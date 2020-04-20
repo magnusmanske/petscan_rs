@@ -20,9 +20,13 @@ mysql = { version="^17" }#, features = ["ssl"] }
 reqwest = { version = "^0.10", features = ["blocking", "json"] }
 time = "^0.2.9"
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
-actix-web = { git = "https://github.com/actix/actix-web" }
-#actix-web = "^2.0.0"
+#actix-web = { version = "3.0.0-alpha.1", default-features = true }
+#actix-web = { git = "https://github.com/actix/actix-web" }
+actix-web = "^2.0.0"
+actix-files = "*"
 actix-rt = "^1"
+qstring = "*"
+futures = "*"
 
 [profile.release]
 lto = "fat"

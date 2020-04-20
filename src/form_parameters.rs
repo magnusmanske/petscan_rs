@@ -1,10 +1,10 @@
 use regex::Regex;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::io::Read;
 use url::*;
 
-static FORM_SIZE_LIMIT: u64 = 1024 * 1024 * 50; // 50MB
+//use std::io::Read;
+//static FORM_SIZE_LIMIT: u64 = 1024 * 1024 * 50; // 50MB
 
 #[derive(Debug, Clone)]
 pub struct FormParameters {
@@ -18,6 +18,15 @@ impl FormParameters {
             params: HashMap::new(),
             ns: HashSet::new(),
         }
+    }
+
+    pub fn new_from_pairs(parameter_pairs: Vec<(&str, &str)>) -> Self {
+        let mut ret = Self::new();
+        ret.params = parameter_pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        ret
     }
 
     /// Extracts namespaces from parameter list
