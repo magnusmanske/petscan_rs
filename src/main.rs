@@ -162,22 +162,7 @@ fn process_form(mut form_parameters: FormParameters, state: &AppState) -> MyResp
     response
 }
 
-
-/*
-#[post("/", data = "<params>")]
-fn process_form_post(params: FormParameters, state: State<AppState>) -> MyResponse {
-    process_form(params, state)
-}
-
-#[get("/")]
-fn process_form_get(params: FormParameters, state: State<AppState>) -> MyResponse {
-    process_form(params, state)
-}
-*/
-
 async fn query_handler_get(req: HttpRequest,app_state: web::Data<AppState>) -> Result<HttpResponse, Error> {
-    //let app_state = req.app_data::<AppState>().expect("query_handler_get: app_state is None");
-    println!("GET PATH: {}",req.path());
     let parameter_pairs = QString::from(req.query_string()) ;
     let parameter_pairs = parameter_pairs.to_pairs() ;
     let form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
@@ -185,9 +170,7 @@ async fn query_handler_get(req: HttpRequest,app_state: web::Data<AppState>) -> R
     Ok(HttpResponse::Ok().finish())
 }
 
-async fn query_handler_post(req: HttpRequest, mut body: web::Payload,app_state: web::Data<AppState>) -> Result<HttpResponse, Error> {
-    //let app_state = req.app_data::<AppState>().expect("query_handler_post: app_state is None");
-    println!("POST PATH: {}",req.path());
+async fn query_handler_post(mut body: web::Payload,app_state: web::Data<AppState>) -> Result<HttpResponse, Error> {
     let mut bytes = web::BytesMut::new();
     while let Some(item) = body.next().await {
         bytes.extend_from_slice(&item?);
@@ -221,7 +204,6 @@ async fn main() -> std::io::Result<()> {
             .route("/", web::get().to(query_handler_get))
             .route("/", web::post().to(query_handler_post))
             .service(fs::Files::new("/", "./html").show_files_listing())
-            //.route("/{filename:.+}", web::get().to(static_file))
     })
     .bind(format!("{}:{}",&ip_address,port))?
     .run()
