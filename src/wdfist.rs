@@ -167,7 +167,7 @@ impl WDfist {
 
     fn follow_language_links(&mut self) -> Result<(), String> {
         let error: Mutex<Option<String>> = Mutex::new(None);
-        let add_item_file: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(vec![]));
+        let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
         let wiki2title_q = self.get_language_links()?;
         wiki2title_q.par_iter().for_each(|(wiki, title_q)|{
             // Prepare batches
@@ -258,7 +258,7 @@ impl WDfist {
 
         // Get nearby files
         let error: Mutex<Option<String>> = Mutex::new(None);
-        let add_item_file: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(vec![]));
+        let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(MAX_WIKI_API_THREADS)
             .build()
@@ -352,7 +352,7 @@ impl WDfist {
 
         // Get search results
         let error: Mutex<Option<String>> = Mutex::new(None);
-        let add_item_file: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(vec![]));
+        let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(MAX_WIKI_API_THREADS)
             .build()

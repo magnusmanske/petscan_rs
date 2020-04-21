@@ -9,7 +9,7 @@ use core::ops::Sub;
 use mysql as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Mutex, RwLock};
 use wikibase::mediawiki::api::{Api, NamespaceID};
 use wikibase::mediawiki::title::Title;
 
@@ -307,11 +307,11 @@ impl SourceDatabase {
 
     fn go_depth_batch(
         &self,
-        state: &Arc<AppState>,
+        state: &AppState,
         wiki: &String,
         categories_batch: &Vec<String>,
-        categories_done: Arc<RwLock<HashSet<String>>>,
-        new_categories: Arc<RwLock<Vec<String>>>,
+        categories_done: &RwLock<HashSet<String>>,
+        new_categories: &RwLock<Vec<String>>,
     ) -> Result<(), String> {
         let db_user_pass = match state.get_db_mutex().lock() {
             Ok(db) => db,
@@ -348,9 +348,9 @@ impl SourceDatabase {
 
     fn go_depth(
         &self,
-        state: &Arc<AppState>,
+        state: &AppState,
         wiki: &String,
-        categories_done: Arc<RwLock<HashSet<String>>>,
+        categories_done: &RwLock<HashSet<String>>,
         categories_to_check: &Vec<String>,
         depth: u16,
     ) -> Result<(), String> {
@@ -361,7 +361,7 @@ impl SourceDatabase {
 
         let error = Mutex::new(None);
         let new_categories: Vec<String> = vec![];
-        let new_categories = Arc::new(RwLock::new(new_categories));
+        let new_categories = RwLock::new(new_categories);
 
         let pool = match rayon::ThreadPoolBuilder::new()
             .num_threads(5) // TODO More? Less?
@@ -379,11 +379,11 @@ impl SourceDatabase {
                     let categories_batch: Vec<String> =
                         categories_batch.par_iter().map(|s| s.to_string()).collect();
                     match self.go_depth_batch(
-                        state,
+                        &state,
                         wiki,
                         &categories_batch,
-                        categories_done.clone(),
-                        new_categories.clone(),
+                        &categories_done,
+                        &new_categories,
                     ) {
                         Ok(_) => {} // OK
                         Err(e) => *error.lock().unwrap() = Some(e),
@@ -412,34 +412,31 @@ impl SourceDatabase {
             Some(categories_done.read().unwrap().len()),
         );
 
-        self.go_depth(state, wiki, categories_done, &new_categories, depth - 1)?;
+        self.go_depth(&state, wiki, categories_done, &new_categories, depth - 1)?;
         Ok(())
     }
 
     fn get_categories_in_tree(
         &self,
-        state: &Arc<AppState>,
+        state: &AppState,
         wiki: &String,
         title: &String,
         depth: u16,
     ) -> Result<Vec<String>, String> {
-        let categories_done = Arc::new(RwLock::new(HashSet::new()));
+        let categories_done = RwLock::new(HashSet::new());
         let title = SourceDatabaseParameters::s2u_ucfirst(
             title,
             self.params.category_namespace_is_case_insensitive,
         );
         (*categories_done.write().unwrap()).insert(title.to_owned());
-        self.go_depth(state, wiki, categories_done.clone(), &vec![title], depth)?;
-        let mut tmp = Arc::try_unwrap(categories_done)
-            .map_err(|_| format!("get_categories_in_tree"))?
-            .into_inner()
-            .unwrap();
+        self.go_depth(&state, wiki, &categories_done, &vec![title], depth)?;
+        let mut tmp = categories_done.into_inner().unwrap();
         Ok(tmp.drain().collect())
     }
 
     pub fn parse_category_list(
         &self,
-        state: &Arc<AppState>,
+        state: &AppState,
         wiki: &String,
         input: &Vec<SourceDatabaseCatDepth>,
     ) -> Result<Vec<Vec<String>>, String> {
@@ -448,7 +445,7 @@ impl SourceDatabase {
         let ret = input
             .par_iter()
             .filter_map(
-                |i| match self.get_categories_in_tree(state, wiki, &i.name, i.depth) {
+                |i| match self.get_categories_in_tree(&state, wiki, &i.name, i.depth) {
                     Ok(res) => Some(res),
                     Err(e) => {
                         *error.lock().unwrap() = Some(e.to_string());
@@ -620,7 +617,7 @@ impl SourceDatabase {
 
     pub fn get_pages(
         &mut self,
-        state: &Arc<AppState>,
+        state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList, String> {
         // Take wiki from given pagelist
@@ -806,7 +803,7 @@ impl SourceDatabase {
                         };
                         Platform::profile("DSDB::get_pages [primary:categories] START BATCH",Some(sql.1.len()));
                         match self.get_pages_for_primary_new_connection(
-                            state,
+                            &state,
                             &wiki,
                             &primary.to_string(),
                             &mut sql,
@@ -954,7 +951,7 @@ impl SourceDatabase {
 
     fn get_pages_for_primary_new_connection(
         &self,
-        state: &Arc<AppState>,
+        state: &AppState,
         wiki: &String,
         primary: &String,
         sql: &mut SQLtuple,
@@ -1279,6 +1276,7 @@ mod tests {
     use serde_json::Value;
     use std::env;
     use std::fs::File;
+    use std::sync::Arc;
 
     fn get_state() -> Arc<AppState> {
         let basedir = env::current_dir()

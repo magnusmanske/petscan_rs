@@ -185,22 +185,22 @@ impl Platform {
         Platform::profile("begin run", None);
         let start_time = SystemTime::now();
         self.output_redlinks = self.has_param("show_redlinks");
-        let mut candidate_sources: Vec<Arc<RwLock<Box<dyn DataSource + Send + Sync>>>> = vec![];
-        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceDatabase::new(
+        let mut candidate_sources: Vec<RwLock<Box<dyn DataSource + Send + Sync>>> = vec![];
+        candidate_sources.push(RwLock::new(Box::new(SourceDatabase::new(
             SourceDatabaseParameters::db_params(self),
-        )))));
-        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceSparql::new()))));
-        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceManual::new()))));
-        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourcePagePile::new()))));
-        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceSearch::new()))));
-        candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceWikidata::new()))));
+        ))));
+        candidate_sources.push(RwLock::new(Box::new(SourceSparql::new())));
+        candidate_sources.push(RwLock::new(Box::new(SourceManual::new())));
+        candidate_sources.push(RwLock::new(Box::new(SourcePagePile::new())));
+        candidate_sources.push(RwLock::new(Box::new(SourceSearch::new())));
+        candidate_sources.push(RwLock::new(Box::new(SourceWikidata::new())));
 
         if !candidate_sources
             .par_iter()
             .any(|source| (*source.read().unwrap()).can_run(&self))
         {
             candidate_sources = vec![];
-            candidate_sources.push(Arc::new(RwLock::new(Box::new(SourceLabels::new()))));
+            candidate_sources.push(RwLock::new(Box::new(SourceLabels::new())));
             if !candidate_sources
                 .par_iter()
                 .any(|source| (*source.read().unwrap()).can_run(&self))
@@ -485,7 +485,7 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
         let redlink_counter: HashMap<Title, LinkCount> = HashMap::new();
-        let redlink_counter = Arc::new(RwLock::new(redlink_counter));
+        let redlink_counter = RwLock::new(redlink_counter);
 
         let wiki = match result.wiki() {
             Some(wiki) => wiki.to_owned(),
