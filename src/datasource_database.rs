@@ -359,7 +359,7 @@ impl SourceDatabase {
         }
         Platform::profile("DSDB::do_depth begin", Some(categories_to_check.len()));
 
-        let error = Arc::new(Mutex::new(None));
+        let error = Mutex::new(None);
         let new_categories: Vec<String> = vec![];
         let new_categories = Arc::new(RwLock::new(new_categories));
 
@@ -444,7 +444,7 @@ impl SourceDatabase {
         input: &Vec<SourceDatabaseCatDepth>,
     ) -> Result<Vec<Vec<String>>, String> {
         let error: Option<String> = None;
-        let error = Arc::new(Mutex::new(error));
+        let error = Mutex::new(error);
         let ret = input
             .par_iter()
             .filter_map(
@@ -740,7 +740,7 @@ impl SourceDatabase {
                     "DSDB::get_pages [primary:categories] BATCHES begin",
                     Some(category_batches.len()),
                 );
-                let error = Arc::new(Mutex::new(None));
+                let error = Mutex::new(None);
                 let ret = Arc::new(Mutex::new(ret));
 
                 let pool = match rayon::ThreadPoolBuilder::new()

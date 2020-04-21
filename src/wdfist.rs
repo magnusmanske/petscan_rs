@@ -20,7 +20,7 @@ pub struct WDfist {
     item2files: HashMap<String, HashMap<String, usize>>,
     items: Vec<String>,
     files2ignore: HashSet<String>, // Requires normailzed, valid filenames
-    form_parameters: Arc<FormParameters>,
+    form_parameters: FormParameters,
     state: Arc<AppState>,
     wdf_allow_svg: bool,
     wdf_only_jpeg: bool,

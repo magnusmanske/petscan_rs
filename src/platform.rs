@@ -85,7 +85,7 @@ impl Combination {
 
 #[derive(Debug, Clone)]
 pub struct Platform {
-    form_parameters: Arc<FormParameters>,
+    form_parameters: FormParameters,
     state: Arc<AppState>,
     result: Option<PageList>,
     pub psid: Option<u64>,
@@ -102,7 +102,7 @@ pub struct Platform {
 impl Platform {
     pub fn new_from_parameters(form_parameters: &FormParameters, state: &AppState) -> Self {
         Self {
-            form_parameters: Arc::new((*form_parameters).clone()),
+            form_parameters: (*form_parameters).clone(),
             state: Arc::new(state.clone()),
             result: None,
             psid: None,
@@ -493,7 +493,7 @@ impl Platform {
         };
 
         let error: Option<String> = None;
-        let error = Arc::new(Mutex::new(error));
+        let error = Mutex::new(error);
 
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(5) // TODO More? Less?
@@ -1788,7 +1788,7 @@ impl Platform {
         &self.result
     }
 
-    pub fn form_parameters(&self) -> &Arc<FormParameters> {
+    pub fn form_parameters(&self) -> &FormParameters {
         &self.form_parameters
     }
 }
