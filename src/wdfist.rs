@@ -769,7 +769,7 @@ mod tests {
             item2files: HashMap::new(),
             items: items.par_iter().map(|s| s.to_string()).collect(),
             files2ignore: HashSet::new(),
-            form_parameters: Arc::new(form_parameters),
+            form_parameters: form_parameters,
             state: get_state(),
             wdf_allow_svg: false,
             wdf_only_jpeg: false,

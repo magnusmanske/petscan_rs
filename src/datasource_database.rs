@@ -741,7 +741,7 @@ impl SourceDatabase {
                     Some(category_batches.len()),
                 );
                 let error = Mutex::new(None);
-                let ret = Arc::new(Mutex::new(ret));
+                let ret = Mutex::new(ret);
 
                 let pool = match rayon::ThreadPoolBuilder::new()
                     .num_threads(10) // TODO More? Less?
@@ -836,8 +836,7 @@ impl SourceDatabase {
                     Some(e) => return Err(e.to_string()),
                     None => {}
                 }
-                let lock = Arc::try_unwrap(ret).expect("Arc still has multiple owners");
-                let ret = lock.into_inner().expect("Mutex cannot be locked");
+                let ret = ret.into_inner().expect("Mutex cannot be locked");
                 Platform::profile(
                     "DSDB::get_pages [primary:categories] RESULTS end",
                     Some(ret.len()),
