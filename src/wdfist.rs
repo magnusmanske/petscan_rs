@@ -105,7 +105,7 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches)?;
 
         // Collect pages and items, per wiki
         let mut wiki2title_q: HashMap<String, Vec<(String, String)>> = HashMap::new();
@@ -155,7 +155,7 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki(wiki);
-        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches)?;
         let ret: Vec<(String, String)> = rows
             .par_iter()
             .map(|row| my::from_row::<(String, String)>(row.to_owned()))
@@ -187,7 +187,7 @@ impl WDfist {
 
             // Run batches
             let pagelist = PageList::new_from_wiki("commonswiki");
-            let rows = match pagelist.run_batch_queries(self.state.clone(), batches) {
+            let rows = match pagelist.run_batch_queries(&self.state, batches) {
                 Ok(rows) => rows ,
                 Err(e) => {
                     *error.lock().unwrap() = Some(e.to_string());
@@ -248,7 +248,7 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches)?;
 
         // Process results
         let page_coords: Vec<(String, f64, f64)> = rows
@@ -342,7 +342,7 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches)?;
 
         // Process results
         let item2label: Vec<(String, String)> = rows
@@ -511,7 +511,7 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches)?;
 
         self.items = rows
             .par_iter()
@@ -631,7 +631,7 @@ impl WDfist {
 
             // Run batches, and get a list of files to remove
             let pagelist = PageList::new_from_wiki("wikidatawiki");
-            let rows = pagelist.run_batch_queries(self.state.clone(), batches)?;
+            let rows = pagelist.run_batch_queries(&self.state, batches)?;
             files_to_remove = rows
                 .par_iter()
                 .map(|row| my::from_row::<String>(row.to_owned()))

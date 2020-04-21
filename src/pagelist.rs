@@ -582,18 +582,6 @@ impl PageList {
                 .push(entry.title.with_underscores().to_string());
         });
         ret
-        /*
-        // THIS IS A PARALLEL VERSION BUT REQUIRES MUTEX. FASTER?
-        let ret = Mutex::new(HashMap::new());
-        self.entries.read().unwrap().par_iter().for_each(|entry| {
-            ret.lock()
-                .unwrap()
-                .entry(entry.title.namespace_id())
-                .or_insert(vec![])
-                .push(entry.title.with_underscores().to_string());
-        });
-        ret.into_inner().unwrap()
-        */
     }
 
     pub fn is_empty(&self) -> bool {
@@ -740,7 +728,7 @@ impl PageList {
 
     fn run_batch_query(
         &self,
-        state: Arc<AppState>,
+        state: &AppState,
         sql: &SQLtuple,
         wiki: &String,
     ) -> Result<Vec<my::Row>, String> {
@@ -760,7 +748,7 @@ impl PageList {
     /// Runs batched queries for process_batch_results and annotate_batch_results
     pub fn run_batch_queries(
         &self,
-        state: Arc<AppState>,
+        state: &AppState,
         batches: Vec<SQLtuple>,
     ) -> Result<Vec<my::Row>, String> {
         let wiki = self
@@ -768,9 +756,9 @@ impl PageList {
             .ok_or(format!("PageList::run_batch_queries: No wiki"))?;
 
         if true {
-            self.run_batch_queries_mutex(state, batches, wiki)
+            self.run_batch_queries_mutex(&state, batches, wiki)
         } else {
-            self.run_batch_queries_serial(state, batches, wiki)
+            self.run_batch_queries_serial(&state, batches, wiki)
         }
     }
 
@@ -778,14 +766,14 @@ impl PageList {
     /// Uses serial processing (not Mutex)
     fn run_batch_queries_serial(
         &self,
-        state: Arc<AppState>,
+        state: &AppState,
         batches: Vec<SQLtuple>,
         wiki: String,
     ) -> Result<Vec<my::Row>, String> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
         let mut rows: Vec<my::Row> = vec![];
         for sql in batches {
-            let mut data = self.run_batch_query(state.clone(), &sql, &wiki)?;
+            let mut data = self.run_batch_query(state, &sql, &wiki)?;
             rows.append(&mut data);
         }
         Ok(rows)
@@ -795,7 +783,7 @@ impl PageList {
     /// Uses Mutex. Complex and potentially slower. Probably obsolete.
     fn run_batch_queries_mutex(
         &self,
-        state: Arc<AppState>,
+        state: &AppState,
         batches: Vec<SQLtuple>,
         wiki: String,
     ) -> Result<Vec<my::Row>, String> {
@@ -803,7 +791,7 @@ impl PageList {
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
         let error: Mutex<Option<String>> = Mutex::new(None);
         batches.par_iter().for_each(|sql| {
-            match self.run_batch_query(state.clone(), sql, &wiki) {
+            match self.run_batch_query(state, sql, &wiki) {
                 Ok(mut data) => rows.lock().unwrap().append(&mut data),
                 Err(e) => *error.lock().unwrap() = Some(e),
             };
@@ -829,7 +817,7 @@ impl PageList {
         batches: Vec<SQLtuple>,
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
     ) -> Result<(), String> {
-        self.run_batch_queries(state, batches)?
+        self.run_batch_queries(&state, batches)?
             .iter()
             .filter_map(|row| f(row.to_owned()))
             .for_each(|entry| self.add_entry(entry));
@@ -866,7 +854,7 @@ impl PageList {
         col_ns: usize,
         f: &dyn Fn(my::Row, &mut PageListEntry),
     ) -> Result<(), String> {
-        self.run_batch_queries(state, batches)?
+        self.run_batch_queries(&state, batches)?
             .iter()
             .filter_map(|row| {
                 self.entry_from_row(row, col_title, col_ns)
