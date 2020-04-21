@@ -600,7 +600,7 @@ impl PageList {
         &self,
         pagelist: &PageList,
         platform: Option<&Platform>,
-    ) -> Result<Arc<RwLock<HashSet<PageListEntry>>>, String> {
+    ) -> Result<(), String> {
         let my_wiki = match self.wiki() {
             Some(wiki) => wiki,
             None => return Err("PageList::check_before_merging self.wiki is not set".to_string()),
@@ -635,15 +635,15 @@ impl PageList {
                 }
             }
         }
-        Ok(pagelist.entries())
+        Ok(())
     }
 
     pub fn union(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<(), String> {
-        let other_entries = self.check_before_merging(&pagelist, platform)?;
+        self.check_before_merging(&pagelist, platform)?;
         Platform::profile("PageList::union START UNION/1", None);
         let mut me = self.entries.write().unwrap();
         Platform::profile("PageList::union START UNION/2", None);
-        other_entries.read().unwrap().iter().for_each(|x| {
+        pagelist.entries().read().unwrap().iter().for_each(|x| {
             me.insert(x.to_owned());
         });
         Platform::profile("PageList::union UNION DONE", None);
@@ -655,7 +655,8 @@ impl PageList {
         pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
-        let other_entries = self.check_before_merging(&pagelist, platform)?;
+        self.check_before_merging(&pagelist, platform)?;
+        let other_entries = pagelist.entries();
         let other_entries = other_entries.read().unwrap();
         self.entries
             .write()
@@ -669,7 +670,8 @@ impl PageList {
         pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
-        let other_entries = self.check_before_merging(&pagelist, platform)?;
+        self.check_before_merging(&pagelist, platform)?;
+        let other_entries = pagelist.entries();
         let other_entries = other_entries.read().unwrap();
         self.entries
             .write()
@@ -813,7 +815,7 @@ impl PageList {
     /// Adds/replaces entries based on SQL query batch results.
     pub fn process_batch_results(
         &self,
-        state: Arc<AppState>,
+        state: &AppState,
         batches: Vec<SQLtuple>,
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
     ) -> Result<(), String> {
@@ -848,7 +850,7 @@ impl PageList {
     /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
     pub fn annotate_batch_results(
         &self,
-        state: Arc<AppState>,
+        state: &AppState,
         batches: Vec<SQLtuple>,
         col_title: usize,
         col_ns: usize,
@@ -892,7 +894,7 @@ impl PageList {
                 .collect::<Vec<SQLtuple>>();
 
             self.annotate_batch_results(
-                platform.state(),
+                &platform.state(),
                 batches,
                 0,
                 1,
@@ -1002,7 +1004,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             .collect::<Vec<SQLtuple>>();
 
         self.annotate_batch_results(
-            platform.state(),
+            &platform.state(),
             batches,
             0,
             1,
@@ -1051,17 +1053,15 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             })
             .collect::<Vec<SQLtuple>>();
         self.clear_entries();
-        self.process_batch_results(
-            platform.state(),
-            batches,
-            &|row: my::Row| match my::from_row_opt::<Vec<u8>>(row) {
+        self.process_batch_results(&platform.state(), batches, &|row: my::Row| {
+            match my::from_row_opt::<Vec<u8>>(row) {
                 Ok(pp_value) => {
                     let pp_value = String::from_utf8_lossy(&pp_value).into_owned();
                     Some(PageListEntry::new(Title::new(&pp_value, 0)))
                 }
                 Err(_e) => None,
-            },
-        )?;
+            }
+        })?;
         self.set_wiki(Some("wikidatawiki".to_string()));
         Ok(())
     }
@@ -1092,7 +1092,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         batches.chunks(5).for_each(|batch_chunk| {
             Platform::profile("PageList::convert_from_wikidata STARTING BATCH CHUNK", None);
             let res = self.process_batch_results(
-                platform.state(),
+                &platform.state(),
                 batch_chunk.to_vec(),
                 &|row: my::Row| {
                     let ips_site_page = my::from_row_opt::<Vec<u8>>(row).ok()?;

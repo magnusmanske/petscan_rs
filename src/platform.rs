@@ -674,7 +674,7 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
         result.annotate_batch_results(
-            self.state(),
+            &self.state(),
             batches,
             0,
             1,
@@ -744,7 +744,7 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
             result.annotate_batch_results(
-                self.state(),
+                &self.state(),
                 batches,
                 0,
                 1,
@@ -773,7 +773,7 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
             result.annotate_batch_results(
-                self.state(),
+                &self.state(),
                 batches,
                 0,
                 1,
@@ -1013,7 +1013,7 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries();
-        result.process_batch_results(self.state(), batches, &|row: my::Row| {
+        result.process_batch_results(&self.state(), batches, &|row: my::Row| {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
         })
@@ -1162,7 +1162,7 @@ impl Platform {
             .collect();
 
         result.clear_entries();
-        result.process_batch_results(self.state(), batches, &|row: my::Row| {
+        result.process_batch_results(&self.state(), batches, &|row: my::Row| {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
         })
@@ -1259,7 +1259,7 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries();
-        result.process_batch_results(self.state(), batches, &|row: my::Row| {
+        result.process_batch_results(&self.state(), batches, &|row: my::Row| {
             let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
             Some(PageListEntry::new(Title::new(&page_title, 0)))
         })?;
@@ -1357,7 +1357,7 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries();
-        let ret = result.process_batch_results(self.state(), batches, &|row: my::Row| {
+        let ret = result.process_batch_results(&self.state(), batches, &|row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
         });
