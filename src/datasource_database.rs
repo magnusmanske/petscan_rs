@@ -401,7 +401,9 @@ impl SourceDatabase {
             Some(e) => return Err(e.to_string()),
             None => {}
         }
-        let new_categories = new_categories.write().map_err(|e| format!("{:?}", e))?;
+        let new_categories = new_categories
+            .into_inner()
+            .map_err(|e| format!("{:?}", e))?;
 
         Platform::profile("DSDB::do_depth new categories", Some(new_categories.len()));
 

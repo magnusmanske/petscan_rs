@@ -213,13 +213,19 @@ impl Platform {
 
         if !candidate_sources
             .par_iter()
-            .any(|source| (*source.read().unwrap()).can_run(&self))
+            .any(|source| match source.read() {
+                Ok(s) => s.can_run(&self),
+                _ => false,
+            })
         {
             candidate_sources = vec![];
             candidate_sources.push(RwLock::new(Box::new(SourceLabels::new())));
             if !candidate_sources
                 .par_iter()
-                .any(|source| (*source.read().unwrap()).can_run(&self))
+                .any(|source| match source.read() {
+                    Ok(s) => s.can_run(&self),
+                    _ => false,
+                })
             {
                 return Err(format!("No possible data source found in parameters"));
             }
@@ -228,13 +234,16 @@ impl Platform {
         Platform::profile("begin threads 1", None);
         let results: HashMap<String, Arc<PageList>> = candidate_sources
             .par_iter()
-            .filter(|ds| ds.read().unwrap().can_run(&self))
-            .filter_map(|ds| {
-                let mut ds = ds.write().unwrap();
-                match ds.run(&self) {
+            .filter(|ds| match ds.read() {
+                Ok(s) => s.can_run(&self),
+                _ => false,
+            })
+            .filter_map(|ds| match ds.write() {
+                Ok(mut ds) => match ds.run(&self) {
                     Ok(data) => Some((ds.name(), Arc::new(data))),
                     _ => None,
-                }
+                },
+                _ => None,
             })
             .collect();
         self.wiki_by_source = results
@@ -248,8 +257,14 @@ impl Platform {
 
         let available_sources = candidate_sources
             .par_iter()
-            .filter(|s| (*s.read().unwrap()).can_run(&self))
-            .map(|s| (*s.read().unwrap()).name())
+            .filter(|s| match s.read() {
+                Ok(s) => s.can_run(&self),
+                _ => false,
+            })
+            .filter_map(|s| match s.read() {
+                Ok(s) => Some(s.name()),
+                _ => None,
+            })
             .collect();
         self.combination = self.get_combination(&available_sources);
         Platform::profile("before combine_results", None);
@@ -917,7 +932,10 @@ impl Platform {
                 }
             };
 
-            rows.lock().unwrap().append(&mut result);
+            match rows.lock() {
+                Ok(mut rows) => {rows.append(&mut result);}
+                Err(e) => {*error.lock().unwrap() = Some(format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e));}
+            }
         });
 
         // Check error
