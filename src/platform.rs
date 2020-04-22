@@ -250,14 +250,17 @@ impl Platform {
         Platform::profile("after post_process_result", None);
 
         if self.has_param("wdf_main") {
-            let pagelist = self
-                .result
-                .as_ref()
-                .ok_or(format!("No result set for WDfist"))?;
-            pagelist
-                .convert_to_wiki("wikidatawiki", self)
-                .map_err(|e| format!("Failed to convert result to Wikidata for WDfist: {}", e))?;
-            self.result = Some(pagelist.clone());
+            match &self.result {
+                Some(pagelist) => {
+                    pagelist
+                        .convert_to_wiki("wikidatawiki", self)
+                        .map_err(|e| {
+                            format!("Failed to convert result to Wikidata for WDfist: {}", e)
+                        })?;
+                }
+                None => return Err(format!("No result set for WDfist")),
+            }
+            //self.result = Some(pagelist);
             let mut wdfist =
                 WDfist::new(&self, &self.result).ok_or(format!("Cannot create WDfist"))?;
             self.result = None; // Safe space
@@ -1830,15 +1833,20 @@ mod tests {
     }
 
     fn check_results_for_psid_ext(psid: usize, addendum: &str, wiki: &str, expected: Vec<Title>) {
-        let platform = run_psid_ext(psid, addendum).unwrap();
-        let result = platform.result.clone().unwrap();
-        assert_eq!(result.wiki(), Some(wiki.to_string()));
+        let mut platform = run_psid_ext(psid, addendum).unwrap();
+        let s1 = platform.get_param_blank("sortby");
+        let s2 = platform.get_param_blank("sortorder");
+
+        let result = platform.result.unwrap();
+        let some_wiki = result.wiki();
+        assert_eq!(some_wiki, Some(wiki.to_string()));
 
         // Sort/crop results
         let mut entries = result.drain_into_sorted_vec(PageListSort::new_from_params(
-            &platform.get_param_blank("sortby"),
-            platform.get_param_blank("sortorder") == "descending".to_string(),
+            &s1,
+            s2 == "descending".to_string(),
         ));
+        platform.result = Some(result);
         platform.apply_results_limit(&mut entries);
 
         assert_eq!(entries.len(), expected.len());

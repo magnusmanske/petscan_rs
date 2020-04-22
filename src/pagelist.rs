@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Mutex, RwLock};
 use wikibase::mediawiki::api::NamespaceID;
 use wikibase::mediawiki::title::Title;
 
@@ -510,10 +510,10 @@ impl PageListEntry {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PageList {
-    wiki: Arc<RwLock<Option<String>>>,
-    entries: Arc<RwLock<HashSet<PageListEntry>>>,
+    wiki: RwLock<Option<String>>,
+    entries: RwLock<HashSet<PageListEntry>>,
 }
 
 impl PartialEq for PageList {
@@ -526,15 +526,15 @@ impl PartialEq for PageList {
 impl PageList {
     pub fn new_from_wiki(wiki: &str) -> Self {
         Self {
-            wiki: Arc::new(RwLock::new(Some(wiki.to_string()))),
-            entries: Arc::new(RwLock::new(HashSet::new())),
+            wiki: RwLock::new(Some(wiki.to_string())),
+            entries: RwLock::new(HashSet::new()),
         }
     }
 
     pub fn new_from_wiki_with_capacity(wiki: &str, capacity: usize) -> Self {
         Self {
-            wiki: Arc::new(RwLock::new(Some(wiki.to_string()))),
-            entries: Arc::new(RwLock::new(HashSet::with_capacity(capacity))),
+            wiki: RwLock::new(Some(wiki.to_string())),
+            entries: RwLock::new(HashSet::with_capacity(capacity)),
         }
     }
 
@@ -548,8 +548,8 @@ impl PageList {
         *self.entries.write().unwrap() = other.entries.read().unwrap().clone();
     }
 
-    pub fn entries(&self) -> Arc<RwLock<HashSet<PageListEntry>>> {
-        self.entries.clone()
+    pub fn entries(&self) -> &RwLock<HashSet<PageListEntry>> {
+        &self.entries
     }
 
     pub fn set_entries(&self, entries: HashSet<PageListEntry>) {
