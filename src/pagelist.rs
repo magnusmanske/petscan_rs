@@ -790,14 +790,21 @@ impl PageList {
         wiki: String,
     ) -> Result<Vec<my::Row>, String> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
-        let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
+
         let error: Mutex<Option<String>> = Mutex::new(None);
-        batches.par_iter().for_each(|sql| {
-            match self.run_batch_query(state, sql, &wiki) {
-                Ok(mut data) => rows.lock().unwrap().append(&mut data),
-                Err(e) => *error.lock().unwrap() = Some(e),
-            };
-        });
+        let rows: Vec<my::Row> = batches
+            .par_iter()
+            .map(|sql| {
+                match self.run_batch_query(state, sql, &wiki) {
+                    Ok(data) => data, //rows.lock().unwrap().append(&mut data),
+                    Err(e) => {
+                        *error.lock().unwrap() = Some(e);
+                        vec![]
+                    }
+                }
+            })
+            .flatten()
+            .collect();
 
         // Check error
         match error.lock() {
@@ -808,8 +815,21 @@ impl PageList {
             Err(e) => return Err(e.to_string()),
         }
 
-        let rows = rows.into_inner().unwrap();
         Ok(rows)
+
+        /*
+        let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
+        let error: Mutex<Option<String>> = Mutex::new(None);
+        batches.par_iter().for_each(|sql| {
+            match self.run_batch_query(state, sql, &wiki) {
+                Ok(mut data) => rows.lock().unwrap().append(&mut data),
+                Err(e) => *error.lock().unwrap() = Some(e),
+            };
+        });
+
+
+        let rows = rows.into_inner().unwrap();
+        Ok(rows)*/
     }
 
     /// Adds/replaces entries based on SQL query batch results.
