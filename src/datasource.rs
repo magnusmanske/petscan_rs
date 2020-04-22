@@ -187,7 +187,7 @@ impl DataSource for SourcePagePile {
             .map(|title| PageListEntry::new(Title::new_from_full(&title.to_string(), &api)))
             .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
         if ret.is_empty()? {
-            platform.warn(format!("<span tt='warn_pagepile'></span>"));
+            platform.warn(format!("<span tt='warn_pagepile'></span>"))?;
         }
         Ok(ret)
     }
@@ -266,7 +266,7 @@ impl DataSource for SourceSearch {
             .map(|title| PageListEntry::new(title.to_owned()))
             .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
         if ret.is_empty()? {
-            platform.warn(format!("<span tt='warn_search'></span>"));
+            platform.warn(format!("<span tt='warn_search'></span>"))?;
         }
         Ok(ret)
     }

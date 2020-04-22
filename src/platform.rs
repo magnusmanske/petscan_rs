@@ -117,17 +117,28 @@ impl Platform {
         }
     }
 
-    pub fn warnings(&self) -> Vec<String> {
-        self.warnings.read().unwrap().clone()
+    pub fn warnings(&self) -> Result<Vec<String>, String> {
+        Ok(self
+            .warnings
+            .read()
+            .map_err(|e| format!("{:?}", e))?
+            .clone())
     }
 
-    pub fn warn(&self, s: String) {
-        self.warnings.write().unwrap().push(s);
+    pub fn warn(&self, s: String) -> Result<(), String> {
+        self.warnings
+            .write()
+            .map_err(|e| format!("{:?}", e))?
+            .push(s);
+        Ok(())
     }
 
     pub fn label_exists(&self, label: &String) -> bool {
         // TODO normalization?
-        self.existing_labels.read().unwrap().contains(label)
+        match self.existing_labels.read() {
+            Ok(el) => el.contains(label),
+            _ => false,
+        }
     }
 
     pub fn combination(&self) -> Combination {
@@ -148,23 +159,25 @@ impl Platform {
             Some(wiki) => wiki,
             None => return false,
         };
-        match self
-            .namespace_case_sensitivity_cache
-            .read()
-            .unwrap()
-            .get(&(wiki.to_owned(), namespace_id))
-        {
-            Some(ret) => return *ret,
-            None => {}
+
+        match self.namespace_case_sensitivity_cache.read() {
+            Ok(ncsc) => match ncsc.get(&(wiki.to_owned(), namespace_id)) {
+                Some(ret) => return *ret,
+                None => {}
+            },
+            _ => return false,
         }
         let state = self.state();
         let api = match state.get_api_for_wiki(wiki.to_owned()) {
             Ok(api) => api,
             _ => {
-                self.namespace_case_sensitivity_cache
-                    .write()
-                    .unwrap()
-                    .insert((wiki.to_owned(), namespace_id), false);
+                match self.namespace_case_sensitivity_cache.write() {
+                    Ok(mut ncsc) => {
+                        ncsc.insert((wiki.to_owned(), namespace_id), false);
+                    }
+                    _ => return false,
+                }
+
                 return false;
             }
         };
@@ -174,10 +187,13 @@ impl Platform {
             Some(c) => (c == "case-sensitive"),
             None => false,
         };
-        self.namespace_case_sensitivity_cache
-            .write()
-            .unwrap()
-            .insert((wiki.to_owned(), namespace_id), ret);
+        match self.namespace_case_sensitivity_cache.write() {
+            Ok(mut ncsc) => {
+                ncsc.insert((wiki.to_owned(), namespace_id), ret);
+            }
+            _ => return false,
+        }
+
         ret
     }
 
@@ -446,7 +462,12 @@ impl Platform {
                     Ok(row) => match my::from_row_opt::<Vec<u8>>(row) {
                         Ok(wbx_text) => {
                             let wbx_text = String::from_utf8_lossy(&wbx_text).into_owned();
-                            self.existing_labels.write().unwrap().insert(wbx_text);
+                            match self.existing_labels.write() {
+                                Ok(mut el) => {
+                                    el.insert(wbx_text);
+                                }
+                                _ => {}
+                            }
                         }
                         Err(_e) => {}
                     },
@@ -535,7 +556,12 @@ impl Platform {
                                 Some(x) => *x + 1,
                                 None => 1,
                             };
-                            redlink_counter.write().unwrap().insert(title, new_value);
+                            match redlink_counter.write() {
+                                Ok(mut rc) => {
+                                    rc.insert(title, new_value);
+                                }
+                                _ => {} // Ignore error
+                            }
                         }
                         _ => {} // Ignore error
                     }
@@ -553,7 +579,7 @@ impl Platform {
             .get_param_default("min_redlink_count", "1")
             .parse::<LinkCount>()
             .unwrap_or(1);
-        let mut redlink_counter = redlink_counter.write().unwrap();
+        let mut redlink_counter = redlink_counter.write().map_err(|e| format!("{:?}", e))?;
         redlink_counter.retain(|_, &mut v| v >= min_redlinks);
         result.set_entries(
             redlink_counter
@@ -579,7 +605,7 @@ impl Platform {
             let title_ns: Vec<(String, NamespaceID)> = result
                 .entries()
                 .read()
-                .unwrap()
+                .map_err(|e| format!("{:?}", e))?
                 .par_iter()
                 .map(|entry| {
                     (
@@ -840,7 +866,7 @@ impl Platform {
         let titles: Vec<String> = result
             .entries()
             .read()
-            .unwrap()
+            .map_err(|e| format!("{:?}", e))?
             .par_iter()
             .filter_map(|entry| entry.title().full_pretty(&api))
             .collect();
@@ -895,44 +921,47 @@ impl Platform {
         });
 
         // Check error
-        match &*error.lock().unwrap() {
+        match &*error.lock().map_err(|e| format!("{:?}", e))? {
             Some(e) => return Err(e.to_string()),
             None => {}
         }
 
         // Rows to entries
-        rows.lock().unwrap().iter().for_each(|row| {
-            let full_page_title = match row.get(0) {
-                Some(title) => match title {
-                    my::Value::Bytes(uv) => match String::from_utf8(uv) {
-                        Ok(s) => s,
-                        Err(_) => return,
+        rows.lock()
+            .map_err(|e| format!("{:?}", e))?
+            .iter()
+            .for_each(|row| {
+                let full_page_title = match row.get(0) {
+                    Some(title) => match title {
+                        my::Value::Bytes(uv) => match String::from_utf8(uv) {
+                            Ok(s) => s,
+                            Err(_) => return,
+                        },
+                        _ => return,
                     },
-                    _ => return,
-                },
-                None => return,
-            };
-            let ips_item_id = match row.get(1) {
-                Some(title) => match title {
-                    my::Value::Int(i) => i,
-                    _ => return,
-                },
-                None => return,
-            };
-            let title = Title::new_from_full(&full_page_title, &api);
-            let tmp_entry = PageListEntry::new(title);
-            let mut entry = match result.entries().read().unwrap().get(&tmp_entry) {
-                Some(e) => (*e).clone(),
-                None => return,
-            };
+                    None => return,
+                };
+                let ips_item_id = match row.get(1) {
+                    Some(title) => match title {
+                        my::Value::Int(i) => i,
+                        _ => return,
+                    },
+                    None => return,
+                };
+                let title = Title::new_from_full(&full_page_title, &api);
+                let tmp_entry = PageListEntry::new(title);
+                let mut entry = match result.entries().read().unwrap().get(&tmp_entry) {
+                    Some(e) => (*e).clone(),
+                    None => return,
+                };
 
-            //f(row.clone(), &mut entry);
-            //let (ips_site_page,ips_item_id) = my::from_row::<(String, u64)>(*row);
-            let q = "Q".to_string() + &ips_item_id.to_string();
-            entry.set_wikidata_item(Some(q));
+                //f(row.clone(), &mut entry);
+                //let (ips_site_page,ips_item_id) = my::from_row::<(String, u64)>(*row);
+                let q = "Q".to_string() + &ips_item_id.to_string();
+                entry.set_wikidata_item(Some(q));
 
-            result.add_entry(entry).unwrap_or(());
-        });
+                result.add_entry(entry).unwrap_or(());
+            });
         Ok(())
 
         /*

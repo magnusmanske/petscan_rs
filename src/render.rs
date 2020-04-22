@@ -622,7 +622,7 @@ impl Render for RenderHTML {
             entries.len()
         ));
 
-        for warning in platform.warnings() {
+        for warning in platform.warnings()? {
             rows.push(format!(
                 "<div class='alert alert-warning' style='clear:both'>{}</div>",
                 warning

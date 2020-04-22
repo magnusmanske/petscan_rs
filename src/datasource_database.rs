@@ -253,7 +253,7 @@ impl DataSource for SourceDatabase {
         match &ret {
             Ok(pagelist) => {
                 if pagelist.is_empty()? {
-                    platform.warn(format!("<span tt='warn_categories'></span>"));
+                    platform.warn(format!("<span tt='warn_categories'></span>"))?;
                 }
             }
             _ => {}
