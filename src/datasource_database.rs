@@ -1298,7 +1298,7 @@ mod tests {
             .iter()
             .map(|pair| (pair.0.to_string(), pair.1.to_string()))
             .collect();
-        let platform = Platform::new_from_parameters(&fp, &state);
+        let platform = Platform::new_from_parameters(&fp, state.clone());
         let params = SourceDatabaseParameters::db_params(&platform);
         let mut dbs = SourceDatabase::new(params);
         dbs.get_pages(&state, None)

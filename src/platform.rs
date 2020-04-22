@@ -83,37 +83,37 @@ impl Combination {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Platform {
     form_parameters: FormParameters,
     state: Arc<AppState>,
     result: Option<PageList>,
     pub psid: Option<u64>,
-    existing_labels: Arc<RwLock<HashSet<String>>>,
+    existing_labels: RwLock<HashSet<String>>,
     combination: Combination,
     output_redlinks: bool,
     query_time: Option<Duration>,
     wiki_by_source: HashMap<String, String>,
     wdfist_result: Option<Value>,
-    warnings: Arc<RwLock<Vec<String>>>,
-    namespace_case_sensitivity_cache: Arc<RwLock<HashMap<(String, NamespaceID), bool>>>,
+    warnings: RwLock<Vec<String>>,
+    namespace_case_sensitivity_cache: RwLock<HashMap<(String, NamespaceID), bool>>,
 }
 
 impl Platform {
-    pub fn new_from_parameters(form_parameters: &FormParameters, state: &AppState) -> Self {
+    pub fn new_from_parameters(form_parameters: &FormParameters, state: Arc<AppState>) -> Self {
         Self {
             form_parameters: (*form_parameters).clone(),
-            state: Arc::new(state.clone()),
+            state: state,
             result: None,
             psid: None,
-            existing_labels: Arc::new(RwLock::new(HashSet::new())),
+            existing_labels: RwLock::new(HashSet::new()),
             combination: Combination::None,
             output_redlinks: false,
             query_time: None,
             wiki_by_source: HashMap::new(),
             wdfist_result: None,
-            warnings: Arc::new(RwLock::new(vec![])),
-            namespace_case_sensitivity_cache: Arc::new(RwLock::new(HashMap::new())),
+            warnings: RwLock::new(vec![]),
+            namespace_case_sensitivity_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -210,20 +210,20 @@ impl Platform {
         }
 
         Platform::profile("begin threads 1", None);
-        let results: HashMap<String, Arc<RwLock<PageList>>> = candidate_sources
+        let results: HashMap<String, Arc<PageList>> = candidate_sources
             .par_iter()
             .filter(|ds| ds.read().unwrap().can_run(&self))
             .filter_map(|ds| {
                 let mut ds = ds.write().unwrap();
                 match ds.run(&self) {
-                    Ok(data) => Some((ds.name(), Arc::new(RwLock::new(data)))),
+                    Ok(data) => Some((ds.name(), Arc::new(data))),
                     _ => None,
                 }
             })
             .collect();
         self.wiki_by_source = results
             .iter()
-            .filter_map(|(name, data)| match data.read().unwrap().wiki() {
+            .filter_map(|(name, data)| match data.wiki() {
                 Some(wiki) => Some((name.to_string(), wiki.to_string())),
                 None => None,
             })
@@ -243,10 +243,6 @@ impl Platform {
         let result = match Arc::try_unwrap(result) {
             Ok(result) => result,
             _ => return Err(format!("Can't unwrap arc")),
-        };
-        let result = match result.into_inner() {
-            Ok(result) => result,
-            _ => return Err(format!("Can't into_inner")),
         };
         self.result = Some(result);
         Platform::profile("after combine_results", None);
@@ -1732,9 +1728,9 @@ impl Platform {
 
     fn combine_results(
         &self,
-        results: &HashMap<String, Arc<RwLock<PageList>>>,
+        results: &HashMap<String, Arc<PageList>>,
         combination: &Combination,
-    ) -> Result<Arc<RwLock<PageList>>, String> {
+    ) -> Result<Arc<PageList>, String> {
         match combination {
             Combination::Source(s) => match results.get(s) {
                 Some(r) => Ok(r.clone()),
@@ -1746,9 +1742,7 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.write()
-                        .unwrap()
-                        .union(&r2.read().unwrap(), Some(&self))?;
+                    r1.union(&r2, Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1762,9 +1756,7 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.write()
-                        .unwrap()
-                        .intersection(&r2.read().unwrap(), Some(&self))?;
+                    r1.intersection(&r2, Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1774,9 +1766,7 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    r1.write()
-                        .unwrap()
-                        .difference(&r2.read().unwrap(), Some(&self))?;
+                    r1.difference(&r2, Some(&self))?;
                     Ok(r1)
                 }
             },
@@ -1830,7 +1820,7 @@ mod tests {
             }
             Err(e) => return Err(e),
         };
-        let mut platform = Platform::new_from_parameters(&form_parameters, &state);
+        let mut platform = Platform::new_from_parameters(&form_parameters, state);
         platform.run().unwrap();
         Ok(platform)
     }

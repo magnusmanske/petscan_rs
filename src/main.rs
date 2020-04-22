@@ -28,7 +28,10 @@ use std::env;
 use std::fs::File;
 use std::sync::Arc;
 
-fn process_form(mut form_parameters: FormParameters, state: &AppState) -> MyResponse {
+fn process_form(parameters:&str, state: web::Data<Arc<AppState>>) -> MyResponse {
+    let parameter_pairs = QString::from(parameters) ;
+    let parameter_pairs = parameter_pairs.to_pairs() ;
+    let mut form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
 
     // Restart command?
     match form_parameters.params.get("restart") {
@@ -124,7 +127,7 @@ fn process_form(mut form_parameters: FormParameters, state: &AppState) -> MyResp
 
     // Actually do something useful!
     state.modify_threads_running(1);
-    let mut platform = Platform::new_from_parameters(&form_parameters, &state);
+    let mut platform = Platform::new_from_parameters(&form_parameters, state.get_ref().clone());
     Platform::profile("platform initialized", None);
     let platform_result = platform.run();
     state.log_query_end(started_query_id);
@@ -164,11 +167,7 @@ fn process_form(mut form_parameters: FormParameters, state: &AppState) -> MyResp
 }
 
 async fn query_handler_get(req: HttpRequest,app_state: web::Data<Arc<AppState>>) -> Result<HttpResponse, Error> {
-    let parameter_pairs = QString::from(req.query_string()) ;
-    let parameter_pairs = parameter_pairs.to_pairs() ;
-    let form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
-    let response = process_form ( form_parameters , &app_state ) ;
-    response.respond()
+    process_form ( req.query_string() , app_state ).respond()
 }
 
 async fn query_handler_post(mut body: web::Payload,app_state: web::Data<Arc<AppState>>) -> Result<HttpResponse, Error> {
@@ -176,11 +175,8 @@ async fn query_handler_post(mut body: web::Payload,app_state: web::Data<Arc<AppS
     while let Some(item) = body.next().await {
         bytes.extend_from_slice(&item?);
     }
-    let parameter_pairs = QString::from(std::str::from_utf8(&bytes).unwrap_or("")) ;
-    let parameter_pairs = parameter_pairs.to_pairs() ;
-    let form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
-    let response = process_form ( form_parameters , &app_state ) ;
-    response.respond()
+    let parameters = std::str::from_utf8(&bytes).unwrap_or("") ;
+    process_form ( parameters , app_state ).respond()
 }
 
 #[actix_rt::main]
@@ -199,7 +195,8 @@ async fn main() -> std::io::Result<()> {
     let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
     let port = petscan_config["http_port"].as_u64().unwrap_or(80);
     
-    let app_state = web::Data::new(Arc::new(AppState::new_from_config(&petscan_config)));
+    let actual_app_state = Arc::new(AppState::new_from_config(&petscan_config)) ;
+    let app_state = web::Data::new(actual_app_state);
     HttpServer::new(move || {
         App::new()
             .app_data(app_state.clone())
