@@ -252,7 +252,7 @@ impl DataSource for SourceDatabase {
         let ret = self.get_pages(&platform.state(), None);
         match &ret {
             Ok(pagelist) => {
-                if pagelist.is_empty() {
+                if pagelist.is_empty()? {
                     platform.warn(format!("<span tt='warn_categories'></span>"));
                 }
             }
@@ -623,8 +623,8 @@ impl SourceDatabase {
         // Take wiki from given pagelist
         match primary_pagelist {
             Some(pl) => {
-                if self.params.wiki.is_none() && pl.wiki().is_some() {
-                    self.params.wiki = pl.wiki().to_owned();
+                if self.params.wiki.is_none() && pl.wiki()?.is_some() {
+                    self.params.wiki = pl.wiki()?;
                 }
             }
             None => {}
@@ -820,7 +820,7 @@ impl SourceDatabase {
                         }
                         Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH",None);
                         let mut ret = ret.lock().unwrap();
-                        if ret.is_empty() {
+                        if ret.is_empty().unwrap_or(true) {
                             *ret = pl2 ;
                         } else {
                             ret.union(&pl2, None).unwrap();
@@ -836,7 +836,7 @@ impl SourceDatabase {
                 let ret = ret.into_inner().expect("Mutex cannot be locked");
                 Platform::profile(
                     "DSDB::get_pages [primary:categories] RESULTS end",
-                    Some(ret.len()),
+                    Some(ret.len()?),
                 );
                 return Ok(ret);
             }
@@ -864,13 +864,13 @@ impl SourceDatabase {
                 let primary_pagelist = primary_pagelist.ok_or(format!(
                     "SourceDatabase::get_pages: pagelist: No primary_pagelist"
                 ))?;
-                ret.set_wiki(primary_pagelist.wiki());
-                if primary_pagelist.is_empty() {
+                ret.set_wiki(primary_pagelist.wiki()?)?;
+                if primary_pagelist.is_empty()? {
                     // Nothing to do, but that's OK
                     return Ok(ret);
                 }
 
-                let nslist = primary_pagelist.group_by_namespace();
+                let nslist = primary_pagelist.group_by_namespace()?;
                 let mut batches: Vec<SQLtuple> = vec![];
                 nslist.iter().for_each(|nsgroup| {
                     nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
@@ -893,7 +893,7 @@ impl SourceDatabase {
                 // Either way, it's done
                 is_before_after_done = true;
 
-                let wiki = primary_pagelist.wiki().ok_or(format!("No wiki 12345"))?;
+                let wiki = primary_pagelist.wiki()?.ok_or(format!("No wiki 12345"))?;
                 let partial_ret: Vec<PageList> = batches
                     .par_iter_mut()
                     .map(|mut sql| {
@@ -916,7 +916,7 @@ impl SourceDatabase {
                     .collect();
 
                 for pl2 in partial_ret {
-                    if ret.is_empty() {
+                    if ret.is_empty()? {
                         ret = pl2;
                     //ret.swap_entries(&mut pl2);
                     } else {
@@ -1235,8 +1235,8 @@ impl SourceDatabase {
             Some(sql.1.len()),
         );
 
-        pages_sublist.set_wiki(Some(wiki.to_string()));
-        pages_sublist.clear_entries();
+        pages_sublist.set_wiki(Some(wiki.to_string()))?;
+        pages_sublist.clear_entries()?;
 
         Platform::profile(
             "DSDB::get_pages_for_primary RETRIEVING RESULT",
@@ -1258,7 +1258,10 @@ impl SourceDatabase {
                     if self.params.gather_link_count {
                         entry.link_count = Some(link_count);
                     }
-                    pages_sublist.add_entry(entry)
+                    match pages_sublist.add_entry(entry) {
+                        Ok(_) => {}
+                        _ => {}
+                    }
                 },
             );
 
@@ -1312,8 +1315,8 @@ mod tests {
             ("project", "wikipedia"),
         ];
         let result = simulate_category_query(params).unwrap();
-        assert_eq!(result.wiki(), Some("enwiki".to_string()));
-        assert!(result.len() < 5); // This may change as more articles are written/categories added, please adjust!
+        assert_eq!(result.wiki(), Ok(Some("enwiki".to_string())));
+        assert!(result.len().unwrap() < 5); // This may change as more articles are written/categories added, please adjust!
         assert!(result
             .entries()
             .read()
@@ -1355,7 +1358,7 @@ mod tests {
             ("project", "wiktionary"),
         ];
         let result = simulate_category_query(params).unwrap();
-        assert!(result.len() > 0);
+        assert!(result.len().unwrap() > 0);
     }
 
     #[test]
@@ -1366,6 +1369,6 @@ mod tests {
             ("project", "wikipedia"),
         ];
         let result = simulate_category_query(params).unwrap();
-        assert!(result.len() > 0);
+        assert!(result.len().unwrap() > 0);
     }
 }

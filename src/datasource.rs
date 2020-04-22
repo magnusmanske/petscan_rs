@@ -53,7 +53,7 @@ impl DataSource for SourceLabels {
             .filter_map(|row| my::from_row_opt::<Vec<u8>>(row).ok())
             .map(|row| String::from_utf8_lossy(&row).into_owned())
             .filter_map(|row| Platform::entry_from_entity(&row))
-            .for_each(|entry| ret.add_entry(entry));
+            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
         Ok(ret)
     }
 }
@@ -127,7 +127,7 @@ impl DataSource for SourceWikidata {
                     None
                 }
             })
-            .for_each(|entry| ret.add_entry(entry));
+            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
         Ok(ret)
     }
 }
@@ -185,8 +185,8 @@ impl DataSource for SourcePagePile {
             .iter()
             .filter_map(|title| title.as_str())
             .map(|title| PageListEntry::new(Title::new_from_full(&title.to_string(), &api)))
-            .for_each(|entry| ret.add_entry(entry));
-        if ret.is_empty() {
+            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
+        if ret.is_empty()? {
             platform.warn(format!("<span tt='warn_pagepile'></span>"));
         }
         Ok(ret)
@@ -264,8 +264,8 @@ impl DataSource for SourceSearch {
         titles
             .iter()
             .map(|title| PageListEntry::new(title.to_owned()))
-            .for_each(|entry| ret.add_entry(entry));
-        if ret.is_empty() {
+            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
+        if ret.is_empty()? {
             platform.warn(format!("<span tt='warn_search'></span>"));
         }
         Ok(ret)
@@ -312,7 +312,7 @@ impl DataSource for SourceManual {
                     None
                 }
             })
-            .for_each(|entry| ret.add_entry(entry));
+            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
         Ok(ret)
     }
 }
@@ -396,7 +396,7 @@ impl DataSource for SourceSparql {
                         match j[&first_var]["value"].as_str() {
                             Some(entity_url) => match api.extract_entity_from_uri(entity_url) {
                                 Ok(entity) => match Platform::entry_from_entity(&entity) {
-                                    Some(entry) => ret.add_entry(entry),
+                                    Some(entry) => ret.add_entry(entry).unwrap_or(()),
                                     None => {}
                                 },
                                 _ => {}
