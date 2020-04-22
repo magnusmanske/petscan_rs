@@ -167,8 +167,7 @@ impl Platform {
             },
             _ => return false,
         }
-        let state = self.state();
-        let api = match state.get_api_for_wiki(wiki.to_owned()) {
+        let api = match self.state().get_api_for_wiki(wiki.to_owned()) {
             Ok(api) => api,
             _ => {
                 match self.namespace_case_sensitivity_cache.write() {
@@ -232,7 +231,7 @@ impl Platform {
         }
 
         Platform::profile("begin threads 1", None);
-        let results: HashMap<String, Arc<PageList>> = candidate_sources
+        let mut results: HashMap<String, PageList> = candidate_sources
             .par_iter()
             .filter(|ds| match ds.read() {
                 Ok(s) => s.can_run(&self),
@@ -240,7 +239,7 @@ impl Platform {
             })
             .filter_map(|ds| match ds.write() {
                 Ok(mut ds) => match ds.run(&self) {
-                    Ok(data) => Some((ds.name(), Arc::new(data))),
+                    Ok(data) => Some((ds.name(), data)),
                     _ => None,
                 },
                 _ => None,
@@ -268,13 +267,9 @@ impl Platform {
             .collect();
         self.combination = self.get_combination(&available_sources);
         Platform::profile("before combine_results", None);
-        let result = self.combine_results(&results, &self.combination)?;
+        let result = self.combine_results(&mut results, &self.combination)?;
         drop(results);
 
-        let result = match Arc::try_unwrap(result) {
-            Ok(result) => result,
-            _ => return Err(format!("Can't unwrap arc")),
-        };
         self.result = Some(result);
         Platform::profile("after combine_results", None);
         self.post_process_result(&available_sources)?;
@@ -459,9 +454,7 @@ impl Platform {
             Ok(db) => db,
             Err(e) => return Err(format!("Bad mutex: {:?}", e)),
         };
-        let mut conn = self
-            .state
-            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
 
         let mut error: Option<String> = None;
         batches.iter().for_each(|sql| {
@@ -1784,12 +1777,12 @@ impl Platform {
 
     fn combine_results(
         &self,
-        results: &HashMap<String, Arc<PageList>>,
+        results: &mut HashMap<String, PageList>,
         combination: &Combination,
-    ) -> Result<Arc<PageList>, String> {
+    ) -> Result<PageList, String> {
         match combination {
-            Combination::Source(s) => match results.get(s) {
-                Some(r) => Ok(r.clone()),
+            Combination::Source(s) => match results.remove(s) {
+                Some(r) => Ok(r),
                 None => Err(format!("No result for source {}", &s)),
             },
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
