@@ -794,13 +794,11 @@ impl PageList {
         let error: Mutex<Option<String>> = Mutex::new(None);
         let rows: Vec<my::Row> = batches
             .par_iter()
-            .map(|sql| {
-                match self.run_batch_query(state, sql, &wiki) {
-                    Ok(data) => data, //rows.lock().unwrap().append(&mut data),
-                    Err(e) => {
-                        *error.lock().unwrap() = Some(e);
-                        vec![]
-                    }
+            .map(|sql| match self.run_batch_query(state, sql, &wiki) {
+                Ok(data) => data,
+                Err(e) => {
+                    *error.lock().unwrap() = Some(e);
+                    vec![]
                 }
             })
             .flatten()
@@ -816,20 +814,6 @@ impl PageList {
         }
 
         Ok(rows)
-
-        /*
-        let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
-        let error: Mutex<Option<String>> = Mutex::new(None);
-        batches.par_iter().for_each(|sql| {
-            match self.run_batch_query(state, sql, &wiki) {
-                Ok(mut data) => rows.lock().unwrap().append(&mut data),
-                Err(e) => *error.lock().unwrap() = Some(e),
-            };
-        });
-
-
-        let rows = rows.into_inner().unwrap();
-        Ok(rows)*/
     }
 
     /// Adds/replaces entries based on SQL query batch results.
