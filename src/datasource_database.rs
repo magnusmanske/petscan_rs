@@ -829,6 +829,7 @@ impl SourceDatabase {
                         let mut ret = match ret.lock() {
                             Ok(ret) => {ret}
                             Err(e) => {
+                                Platform::profile(format!("DSDB::get_pages [primary:categories] 1 ERROR: {}",e).as_str(),None);
                                 *error.lock().unwrap() = Some(e.to_string());
                                 return;
                             }
@@ -839,6 +840,7 @@ impl SourceDatabase {
                             match ret.union(&pl2, None) {
                                 Ok(_) => {}
                                 Err(e) => {
+                                    Platform::profile(format!("DSDB::get_pages [primary:categories] 2 ERROR: {}",e).as_str(),None);
                                     *error.lock().unwrap() = Some(e.to_string());
                                 }
                             }
