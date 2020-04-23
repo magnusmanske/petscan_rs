@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppState, DbUserPass};
 use crate::datasource::DataSource;
 use crate::datasource::SQLtuple;
 use crate::pagelist::*;
@@ -9,11 +9,21 @@ use core::ops::Sub;
 use mysql as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Mutex, MutexGuard, RwLock};
 use wikibase::mediawiki::api::{Api, NamespaceID};
 use wikibase::mediawiki::title::Title;
 
 static MAX_CATEGORY_BATCH_SIZE: usize = 2500;
+
+#[derive(Debug)]
+struct DsdbParams {
+    link_count_sql: String,
+    wiki: String,
+    primary: String,
+    sql_before_after: SQLtuple,
+    is_before_after_done: bool,
+    conn: my::Conn,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceDatabaseCatDepth {
@@ -622,11 +632,114 @@ impl SourceDatabase {
         ret
     }
 
-    pub fn get_pages(
+    fn get_pages_for_category_batch(
+        &self,
+        params: &DsdbParams,
+        category_batch: &Vec<Vec<String>>,
+        state: &AppState,
+        error: &Mutex<Option<String>>,
+        ret: &Mutex<PageList>,
+    ) {
+        let mut sql = Platform::sql_tuple();
+        match self.params.combine.as_str() {
+            "subset" => {
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
+                sql.0 += &params.link_count_sql;
+                sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
+                Platform::append_sql(&mut sql, Platform::prep_quote(&category_batch[0]));
+                sql.0 += ")) cl0";
+                for a in 1..category_batch.len() {
+                    sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
+                    Platform::append_sql(&mut sql, Platform::prep_quote(&category_batch[a]));
+                    sql.0 += ")";
+                }
+            }
+            "union" => {
+                let mut tmp: HashSet<String> = HashSet::new();
+                category_batch.iter().for_each(|group| {
+                    group.iter().for_each(|s| {
+                        tmp.insert(s.to_string());
+                    });
+                });
+                let tmp = tmp
+                    .par_iter()
+                    .map(|s| s.to_owned())
+                    .collect::<Vec<String>>();
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
+                sql.0 += &params.link_count_sql;
+                sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
+                Platform::append_sql(&mut sql, Platform::prep_quote(&tmp));
+                sql.0 += ")) cl0";
+            }
+            other => {
+                panic!("self.params.combine is '{}'", &other);
+            }
+        }
+        sql.0 += " INNER JOIN (page p";
+        sql.0 += ") ON p.page_id=cl0.cl_from";
+        let mut pl2 = PageList::new_from_wiki(&params.wiki.clone());
+        let api = match state.get_api_for_wiki(params.wiki.clone()) {
+            Ok(api) => api,
+            Err(e) => {
+                *error.lock().unwrap() = Some(e.to_string());
+                return;
+            }
+        };
+        Platform::profile(
+            "DSDB::get_pages [primary:categories] START BATCH",
+            Some(sql.1.len()),
+        );
+        match self.get_pages_for_primary_new_connection(
+            &state,
+            &params.wiki,
+            &params.primary.to_string(),
+            &mut sql,
+            &mut params.sql_before_after.clone(),
+            &mut pl2,
+            &mut params.is_before_after_done.clone(),
+            api,
+        ) {
+            Ok(_) => {}
+            Err(e) => {
+                *error.lock().unwrap() = Some(e.to_string());
+                return;
+            }
+        }
+        Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH", None);
+        let mut ret = match ret.lock() {
+            Ok(ret) => ret,
+            Err(e) => {
+                Platform::profile(
+                    format!("DSDB::get_pages [primary:categories] 1 ERROR: {}", e).as_str(),
+                    None,
+                );
+                *error.lock().unwrap() = Some(e.to_string());
+                return;
+            }
+        };
+        if ret.is_empty().unwrap_or(true) {
+            *ret = pl2;
+        } else {
+            match ret.union(&pl2, None) {
+                Ok(_) => {}
+                Err(e) => {
+                    Platform::profile(
+                        format!("DSDB::get_pages [primary:categories] 2 ERROR: {}", e).as_str(),
+                        None,
+                    );
+                    *error.lock().unwrap() = Some(e.to_string());
+                }
+            }
+        }
+        Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE", None);
+    }
+
+    fn get_pages_initialize_query(
         &mut self,
         state: &AppState,
         primary_pagelist: Option<&PageList>,
-    ) -> Result<PageList, String> {
+        db_user_pass: &mut DbUserPass,
+    ) -> Result<DsdbParams, String> {
         // Take wiki from given pagelist
         match primary_pagelist {
             Some(pl) => {
@@ -661,11 +774,6 @@ impl SourceDatabase {
             &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
         )?;
 
-        let db_user_pass = match state.get_db_mutex().lock() {
-            Ok(db) => db,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
-        let mut ret = PageList::new_from_wiki(&wiki);
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
         self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn)?;
 
@@ -730,176 +838,88 @@ impl SourceDatabase {
             sql_before_after.0 += " ";
         }
 
-        let mut sql = Platform::sql_tuple();
+        Ok(DsdbParams {
+            link_count_sql: link_count_sql.to_string(),
+            wiki: wiki,
+            primary: primary.to_string(),
+            sql_before_after: sql_before_after,
+            is_before_after_done: is_before_after_done,
+            conn: conn,
+        })
+    }
 
-        match primary {
-            "categories" => {
-                let category_batches = if self.params.use_new_category_mode {
-                    self.iterate_category_batches(&self.cat_pos, 0)
-                } else {
-                    vec![self.cat_pos.to_owned()]
-                };
+    fn get_pages_categories(
+        &mut self,
+        params: &DsdbParams,
+        state: &AppState,
+        ret: PageList,
+    ) -> Result<PageList, String> {
+        let category_batches = if self.params.use_new_category_mode {
+            self.iterate_category_batches(&self.cat_pos, 0)
+        } else {
+            vec![self.cat_pos.to_owned()]
+        };
 
-                Platform::profile(
-                    "DSDB::get_pages [primary:categories] BATCHES begin",
-                    Some(category_batches.len()),
-                );
-                let error = Mutex::new(None);
-                let ret = Mutex::new(ret);
+        Platform::profile(
+            "DSDB::get_pages [primary:categories] BATCHES begin",
+            Some(category_batches.len()),
+        );
+        let error = Mutex::new(None);
+        let ret = Mutex::new(ret);
 
-                let pool = match rayon::ThreadPoolBuilder::new()
-                    .num_threads(10) // TODO More? Less?
-                    .build()
-                {
-                    Ok(pool) => pool,
-                    Err(e) => return Err(e.to_string()),
-                };
+        let pool = match rayon::ThreadPoolBuilder::new()
+            .num_threads(10) // TODO More? Less?
+            .build()
+        {
+            Ok(pool) => pool,
+            Err(e) => return Err(e.to_string()),
+        };
 
-                pool.install(|| {
-                    category_batches.par_iter().for_each(|category_batch| {
-                        let mut sql = Platform::sql_tuple();
-                        match self.params.combine.as_str() {
-                            "subset" => {
-                                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
-                                sql.0 += link_count_sql;
-                                sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
-                                Platform::append_sql(
-                                    &mut sql,
-                                    Platform::prep_quote(&category_batch[0]),
-                                );
-                                sql.0 += ")) cl0";
-                                for a in 1..category_batch.len() {
-                                    sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
-                                    Platform::append_sql(
-                                        &mut sql,
-                                        Platform::prep_quote(&category_batch[a]),
-                                    );
-                                    sql.0 += ")";
-                                }
-                            }
-                            "union" => {
-                                let mut tmp: HashSet<String> = HashSet::new();
-                                category_batch.iter().for_each(|group| {
-                                    group.iter().for_each(|s| {
-                                        tmp.insert(s.to_string());
-                                    });
-                                });
-                                let tmp = tmp
-                                    .par_iter()
-                                    .map(|s| s.to_owned())
-                                    .collect::<Vec<String>>();
-                                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
-                                sql.0 += link_count_sql;
-                                sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
-                                Platform::append_sql(&mut sql, Platform::prep_quote(&tmp));
-                                sql.0 += ")) cl0";
-                            }
-                            other => {
-                                panic!("self.params.combine is '{}'", &other);
-                            }
-                        }
-                        sql.0 += " INNER JOIN (page p";
-                        sql.0 += ") ON p.page_id=cl0.cl_from";
-                        let mut pl2 = PageList::new_from_wiki(&wiki.clone());
-                        let api = match state.get_api_for_wiki(wiki.clone()) {
-                            Ok(api) => api,
-                            Err(e) => {
-                                *error.lock().unwrap() = Some(e.to_string());
-                                return ;
-                            }
-                        };
-                        Platform::profile("DSDB::get_pages [primary:categories] START BATCH",Some(sql.1.len()));
-                        match self.get_pages_for_primary_new_connection(
-                            &state,
-                            &wiki,
-                            &primary.to_string(),
-                            &mut sql,
-                            &mut sql_before_after.clone(),
-                            &mut pl2,
-                            &mut is_before_after_done.clone(),
-                            api,
-                        ) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                *error.lock().unwrap() = Some(e.to_string());
-                                return ;
-                            }
-                        }
-                        Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH",None);
-                        let mut ret = match ret.lock() {
-                            Ok(ret) => {ret}
-                            Err(e) => {
-                                Platform::profile(format!("DSDB::get_pages [primary:categories] 1 ERROR: {}",e).as_str(),None);
-                                *error.lock().unwrap() = Some(e.to_string());
-                                return;
-                            }
-                        };
-                        if ret.is_empty().unwrap_or(true) {
-                            *ret = pl2 ;
-                        } else {
-                            match ret.union(&pl2, None) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    Platform::profile(format!("DSDB::get_pages [primary:categories] 2 ERROR: {}",e).as_str(),None);
-                                    *error.lock().unwrap() = Some(e.to_string());
-                                }
-                            }
-                        }
-                        Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE",None);
-                    });
-                } ) ;
+        pool.install(|| {
+            category_batches.par_iter().for_each(|category_batch| {
+                self.get_pages_for_category_batch(&params, category_batch, &state, &error, &ret);
+            });
+        });
 
-                match &*error.lock().map_err(|e| format!("{:?}", e))? {
-                    Some(e) => return Err(e.to_string()),
-                    None => {}
-                }
-                let ret = ret.into_inner().expect("Mutex cannot be locked");
-                Platform::profile(
-                    "DSDB::get_pages [primary:categories] RESULTS end",
-                    Some(ret.len()?),
-                );
-                return Ok(ret);
-            }
-            "no_wikidata" => {
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
-                sql.0 += link_count_sql;
-                sql.0 += " FROM page p";
-                if !is_before_after_done {
-                    is_before_after_done = true;
-                    Platform::append_sql(&mut sql, sql_before_after.clone());
-                }
-                sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')" ;
-            }
-            "templates" | "links_from" => {
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
-                sql.0 += link_count_sql;
-                sql.0 += " FROM page p";
-                if !is_before_after_done {
-                    is_before_after_done = true;
-                    Platform::append_sql(&mut sql, sql_before_after.clone());
-                }
-                sql.0 += " WHERE 1=1";
-            }
-            "pagelist" => {
-                let primary_pagelist = primary_pagelist.ok_or(format!(
-                    "SourceDatabase::get_pages: pagelist: No primary_pagelist"
-                ))?;
-                ret.set_wiki(primary_pagelist.wiki()?)?;
-                if primary_pagelist.is_empty()? {
-                    // Nothing to do, but that's OK
-                    return Ok(ret);
-                }
+        match &*error.lock().map_err(|e| format!("{:?}", e))? {
+            Some(e) => return Err(e.to_string()),
+            None => {}
+        }
+        let ret = ret.into_inner().expect("Mutex cannot be locked");
+        Platform::profile(
+            "DSDB::get_pages [primary:categories] RESULTS end",
+            Some(ret.len()?),
+        );
+        return Ok(ret);
+    }
 
-                let nslist = primary_pagelist.group_by_namespace()?;
-                let mut batches: Vec<SQLtuple> = vec![];
-                nslist.iter().for_each(|nsgroup| {
+    fn get_pages_pagelist(
+        &mut self,
+        mut params: DsdbParams,
+        state: &AppState,
+        primary_pagelist: Option<&PageList>,
+        db_user_pass: MutexGuard<DbUserPass>,
+        mut ret: PageList,
+    ) -> Result<PageList, String> {
+        let primary_pagelist = primary_pagelist.ok_or(format!(
+            "SourceDatabase::get_pages: pagelist: No primary_pagelist"
+        ))?;
+        ret.set_wiki(primary_pagelist.wiki()?)?;
+        if primary_pagelist.is_empty()? {
+            // Nothing to do, but that's OK
+            return Ok(ret);
+        }
+
+        let nslist = primary_pagelist.group_by_namespace()?;
+        let mut batches: Vec<SQLtuple> = vec![];
+        nslist.iter().for_each(|nsgroup| {
                     nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
                         let mut sql = Platform::sql_tuple();
                         sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
-                        sql.0 += link_count_sql;
+                        sql.0 += &params.link_count_sql;
                         sql.0 += " FROM page p";
-                        if !is_before_after_done {
-                            Platform::append_sql(&mut sql, sql_before_after.clone());
+                        if !params.is_before_after_done {
+                            Platform::append_sql(&mut sql, params.sql_before_after.clone());
                         }
                         sql.0 += " WHERE (p.page_namespace=";
                         sql.0 += &nsgroup.0.to_string();
@@ -910,53 +930,102 @@ impl SourceDatabase {
                     });
                 });
 
-                // Either way, it's done
-                is_before_after_done = true;
+        // Either way, it's done
+        params.is_before_after_done = true;
 
-                let error = Mutex::new(None);
-                let wiki = primary_pagelist.wiki()?.ok_or(format!("No wiki 12345"))?;
-                let partial_ret: Vec<PageList> = batches
-                    .par_iter_mut()
-                    .filter_map(|mut sql| {
-                        let mut conn = match state.get_wiki_db_connection(&db_user_pass, &wiki) {
-                            Ok(conn) => conn,
-                            Err(e) => {
-                                *error.lock().unwrap() = Some(format!("{:?}", e));
-                                return None;
-                            }
-                        };
-                        let sql_before_after = sql_before_after.clone();
-                        let mut is_before_after_done = is_before_after_done.clone();
-                        let mut pl2 = PageList::new_from_wiki(&wiki.clone());
-                        let api = match state.get_api_for_wiki(wiki.clone()) {
-                            Ok(api) => api,
-                            _ => return None,
-                        };
-                        match self.get_pages_for_primary(
-                            &mut conn,
-                            &primary.to_string(),
-                            &mut sql,
-                            sql_before_after,
-                            &mut pl2,
-                            &mut is_before_after_done,
-                            api,
-                        ) {
-                            Ok(_) => Some(pl2),
-                            _ => None,
-                        }
-                    })
-                    .collect();
-                &*error.lock().map_err(|e| format!("{:?}", e))?;
-
-                for pl2 in partial_ret {
-                    if ret.is_empty()? {
-                        ret = pl2;
-                    //ret.swap_entries(&mut pl2);
-                    } else {
-                        ret.union(&pl2, None)?;
+        let error = Mutex::new(None);
+        let wiki = primary_pagelist.wiki()?.ok_or(format!("No wiki 12345"))?;
+        let partial_ret: Vec<PageList> = batches
+            .iter_mut()
+            .filter_map(|mut sql| {
+                let mut conn = match state.get_wiki_db_connection(&db_user_pass, &wiki) {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        *error.lock().unwrap() = Some(format!("{:?}", e));
+                        return None;
                     }
+                };
+                let sql_before_after = params.sql_before_after.clone();
+                let mut is_before_after_done = params.is_before_after_done.clone();
+                let mut pl2 = PageList::new_from_wiki(&wiki.clone());
+                let api = match state.get_api_for_wiki(wiki.clone()) {
+                    Ok(api) => api,
+                    _ => return None,
+                };
+                match self.get_pages_for_primary(
+                    &mut conn,
+                    &params.primary.to_string(),
+                    &mut sql,
+                    sql_before_after,
+                    &mut pl2,
+                    &mut is_before_after_done,
+                    api,
+                ) {
+                    Ok(_) => Some(pl2),
+                    _ => None,
                 }
-                return Ok(ret);
+            })
+            .collect();
+        &*error.lock().map_err(|e| format!("{:?}", e))?;
+
+        for pl2 in partial_ret {
+            if ret.is_empty()? {
+                ret = pl2;
+            //ret.swap_entries(&mut pl2);
+            } else {
+                ret.union(&pl2, None)?;
+            }
+        }
+        return Ok(ret);
+    }
+
+    pub fn get_pages(
+        &mut self,
+        state: &AppState,
+        primary_pagelist: Option<&PageList>,
+    ) -> Result<PageList, String> {
+        let mut db_user_pass = match state.get_db_mutex().lock() {
+            Ok(db) => db,
+            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
+        };
+        let mut params =
+            self.get_pages_initialize_query(state, primary_pagelist, &mut db_user_pass)?;
+        let mut ret = PageList::new_from_wiki(&params.wiki);
+
+        let mut sql = Platform::sql_tuple();
+
+        match params.primary.as_str() {
+            "categories" => {
+                return self.get_pages_categories(&params, &state, ret);
+            }
+            "no_wikidata" => {
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
+                sql.0 += &params.link_count_sql;
+                sql.0 += " FROM page p";
+                if !params.is_before_after_done {
+                    params.is_before_after_done = true;
+                    Platform::append_sql(&mut sql, params.sql_before_after.clone());
+                }
+                sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')" ;
+            }
+            "templates" | "links_from" => {
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
+                sql.0 += &params.link_count_sql;
+                sql.0 += " FROM page p";
+                if !params.is_before_after_done {
+                    params.is_before_after_done = true;
+                    Platform::append_sql(&mut sql, params.sql_before_after.clone());
+                }
+                sql.0 += " WHERE 1=1";
+            }
+            "pagelist" => {
+                return self.get_pages_pagelist(
+                    params,
+                    &state,
+                    primary_pagelist,
+                    db_user_pass,
+                    ret,
+                );
             }
             other => {
                 return Err(format!(
@@ -966,18 +1035,14 @@ impl SourceDatabase {
             }
         }
 
-        let wiki = match &self.params.wiki {
-            Some(wiki) => wiki,
-            None => return Err(format!("No wiki 12345")),
-        };
         self.get_pages_for_primary(
-            &mut conn,
-            &primary.to_string(),
+            &mut params.conn,
+            &params.primary.to_string(),
             &mut sql,
-            sql_before_after,
+            params.sql_before_after,
             &mut ret,
-            &mut is_before_after_done,
-            state.get_api_for_wiki(wiki.clone())?,
+            &mut params.is_before_after_done,
+            state.get_api_for_wiki(params.wiki.clone())?,
         )?;
         Ok(ret)
     }
