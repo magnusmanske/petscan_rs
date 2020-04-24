@@ -166,10 +166,9 @@ impl WDfist {
     }
 
     fn follow_language_links(&mut self) -> Result<(), String> {
-        let error: Mutex<Option<String>> = Mutex::new(None);
         let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
         let wiki2title_q = self.get_language_links()?;
-        wiki2title_q.par_iter().for_each(|(wiki, title_q)|{
+        wiki2title_q.par_iter().map(|(wiki, title_q)|{
             // Prepare batches
             let page2q: HashMap<String, String> = title_q
                 .par_iter()
@@ -186,28 +185,14 @@ impl WDfist {
             });
 
             // Run batches
-            let pagelist = PageList::new_from_wiki("commonswiki");
-            let rows = match pagelist.run_batch_queries(&self.state, batches) {
-                Ok(rows) => rows ,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(e.to_string());
-                    return;
-                }
-            } ;
+            let rows = PageList::new_from_wiki("commonswiki").run_batch_queries(&self.state, batches).map_err(|e|format!("{:?}",e))?;
 
             // Collect pages and items, per wiki
             let page_file: Vec<(String, String)> = rows
                     .par_iter()
                     .map(|row| my::from_row::<(String, String)>(row.to_owned()))
                     .collect();
-            let page_file = match self.filter_page_images(wiki, page_file) {
-                Ok(page_file) => page_file,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(e.to_string());
-                    return;
-                }
-            };
-            let mut tmp = page_file
+            let mut page_file = self.filter_page_images(wiki, page_file).map_err(|e|format!("{:?}",e))?
                 .par_iter()
                 .filter_map(|(page, file)| match page2q.get(page) {
                     Some(q) => {
@@ -215,17 +200,9 @@ impl WDfist {
                     }
                     None => None
                 }).collect();
-            add_item_file.lock().unwrap().append(&mut tmp);
-        });
-
-        // Check error
-        match error.lock() {
-            Ok(error) => match &*error {
-                Some(e) => return Err(e.to_string()),
-                None => {}
-            },
-            Err(e) => return Err(e.to_string()),
-        }
+            add_item_file.lock().unwrap().append(&mut page_file);
+            Ok(())
+        }).collect::<Result<_,String>>()?;
 
         // Add files
         add_item_file
@@ -257,69 +234,53 @@ impl WDfist {
             .collect();
 
         // Get nearby files
-        let error: Mutex<Option<String>> = Mutex::new(None);
         let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
-        let pool = rayon::ThreadPoolBuilder::new()
+        rayon::ThreadPoolBuilder::new()
             .num_threads(MAX_WIKI_API_THREADS)
             .build()
-            .expect("follow_coords: Can't build ThreadPool");
-        pool.install(|| {
-            page_coords.par_iter().for_each(|(q, lat, lon)| {
-                let api = match Api::new("https://commons.wikimedia.org/w/api.php") {
-                    Ok(api) => api,
-                    Err(_) => {
-                        *error.lock().unwrap() = Some(format!("Can't get Commons API"));
-                        return;
-                    }
-                };
-                let params = api.params_into(&vec![
-                    ("action", "query"),
-                    ("list", "geosearch"),
-                    ("gscoord", format!("{}|{}", lat, lon).as_str()),
-                    (
-                        "gsradius",
-                        format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
-                    ),
-                    ("gslimit", "50"),
-                    ("gsnamespace", "6"),
-                ]);
-                let result = match api.get_query_api_json(&params) {
-                    Ok(j) => j,
-                    Err(_) => {
-                        //*error.lock().unwrap() = Some(format!("No result from Commons query {:?}", &params));
-                        return;
-                    }
-                };
-                let images = match result["query"]["geosearch"].as_array() {
-                    Some(a) => a,
-                    None => {
-                        //*error.lock().unwrap() = Some(format!("query/geosearch is not an array"));
-                        return;
-                    }
-                };
-                let mut item_file: Vec<(String, String)> = images
+            .expect("follow_coords: Can't build ThreadPool")
+            .install(|| {
+                page_coords
                     .par_iter()
-                    .filter_map(|j| match j["title"].as_str() {
-                        Some(filename) => {
-                            let filename = filename[5..].to_string(); // Remove leading "File:"
-                            let filename = self.normalize_filename(&filename);
-                            Some((q.to_string(), filename))
-                        }
-                        None => None,
+                    .map(|(q, lat, lon)| {
+                        let api = Api::new("https://commons.wikimedia.org/w/api.php")
+                            .map_err(|e| format!("{:?}", e))?;
+                        let params = api.params_into(&vec![
+                            ("action", "query"),
+                            ("list", "geosearch"),
+                            ("gscoord", format!("{}|{}", lat, lon).as_str()),
+                            (
+                                "gsradius",
+                                format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
+                            ),
+                            ("gslimit", "50"),
+                            ("gsnamespace", "6"),
+                        ]);
+                        let result = api
+                            .get_query_api_json(&params)
+                            .map_err(|e| format!("{:?}", e))?;
+                        let images = match result["query"]["geosearch"].as_array() {
+                            Some(a) => a,
+                            None => {
+                                return Ok(());
+                            }
+                        };
+                        let mut item_file: Vec<(String, String)> = images
+                            .par_iter()
+                            .filter_map(|j| match j["title"].as_str() {
+                                Some(filename) => {
+                                    let filename = filename[5..].to_string(); // Remove leading "File:"
+                                    let filename = self.normalize_filename(&filename);
+                                    Some((q.to_string(), filename))
+                                }
+                                None => None,
+                            })
+                            .collect();
+                        add_item_file.lock().unwrap().append(&mut item_file);
+                        Ok(())
                     })
-                    .collect();
-                add_item_file.lock().unwrap().append(&mut item_file);
-            });
-        });
-
-        // Check error
-        match error.lock() {
-            Ok(error) => match &*error {
-                Some(e) => return Err(e.to_string()),
-                None => {}
-            },
-            Err(e) => return Err(e.to_string()),
-        }
+                    .collect::<Result<_, String>>()
+            })?;
 
         // Add files
         add_item_file
@@ -351,64 +312,48 @@ impl WDfist {
             .collect();
 
         // Get search results
-        let error: Mutex<Option<String>> = Mutex::new(None);
         let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
-        let pool = rayon::ThreadPoolBuilder::new()
+        rayon::ThreadPoolBuilder::new()
             .num_threads(MAX_WIKI_API_THREADS)
             .build()
-            .expect("follow_search_commons: Can't build ThreadPool");
-        pool.install(|| {
-            item2label.par_iter().for_each(|(q, label)| {
-                let api = match Api::new("https://commons.wikimedia.org/w/api.php") {
-                    Ok(api) => api,
-                    Err(_) => {
-                        *error.lock().unwrap() = Some(format!("Can't get Commons API"));
-                        return;
-                    }
-                };
-                let params = api.params_into(&vec![
-                    ("action", "query"),
-                    ("list", "search"),
-                    ("srnamespace", "6"),
-                    ("srsearch", label.as_str()),
-                ]);
-                let result = match api.get_query_api_json(&params) {
-                    Ok(j) => j,
-                    Err(_) => {
-                        //*error.lock().unwrap() = Some(format!("No result from Commons query {:?}", &params));
-                        return;
-                    }
-                };
-                let images = match result["query"]["search"].as_array() {
-                    Some(a) => a,
-                    None => {
-                        //*error.lock().unwrap() = Some(format!("query/geosearch is not an array"));
-                        return;
-                    }
-                };
-                let mut item_file: Vec<(String, String)> = images
+            .map_err(|e| format!("follow_search_commons: Can't build ThreadPool: {:?}", e))?
+            .install(|| {
+                item2label
                     .par_iter()
-                    .filter_map(|j| match j["title"].as_str() {
-                        Some(filename) => {
-                            let filename = filename[5..].to_string(); // Remove leading "File:"
-                            let filename = self.normalize_filename(&filename);
-                            Some((q.to_string(), filename))
-                        }
-                        None => None,
+                    .map(|(q, label)| {
+                        let api = Api::new("https://commons.wikimedia.org/w/api.php")
+                            .map_err(|e| format!("{:?}", e))?;
+                        let params = api.params_into(&vec![
+                            ("action", "query"),
+                            ("list", "search"),
+                            ("srnamespace", "6"),
+                            ("srsearch", label.as_str()),
+                        ]);
+                        let result = api
+                            .get_query_api_json(&params)
+                            .map_err(|e| format!("{:?}", e))?; // TODO Ignore error?
+                        let images = match result["query"]["search"].as_array() {
+                            Some(a) => a,
+                            None => {
+                                return Ok(());
+                            }
+                        };
+                        let mut item_file: Vec<(String, String)> = images
+                            .par_iter()
+                            .filter_map(|j| match j["title"].as_str() {
+                                Some(filename) => {
+                                    let filename = filename[5..].to_string(); // Remove leading "File:"
+                                    let filename = self.normalize_filename(&filename);
+                                    Some((q.to_string(), filename))
+                                }
+                                None => None,
+                            })
+                            .collect();
+                        add_item_file.lock().unwrap().append(&mut item_file);
+                        Ok(())
                     })
-                    .collect();
-                add_item_file.lock().unwrap().append(&mut item_file);
-            });
-        });
-
-        // Check error
-        match error.lock() {
-            Ok(error) => match &*error {
-                Some(e) => return Err(e.to_string()),
-                None => {}
-            },
-            Err(e) => return Err(e.to_string()),
-        }
+                    .collect::<Result<_, String>>()
+            })?;
 
         // Add files
         add_item_file
@@ -467,10 +412,10 @@ impl WDfist {
 
     fn seed_ignore_files_from_ignore_database(&mut self) -> Result<(), String> {
         let state = self.state.clone();
-        let tool_db_user_pass = match state.get_tool_db_user_pass().lock() {
-            Ok(x) => x,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let tool_db_user_pass = state
+            .get_tool_db_user_pass()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
         let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone())?;
 
         let sql = format!("SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={}",MIN_IGNORE_DB_FILE_COUNT);
@@ -550,47 +495,37 @@ impl WDfist {
 
         // Prepare
         let state = self.state.clone();
-        let tool_db_user_pass = match state.get_tool_db_user_pass().lock() {
-            Ok(x) => x,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let tool_db_user_pass = state
+            .get_tool_db_user_pass()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
         let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone())?;
 
         // Run batches sequentially
-        let mut error: Option<String> = None;
-        batches.iter().for_each(|sql| {
-            let result = match conn.prep_exec(&sql.0, &sql.1) {
-                Ok(r) => r,
-                Err(e) => {
-                    error = Some(format!(
-                        "wdfist::filter_files_from_ignore_database: {:?}",
-                        e
-                    ));
-                    return;
-                }
-            };
-
-            result
-                .filter_map(|row_result| row_result.ok())
-                .map(|row| my::from_row::<(String, String)>(row))
-                .for_each(|(item, filename)| {
-                    let filename = self.normalize_filename(&filename.to_string());
-                    match self.item2files.get_mut(&item) {
-                        Some(ref mut files) => {
-                            files.remove(&filename);
-                            if files.is_empty() {
-                                self.item2files.remove(&item);
+        batches
+            .iter()
+            .map(|sql| {
+                let result = conn
+                    .prep_exec(&sql.0, &sql.1)
+                    .map_err(|e| format!("{:?}", e))?;
+                result
+                    .filter_map(|row_result| row_result.ok())
+                    .map(|row| my::from_row::<(String, String)>(row))
+                    .for_each(|(item, filename)| {
+                        let filename = self.normalize_filename(&filename.to_string());
+                        match self.item2files.get_mut(&item) {
+                            Some(ref mut files) => {
+                                files.remove(&filename);
+                                if files.is_empty() {
+                                    self.item2files.remove(&item);
+                                }
                             }
+                            None => return, // Odd
                         }
-                        None => return, // Odd
-                    }
-                });
-        });
-
-        match error {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+                    });
+                Ok(())
+            })
+            .collect::<Result<_, String>>()
     }
 
     fn filter_files_five_or_is_used(&mut self) -> Result<(), String> {

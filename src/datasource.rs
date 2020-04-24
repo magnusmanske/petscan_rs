@@ -34,10 +34,10 @@ impl DataSource for SourceLabels {
 
     fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let state = platform.state();
-        let db_user_pass = match state.get_db_mutex().lock() {
-            Ok(db) => db,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let db_user_pass = state
+            .get_db_mutex()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
         let sql = platform.get_label_sql();
         let mut conn = platform
             .state()
@@ -103,10 +103,10 @@ impl DataSource for SourceWikidata {
 
         // Perform DB query
         let state = platform.state();
-        let db_user_pass = match state.get_db_mutex().lock() {
-            Ok(db) => db,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let db_user_pass = state
+            .get_db_mutex()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
         let mut conn = platform
             .state()
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;

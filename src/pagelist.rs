@@ -804,7 +804,7 @@ impl PageList {
         let db_user_pass = state
             .get_db_mutex()
             .lock()
-            .map_err(|e| format!("PageList::run_batch_query: Bad mutex: {:?}", e))?;
+            .map_err(|e| format!("PageList::run_batch_query: {:?}", e))?;
         let mut conn = state
             .get_wiki_db_connection(&db_user_pass, &wiki)
             .map_err(|e| format!("PageList::run_batch_query: get_wiki_db_connection: {:?}", e))?;

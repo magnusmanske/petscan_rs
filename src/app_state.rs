@@ -450,10 +450,7 @@ impl AppState {
     }
 
     pub fn get_query_from_psid(&self, psid: &String) -> Result<String, String> {
-        let tool_db_user_pass = match self.tool_db_mutex.lock() {
-            Ok(x) => x,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let tool_db_user_pass = self.tool_db_mutex.lock().map_err(|e| format!("{:?}", e))?;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
         let psid = match psid.parse::<usize>() {
@@ -481,10 +478,7 @@ impl AppState {
     }
 
     pub fn log_query_start(&self, query_string: &String) -> Result<u64, String> {
-        let tool_db_user_pass = match self.tool_db_mutex.lock() {
-            Ok(x) => x,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let tool_db_user_pass = self.tool_db_mutex.lock().map_err(|e| format!("{:?}", e))?;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -527,10 +521,7 @@ impl AppState {
     }
 
     pub fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
-        let tool_db_user_pass = match self.tool_db_mutex.lock() {
-            Ok(x) => x,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let tool_db_user_pass = self.tool_db_mutex.lock().map_err(|e| format!("{:?}", e))?;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
         // Check for existing entry

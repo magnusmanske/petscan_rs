@@ -323,10 +323,10 @@ impl SourceDatabase {
         categories_done: &RwLock<HashSet<String>>,
         new_categories: &RwLock<Vec<String>>,
     ) -> Result<(), String> {
-        let db_user_pass = match state.get_db_mutex().lock() {
-            Ok(db) => db,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let db_user_pass = state
+            .get_db_mutex()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         categories_batch.iter().for_each(|c| {
@@ -909,10 +909,10 @@ impl SourceDatabase {
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList, String> {
-        let mut db_user_pass = match state.get_db_mutex().lock() {
-            Ok(db) => db,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let mut db_user_pass = state
+            .get_db_mutex()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
         let mut params =
             self.get_pages_initialize_query(state, primary_pagelist, &mut db_user_pass)?;
 
@@ -977,10 +977,10 @@ impl SourceDatabase {
         is_before_after_done: &mut bool,
         api: Api,
     ) -> Result<(), String> {
-        let db_user_pass = match state.get_db_mutex().lock() {
-            Ok(db) => db,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let db_user_pass = state
+            .get_db_mutex()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
         Platform::profile(
             "DSDB::get_pages_for_primary_new_connection STARTING",

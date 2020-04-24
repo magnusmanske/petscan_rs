@@ -450,10 +450,10 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         let state = self.state();
-        let db_user_pass = match state.get_db_mutex().lock() {
-            Ok(db) => db,
-            Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-        };
+        let db_user_pass = state
+            .get_db_mutex()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
 
         let mut error: Option<String> = None;
@@ -523,65 +523,51 @@ impl Platform {
             None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
         };
 
-        let error: Option<String> = None;
-        let error = Mutex::new(error);
-
-        let pool = rayon::ThreadPoolBuilder::new()
+        rayon::ThreadPoolBuilder::new()
             .num_threads(5) // TODO More? Less?
             .build()
-            .expect("process_redlinks: can't build ThreadPool");
-        pool.install(|| {
-            batches.par_iter().for_each(|sql| {
-                let db_user_pass = match self.state.get_db_mutex().lock() {
-                    Ok(db) => db,
-                    Err(e) => {
-                        *error.lock().unwrap() = Some(format!("Bad mutex: {:?}", e));
-                        return;
-                    }
-                };
-                let mut conn = match self.state.get_wiki_db_connection(&db_user_pass, &wiki) {
-                    Ok(conn) => conn,
-                    Err(e) => {
-                        *error.lock().unwrap() = Some(format!("Bad mutex: {:?}", e));
-                        return;
-                    }
-                };
-
-                let new_result = match conn.prep_exec(&sql.0, &sql.1) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        *error.lock().unwrap() = Some(format!("{:?}", e));
-                        return;
-                    }
-                };
-                for row in new_result {
-                    match row {
-                        Ok(row) => {
-                            let (page_title, namespace_id, _count) =
-                                my::from_row::<(String, NamespaceID, u8)>(row);
-                            let title = Title::new(&page_title, namespace_id);
-                            let new_value = match &redlink_counter.read().unwrap().get(&title) {
-                                Some(x) => *x + 1,
-                                None => 1,
-                            };
-                            match redlink_counter.write() {
-                                Ok(mut rc) => {
-                                    rc.insert(title, new_value);
+            .map_err(|e| format!("process_redlinks: can't build ThreadPool: {:?}", e))?
+            .install(|| {
+                batches
+                    .par_iter()
+                    .map(|sql| {
+                        let db_user_pass = self
+                            .state
+                            .get_db_mutex()
+                            .lock()
+                            .map_err(|e| format!("{:?}", e))?;
+                        let mut conn = self
+                            .state
+                            .get_wiki_db_connection(&db_user_pass, &wiki)
+                            .map_err(|e| format!("{:?}", e))?;
+                        let new_result = conn
+                            .prep_exec(&sql.0, &sql.1)
+                            .map_err(|e| format!("{:?}", e))?;
+                        for row in new_result {
+                            match row {
+                                Ok(row) => {
+                                    let (page_title, namespace_id, _count) =
+                                        my::from_row::<(String, NamespaceID, u8)>(row);
+                                    let title = Title::new(&page_title, namespace_id);
+                                    let new_value =
+                                        match &redlink_counter.read().unwrap().get(&title) {
+                                            Some(x) => *x + 1,
+                                            None => 1,
+                                        };
+                                    match redlink_counter.write() {
+                                        Ok(mut rc) => {
+                                            rc.insert(title, new_value);
+                                        }
+                                        _ => {} // Ignore error
+                                    }
                                 }
                                 _ => {} // Ignore error
                             }
                         }
-                        _ => {} // Ignore error
-                    }
-                }
-            });
-        });
-
-        let error = &*error.lock().unwrap();
-        match error {
-            Some(e) => return Err(e.to_string()),
-            None => {}
-        }
+                        Ok(())
+                    })
+                    .collect::<Result<_, String>>()
+            })?;
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
@@ -627,37 +613,29 @@ impl Platform {
                 Some(wiki) => wiki.to_owned(),
                 None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
             };
-            let db_user_pass = match self.state.get_db_mutex().lock() {
-                Ok(db) => db,
-                Err(e) => return Err(format!("Bad mutex: {:?}", e)),
-            };
+            let db_user_pass = self
+                .state
+                .get_db_mutex()
+                .lock()
+                .map_err(|e| format!("{:?}", e))?;
             let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki)?;
 
-            let mut error: Option<String> = None;
-            title_ns.iter().for_each(|(title, namespace_id)| {
+            title_ns.iter().map(|(title, namespace_id)| {
                 let sql: SQLtuple = (
                     "SELECT page_title,page_namespace FROM page WHERE page_namespace=? AND page_title LIKE ?"
                         .to_string(),
                     vec![namespace_id.to_string(), format!("{}/%", &title)],
                 );
-                let db_result = match conn.prep_exec(&sql.0, &sql.1) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        error = Some(format!("{:?}", e));
-                        return;
-                    }
-                };
+                let db_result = conn.prep_exec(&sql.0, &sql.1).map_err(|e| format!("{:?}", e))?;
                 db_result.filter_map(|row_result|row_result.ok())
                 .filter_map(|row| my::from_row_opt::<(Vec<u8>,NamespaceID)>(row).ok() )
                 .for_each(|(page_title,page_namespace)|{
                     let page_title = String::from_utf8_lossy(&page_title).into_owned();
                     result.add_entry(PageListEntry::new(Title::new(&page_title,page_namespace))).unwrap_or(());
                 });
-            });
-            match error {
-                Some(e) => return Err(e),
-                None => {}
-            }
+                Ok(())
+            })
+            .collect::<Result<_,String>>()?;
             // TODO if new pages were added, they should get some of the post_process_result treatment as well
         }
 
@@ -897,45 +875,22 @@ impl Platform {
 
         // Duplicated from Patelist::annotate_batch_results
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
-        let error: Mutex<Option<String>> = Mutex::new(None);
 
-        batches.par_iter().for_each(|sql| {
+        batches.par_iter().map(|sql| {
             // Get DB connection
-            let db_user_pass = match self.state.get_db_mutex().lock() {
-                Ok(db) => db,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(format!("Bad mutex: {:?}", e));
-                    return;
-                }
-            };
-            let mut conn = match self.state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string()) {
-                Ok(conn) => conn,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(format!("Bad mutex: {:?}", e));
-                    return;
-                }
-            };
+            let db_user_pass = self.state.get_db_mutex().lock().map_err(|e| format!("{:?}", e))?;
+            let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string()).map_err(|e| format!("{:?}", e))?;
 
             // Run query
-            let mut result = match conn.prep_exec(&sql.0, &sql.1) {
-                Ok(r) => r.filter_map(|row| row.ok()).collect(),
-                Err(e) => {
-                    *error.lock().unwrap() = Some(format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e));
-                    return;
-                }
-            };
+            let mut result = conn.prep_exec(&sql.0, &sql.1).map_err(|e| format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e))?
+            .filter_map(|row| row.ok()).collect();
 
-            match rows.lock() {
-                Ok(mut rows) => {rows.append(&mut result);}
-                Err(e) => {*error.lock().unwrap() = Some(format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e));}
-            }
-        });
-
-        // Check error
-        match &*error.lock().map_err(|e| format!("{:?}", e))? {
-            Some(e) => return Err(e.to_string()),
-            None => {}
-        }
+            rows.lock()
+            .map_err(|e| format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e))?
+            .append(&mut result);
+            Ok(())
+        })
+        .collect::<Result<_,String>>()?;
 
         // Rows to entries
         rows.lock()
