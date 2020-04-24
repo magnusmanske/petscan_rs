@@ -381,33 +381,28 @@ impl SourceDatabase {
         let new_categories: Vec<String> = vec![];
         let new_categories = RwLock::new(new_categories);
 
-        let pool = rayon::ThreadPoolBuilder::new()
+        rayon::ThreadPoolBuilder::new()
             .num_threads(5) // TODO More? Less?
             .build()
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| format!("{:?}", e))?
+            .install(|| {
+                categories_to_check
+                    .par_iter()
+                    .chunks(PAGE_BATCH_SIZE)
+                    .map(|categories_batch| {
+                        let categories_batch: Vec<String> =
+                            categories_batch.par_iter().map(|s| s.to_string()).collect();
+                        self.go_depth_batch(
+                            &state,
+                            wiki,
+                            &categories_batch,
+                            &categories_done,
+                            &new_categories,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })?;
 
-        let errors: Vec<_> = pool.install(|| {
-            categories_to_check
-                .par_iter()
-                .chunks(PAGE_BATCH_SIZE)
-                .map(|categories_batch| {
-                    let categories_batch: Vec<String> =
-                        categories_batch.par_iter().map(|s| s.to_string()).collect();
-                    self.go_depth_batch(
-                        &state,
-                        wiki,
-                        &categories_batch,
-                        &categories_done,
-                        &new_categories,
-                    )
-                })
-                .filter_map(|x| x.err())
-                .collect()
-        });
-
-        if !errors.is_empty() {
-            return Err(errors[0].clone());
-        }
         let new_categories = new_categories
             .into_inner()
             .map_err(|e| format!("{:?}", e))?;
@@ -813,24 +808,19 @@ impl SourceDatabase {
         );
         let ret = PageList::new_from_wiki(&params.wiki);
 
-        let pool = rayon::ThreadPoolBuilder::new()
+        rayon::ThreadPoolBuilder::new()
             .num_threads(10) // TODO More? Less?
             .build()
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| format!("{:?}", e))?
+            .install(|| {
+                category_batches
+                    .par_iter()
+                    .map(|category_batch| {
+                        self.get_pages_for_category_batch(&params, category_batch, &state, &ret)
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })?;
 
-        let errors: Vec<_> = pool.install(|| {
-            category_batches
-                .par_iter()
-                .map(|category_batch| {
-                    self.get_pages_for_category_batch(&params, category_batch, &state, &ret)
-                })
-                .filter_map(|x| x.err())
-                .collect()
-        });
-
-        if !errors.is_empty() {
-            return Err(errors[0].clone());
-        }
         Platform::profile(
             "DSDB::get_pages [primary:categories] RESULTS end",
             Some(ret.len()?),
