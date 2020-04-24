@@ -683,6 +683,14 @@ impl PageList {
         self.check_before_merging(&pagelist, platform)?;
         Platform::profile("PageList::union START UNION/1", None);
         let mut me = self.entries.write().map_err(|e| format!("{:?}", e))?;
+        if me.is_empty() {
+            *me = pagelist
+                .entries()
+                .read()
+                .map_err(|e| format!("{:?}", e))?
+                .clone();
+            return Ok(());
+        }
         Platform::profile("PageList::union START UNION/2", None);
         pagelist
             .entries()

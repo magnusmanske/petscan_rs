@@ -433,21 +433,21 @@ impl Platform {
         }
 
         let batches: Vec<SQLtuple> = result
-                .to_sql_batches(PAGE_BATCH_SIZE)?
-                .par_iter_mut()
-                .map(|mut sql_batch| {
-                    // Text for any label or alias used in an item
-                    sql_batch.0 = "SELECT wbx_text FROM wbt_text WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id = wby_id AND wby_name IN ('label','alias') AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id) AND wbx_text IN (".to_string() ;
-                    // One of these
-                    sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
-                    sql_batch.0 += ")";
-                    // Looking for labels, so spaces instead of underscores
-                    for element in sql_batch.1.iter_mut() {
-                        *element = Title::underscores_to_spaces(element);
-                    }
-                    sql_batch.to_owned()
-                })
-                .collect::<Vec<SQLtuple>>();
+            .to_sql_batches(PAGE_BATCH_SIZE)?
+            .par_iter_mut()
+            .map(|mut sql_batch| {
+                // Text for any label or alias used in an item
+                sql_batch.0 = "SELECT wbx_text FROM wbt_text WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id = wby_id AND wby_name IN ('label','alias') AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id) AND wbx_text IN (".to_string() ;
+                // One of these
+                sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
+                sql_batch.0 += ")";
+                // Looking for labels, so spaces instead of underscores
+                for element in sql_batch.1.iter_mut() {
+                    *element = Title::underscores_to_spaces(element);
+                }
+                sql_batch.to_owned()
+            })
+            .collect::<Vec<SQLtuple>>();
 
         let state = self.state();
         let db_user_pass = match state.get_db_mutex().lock() {

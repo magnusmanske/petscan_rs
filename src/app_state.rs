@@ -227,8 +227,8 @@ impl AppState {
                     return Ok(con);
                 }
                 Err(e) => {
-                    println!("CONNECTION ERROR: {:?}\nfor user {}", e, &user);
                     if loops_left == 0 {
+                        println!("CONNECTION ERROR: {:?}\nfor user {}", e, &user);
                         break;
                     }
                     loops_left -= 1;

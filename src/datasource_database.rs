@@ -9,7 +9,7 @@ use core::ops::Sub;
 use mysql as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, MutexGuard, RwLock};
+use std::sync::{MutexGuard, RwLock};
 use wikibase::mediawiki::api::{Api, NamespaceID};
 use wikibase::mediawiki::title::Title;
 
@@ -358,8 +358,8 @@ impl SourceDatabase {
                     _ => false,
                 };
                 if do_add {
-                    (*new_categories.write().unwrap()).push(page_title.to_owned());
-                    (*categories_done.write().unwrap()).insert(page_title);
+                    new_categories.write().unwrap().push(page_title.to_owned());
+                    categories_done.write().unwrap().insert(page_title);
                 }
             });
         Ok(())
@@ -378,7 +378,6 @@ impl SourceDatabase {
         }
         Platform::profile("DSDB::do_depth begin", Some(categories_to_check.len()));
 
-        let error = Mutex::new(None);
         let new_categories: Vec<String> = vec![];
         let new_categories = RwLock::new(new_categories);
 
@@ -387,29 +386,27 @@ impl SourceDatabase {
             .build()
             .map_err(|e| format!("{:?}", e))?;
 
-        pool.install(|| {
+        let errors: Vec<_> = pool.install(|| {
             categories_to_check
                 .par_iter()
                 .chunks(PAGE_BATCH_SIZE)
-                .for_each(|categories_batch| {
+                .map(|categories_batch| {
                     let categories_batch: Vec<String> =
                         categories_batch.par_iter().map(|s| s.to_string()).collect();
-                    match self.go_depth_batch(
+                    self.go_depth_batch(
                         &state,
                         wiki,
                         &categories_batch,
                         &categories_done,
                         &new_categories,
-                    ) {
-                        Ok(_) => {} // OK
-                        Err(e) => *error.lock().unwrap() = Some(e),
-                    }
-                });
+                    )
+                })
+                .filter_map(|x| x.err())
+                .collect()
         });
 
-        match &*error.lock().map_err(|e| format!("{:?}", e))? {
-            Some(e) => return Err(e.to_string()),
-            None => {}
+        if !errors.is_empty() {
+            return Err(errors[0].clone());
         }
         let new_categories = new_categories
             .into_inner()
@@ -457,27 +454,14 @@ impl SourceDatabase {
         wiki: &String,
         input: &Vec<SourceDatabaseCatDepth>,
     ) -> Result<Vec<Vec<String>>, String> {
-        let error: Option<String> = None;
-        let error = Mutex::new(error);
-        let ret = input
+        input
             .par_iter()
-            .filter_map(
-                |i| match self.get_categories_in_tree(&state, wiki, &i.name, i.depth) {
-                    Ok(res) => Some(res),
-                    Err(e) => {
-                        *error.lock().unwrap() = Some(e.to_string());
-                        None
-                    }
-                },
-            )
-            .filter(|x| !x.is_empty())
-            .collect();
-
-        let ret = match &*error.lock().map_err(|e| format!("{:?}", e))? {
-            Some(e) => Err(e.to_string()),
-            None => Ok(ret),
-        };
-        ret
+            .map(|i| self.get_categories_in_tree(&state, wiki, &i.name, i.depth))
+            .filter(|i| match i {
+                Ok(i) => !i.is_empty(),
+                _ => true,
+            })
+            .collect()
     }
 
     fn get_talk_namespace_ids(&self, conn: &mut my::Conn) -> Result<String, String> {
@@ -637,9 +621,8 @@ impl SourceDatabase {
         params: &DsdbParams,
         category_batch: &Vec<Vec<String>>,
         state: &AppState,
-        error: &Mutex<Option<String>>,
-        ret: &Mutex<PageList>,
-    ) {
+        ret: &PageList,
+    ) -> Result<(), String> {
         let mut sql = Platform::sql_tuple();
         match self.params.combine.as_str() {
             "subset" => {
@@ -678,18 +661,12 @@ impl SourceDatabase {
         sql.0 += " INNER JOIN (page p";
         sql.0 += ") ON p.page_id=cl0.cl_from";
         let mut pl2 = PageList::new_from_wiki(&params.wiki.clone());
-        let api = match state.get_api_for_wiki(params.wiki.clone()) {
-            Ok(api) => api,
-            Err(e) => {
-                *error.lock().unwrap() = Some(e.to_string());
-                return;
-            }
-        };
+        let api = state.get_api_for_wiki(params.wiki.clone())?;
         Platform::profile(
             "DSDB::get_pages [primary:categories] START BATCH",
             Some(sql.1.len()),
         );
-        match self.get_pages_for_primary_new_connection(
+        self.get_pages_for_primary_new_connection(
             &state,
             &params.wiki,
             &params.primary.to_string(),
@@ -698,40 +675,11 @@ impl SourceDatabase {
             &mut pl2,
             &mut params.is_before_after_done.clone(),
             api,
-        ) {
-            Ok(_) => {}
-            Err(e) => {
-                *error.lock().unwrap() = Some(e.to_string());
-                return;
-            }
-        }
+        )?;
         Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH", None);
-        let mut ret = match ret.lock() {
-            Ok(ret) => ret,
-            Err(e) => {
-                Platform::profile(
-                    format!("DSDB::get_pages [primary:categories] 1 ERROR: {}", e).as_str(),
-                    None,
-                );
-                *error.lock().unwrap() = Some(e.to_string());
-                return;
-            }
-        };
-        if ret.is_empty().unwrap_or(true) {
-            *ret = pl2;
-        } else {
-            match ret.union(&pl2, None) {
-                Ok(_) => {}
-                Err(e) => {
-                    Platform::profile(
-                        format!("DSDB::get_pages [primary:categories] 2 ERROR: {}", e).as_str(),
-                        None,
-                    );
-                    *error.lock().unwrap() = Some(e.to_string());
-                }
-            }
-        }
+        ret.union(&pl2, None)?;
         Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE", None);
+        Ok(())
     }
 
     fn get_pages_initialize_query(
@@ -863,33 +811,31 @@ impl SourceDatabase {
             "DSDB::get_pages [primary:categories] BATCHES begin",
             Some(category_batches.len()),
         );
-        let error = Mutex::new(None);
-        let ret = Mutex::new(PageList::new_from_wiki(&params.wiki));
+        let ret = PageList::new_from_wiki(&params.wiki);
 
-        let pool = match rayon::ThreadPoolBuilder::new()
+        let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(10) // TODO More? Less?
             .build()
-        {
-            Ok(pool) => pool,
-            Err(e) => return Err(e.to_string()),
-        };
+            .map_err(|e| format!("{:?}", e))?;
 
-        pool.install(|| {
-            category_batches.par_iter().for_each(|category_batch| {
-                self.get_pages_for_category_batch(&params, category_batch, &state, &error, &ret);
-            });
+        let errors: Vec<_> = pool.install(|| {
+            category_batches
+                .par_iter()
+                .map(|category_batch| {
+                    self.get_pages_for_category_batch(&params, category_batch, &state, &ret)
+                })
+                .filter_map(|x| x.err())
+                .collect()
         });
 
-        match &*error.lock().map_err(|e| format!("{:?}", e))? {
-            Some(e) => return Err(e.to_string()),
-            None => {}
+        if !errors.is_empty() {
+            return Err(errors[0].clone());
         }
-        let ret = ret.into_inner().expect("Mutex cannot be locked");
         Platform::profile(
             "DSDB::get_pages [primary:categories] RESULTS end",
             Some(ret.len()?),
         );
-        return Ok(ret);
+        Ok(ret)
     }
 
     fn get_pages_pagelist(
@@ -899,7 +845,7 @@ impl SourceDatabase {
         primary_pagelist: Option<&PageList>,
         db_user_pass: MutexGuard<DbUserPass>,
     ) -> Result<PageList, String> {
-        let mut ret = PageList::new_from_wiki(&params.wiki);
+        let ret = PageList::new_from_wiki(&params.wiki);
         let primary_pagelist = primary_pagelist.ok_or(format!(
             "SourceDatabase::get_pages: pagelist: No primary_pagelist"
         ))?;
@@ -932,17 +878,13 @@ impl SourceDatabase {
         // Either way, it's done
         params.is_before_after_done = true;
 
-        let error = Mutex::new(None);
         let wiki = primary_pagelist.wiki()?.ok_or(format!("No wiki 12345"))?;
-        let partial_ret: Vec<PageList> = batches
+        let partial_ret = batches
             .iter_mut()
             .filter_map(|mut sql| {
                 let mut conn = match state.get_wiki_db_connection(&db_user_pass, &wiki) {
                     Ok(conn) => conn,
-                    Err(e) => {
-                        *error.lock().unwrap() = Some(format!("{:?}", e));
-                        return None;
-                    }
+                    Err(e) => return Some(Err(e)),
                 };
                 let sql_before_after = params.sql_before_after.clone();
                 let mut is_before_after_done = params.is_before_after_done.clone();
@@ -960,20 +902,14 @@ impl SourceDatabase {
                     &mut is_before_after_done,
                     api,
                 ) {
-                    Ok(_) => Some(pl2),
+                    Ok(_) => Some(Ok(pl2)),
                     _ => None,
                 }
             })
-            .collect();
-        &*error.lock().map_err(|e| format!("{:?}", e))?;
+            .collect::<Result<Vec<PageList>, String>>()?;
 
         for pl2 in partial_ret {
-            if ret.is_empty()? {
-                ret = pl2;
-            //ret.swap_entries(&mut pl2);
-            } else {
-                ret.union(&pl2, None)?;
-            }
+            ret.union(&pl2, None)?;
         }
         return Ok(ret);
     }
