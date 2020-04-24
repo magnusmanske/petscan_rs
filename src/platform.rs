@@ -886,7 +886,7 @@ impl Platform {
             .filter_map(|row| row.ok()).collect();
 
             rows.lock()
-            .map_err(|e| format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e))?
+            .map_err(|e| format!("Platform::annotate_with_wikidata_item: Can't unlock mutex: {:?}", e))?
             .append(&mut result);
             Ok(())
         })
@@ -921,8 +921,6 @@ impl Platform {
                     None => return,
                 };
 
-                //f(row.clone(), &mut entry);
-                //let (ips_site_page,ips_item_id) = my::from_row::<(String, u64)>(*row);
                 let q = "Q".to_string() + &ips_item_id.to_string();
                 entry.set_wikidata_item(Some(q));
 

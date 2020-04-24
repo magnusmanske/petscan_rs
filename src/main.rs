@@ -19,6 +19,7 @@ use actix_files as fs;
 use futures::{StreamExt};
 use actix_web::{web, App, Error, HttpResponse};
 use qstring::QString;
+use actix_http::KeepAlive;
 use actix_web::{HttpRequest, HttpServer};
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
@@ -204,7 +205,8 @@ async fn main() -> std::io::Result<()> {
             .route("/", web::post().to(query_handler_post))
             .service(fs::Files::new("/", "./html").show_files_listing())
     })
-    .workers(12)
+    .workers(4)
+    .keep_alive(KeepAlive::from(None))
     .bind(format!("{}:{}",&ip_address,port))?
     .run()
     .await

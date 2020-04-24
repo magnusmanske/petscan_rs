@@ -24,6 +24,7 @@ wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
 #actix-web = { version = "3.0.0-alpha.1", default-features = true }
 actix-web = "^2.0.0"
 actix-files = "*"
+actix-http = "*"
 actix-rt = "^1"
 qstring = "*"
 futures = "*"
