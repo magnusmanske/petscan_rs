@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::{Mutex, RwLock};
+use std::sync::RwLock;
 use wikibase::mediawiki::api::NamespaceID;
 use wikibase::mediawiki::title::Title;
 
@@ -849,7 +849,7 @@ impl PageList {
     }
 
     /// Runs batched queries for process_batch_results and annotate_batch_results
-    /// Uses Mutex. Complex and potentially slower. Probably obsolete.
+    /// Uses Mutex.
     fn run_batch_queries_mutex(
         &self,
         state: &AppState,
@@ -858,29 +858,13 @@ impl PageList {
     ) -> Result<Vec<my::Row>, String> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
 
-        let error: Mutex<Option<String>> = Mutex::new(None);
-        let rows: Vec<my::Row> = batches
+        Ok(batches
             .par_iter()
-            .map(|sql| match self.run_batch_query(state, sql, &wiki) {
-                Ok(data) => data,
-                Err(e) => {
-                    *error.lock().unwrap() = Some(e);
-                    vec![]
-                }
-            })
+            .map(|sql| self.run_batch_query(state, sql, &wiki))
+            .collect::<Result<Vec<_>, String>>()?
+            .into_iter()
             .flatten()
-            .collect();
-
-        // Check error
-        match error.lock() {
-            Ok(error) => match &*error {
-                Some(e) => return Err(e.to_string()),
-                None => {}
-            },
-            Err(e) => return Err(e.to_string()),
-        }
-
-        Ok(rows)
+            .collect())
     }
 
     /// Adds/replaces entries based on SQL query batch results.
