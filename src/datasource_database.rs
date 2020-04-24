@@ -852,7 +852,6 @@ impl SourceDatabase {
         &mut self,
         params: &DsdbParams,
         state: &AppState,
-        ret: PageList,
     ) -> Result<PageList, String> {
         let category_batches = if self.params.use_new_category_mode {
             self.iterate_category_batches(&self.cat_pos, 0)
@@ -865,7 +864,7 @@ impl SourceDatabase {
             Some(category_batches.len()),
         );
         let error = Mutex::new(None);
-        let ret = Mutex::new(ret);
+        let ret = Mutex::new(PageList::new_from_wiki(&params.wiki));
 
         let pool = match rayon::ThreadPoolBuilder::new()
             .num_threads(10) // TODO More? Less?
@@ -899,8 +898,8 @@ impl SourceDatabase {
         state: &AppState,
         primary_pagelist: Option<&PageList>,
         db_user_pass: MutexGuard<DbUserPass>,
-        mut ret: PageList,
     ) -> Result<PageList, String> {
+        let mut ret = PageList::new_from_wiki(&params.wiki);
         let primary_pagelist = primary_pagelist.ok_or(format!(
             "SourceDatabase::get_pages: pagelist: No primary_pagelist"
         ))?;
@@ -990,13 +989,15 @@ impl SourceDatabase {
         };
         let mut params =
             self.get_pages_initialize_query(state, primary_pagelist, &mut db_user_pass)?;
-        let mut ret = PageList::new_from_wiki(&params.wiki);
 
         let mut sql = Platform::sql_tuple();
 
         match params.primary.as_str() {
             "categories" => {
-                return self.get_pages_categories(&params, &state, ret);
+                return self.get_pages_categories(&params, &state);
+            }
+            "pagelist" => {
+                return self.get_pages_pagelist(params, &state, primary_pagelist, db_user_pass);
             }
             "no_wikidata" => {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
@@ -1018,15 +1019,6 @@ impl SourceDatabase {
                 }
                 sql.0 += " WHERE 1=1";
             }
-            "pagelist" => {
-                return self.get_pages_pagelist(
-                    params,
-                    &state,
-                    primary_pagelist,
-                    db_user_pass,
-                    ret,
-                );
-            }
             other => {
                 return Err(format!(
                     "SourceDatabase::get_pages: other primary '{}'",
@@ -1035,6 +1027,7 @@ impl SourceDatabase {
             }
         }
 
+        let mut ret = PageList::new_from_wiki(&params.wiki);
         self.get_pages_for_primary(
             &mut params.conn,
             &params.primary.to_string(),
