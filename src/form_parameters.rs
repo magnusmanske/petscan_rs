@@ -25,6 +25,7 @@ impl FormParameters {
             .map(|(k, v)| (k.to_string(), v.to_string().replace("+", " ")))
             .collect();
         ret.ns = Self::ns_from_params(&ret.params);
+        ret.legacy_parameters();
         ret
     }
 
