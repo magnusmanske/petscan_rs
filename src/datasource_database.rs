@@ -1,3 +1,4 @@
+use crate::app_state::DbUserPass;
 use futures::future::join_all;
 use async_trait::async_trait;
 use crate::app_state::AppState;
@@ -680,7 +681,7 @@ impl SourceDatabase {
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<DsdbParams, String> {
-        let mut db_user_pass = state
+        let db_user_pass = state
             .get_db_mutex()
             .lock()
             .map_err(|e| format!("{:?}", e))?;
@@ -870,14 +871,23 @@ impl SourceDatabase {
 
         let wiki = primary_pagelist.wiki()?.ok_or(format!("No wiki 12345"))?;
 
-        let futures : Vec<_> = batches
-        .iter_mut()
-        .map( |sql|{
-            self.get_pages_pagelist_batch(wiki.clone(),sql,&state,&params)
-        })
-        .collect();
+        let mut futures : Vec<_> = vec![] ;
+        if true {
+            let db_user_pass = state
+                .get_db_mutex()
+                .lock()
+                .map_err(|e| format!("{:?}", e))?;
+
+            futures = batches
+            .iter_mut()
+            .map( |sql|{
+                self.get_pages_pagelist_batch(wiki.clone(),sql,&state,&params,db_user_pass.clone())
+            })
+            .collect();
+        }
 
         let results = join_all(futures).await;
+
 
         //let mut results = results.drain(..).collect::<Result<Vec<PageList>,String>>()?;
 
@@ -899,12 +909,8 @@ impl SourceDatabase {
         mut sql:&mut SQLtuple,
         state:&AppState,
         params:&DsdbParams,
+        db_user_pass:DbUserPass
     ) -> Result<PageList,String> {
-        let db_user_pass = state
-            .get_db_mutex()
-            .lock()
-            .map_err(|e| format!("{:?}", e))?;
-
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
         let sql_before_after = params.sql_before_after.clone();
         let mut is_before_after_done = params.is_before_after_done.clone();

@@ -249,18 +249,35 @@ impl Platform {
 
         Platform::profile("begin futures 1", None);
 
-        let results = join_all(futures).await;
+        let mut tmp_results = join_all(futures).await;
 
+        let mut results: HashMap<String, PageList> = HashMap::new() ;
+        let mut names = available_sources.clone();
+        while !tmp_results.is_empty() {
+            let result = tmp_results.remove(0);
+            let name = names.remove(0);
+            match result {
+                Ok(r) => {
+                    results.insert(name,r);
+                }
+                _ => {}
+            }
+        }
+        drop(tmp_results);
+
+        // TODO check above
+        /*
         let mut results: HashMap<String, PageList> = results
             .iter()
             .zip(available_sources.clone())
             .filter_map(|(result,name)|{
                 match result {
-                    Ok(result) => Some((name,PageList::new_from_wiki("wikidatawiki"))), // TODO fixme
+                    Ok(result) => Some((name,result)),
                     _ => None
                 }
             })
             .collect();
+        */
 
         self.wiki_by_source = results
             .iter()
@@ -1886,27 +1903,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_manual_list_enwiki_use_props() {
-        check_results_for_psid(10087995, "enwiki", vec![Title::new("Magnus_Manske", 0)]);
+        check_results_for_psid(10087995, "enwiki", vec![Title::new("Magnus_Manske", 0)]).await;
     }
 
     #[tokio::test]
     async fn test_manual_list_enwiki_sitelinks() {
         // This assumes [[en:Count von Count]] has no lvwiki article
-        check_results_for_psid(10123257, "wikidatawiki", vec![Title::new("Q13520818", 0)]);
+        check_results_for_psid(10123257, "wikidatawiki", vec![Title::new("Q13520818", 0)]).await;
     }
 
     #[tokio::test]
     async fn test_manual_list_enwiki_min_max_sitelinks() {
         // [[Count von Count]] vs. [[Magnus Manske]]
-        check_results_for_psid(10123897, "wikidatawiki", vec![Title::new("Q13520818", 0)]); // Min 15
-        check_results_for_psid(10124667, "wikidatawiki", vec![Title::new("Q12345", 0)]);
+        check_results_for_psid(10123897, "wikidatawiki", vec![Title::new("Q13520818", 0)]).await; // Min 15
+        check_results_for_psid(10124667, "wikidatawiki", vec![Title::new("Q12345", 0)]).await;
         // Max 15
     }
 
     #[tokio::test]
     async fn test_manual_list_enwiki_label_filter() {
         // [[Count von Count]] vs. [[Magnus Manske]]
-        check_results_for_psid(10125089, "wikidatawiki", vec![Title::new("Q12345", 0)]);
+        check_results_for_psid(10125089, "wikidatawiki", vec![Title::new("Q12345", 0)]).await;
         // Label "Count%" in en
     }
 
@@ -1914,7 +1931,7 @@ mod tests {
     async fn test_manual_list_enwiki_neg_cat_filter() {
         // [[Count von Count]] vs. [[Magnus Manske]]
         // Manual list on enwiki, minus [[Category:Fictional vampires]]
-        check_results_for_psid(10126217, "enwiki", vec![Title::new("Magnus Manske", 0)]);
+        check_results_for_psid(10126217, "enwiki", vec![Title::new("Magnus Manske", 0)]).await;
     }
 
     #[tokio::test]
@@ -1923,7 +1940,7 @@ mod tests {
             10225056,
             "wikidatawiki",
             vec![Title::new("Q13520818", 0), Title::new("Q10995651", 0)],
-        );
+        ).await;
     }
 
     #[tokio::test]
@@ -2048,30 +2065,30 @@ mod tests {
             "&regexp_filter=.*Manske",
             "wikidatawiki",
             vec![Title::new("Q13520818", 0)],
-        );
+        ).await;
         check_results_for_psid_ext(
             10140344,
             "&regexp_filter=Graaf.*",
             "wikidatawiki",
             vec![Title::new("Q12345", 0)],
-        );
+        ).await;
         check_results_for_psid_ext(
             10140616,
             "&regexp_filter=&regexp_filter=Jimbo.*",
             "enwiki",
             vec![Title::new("Jimbo Wales", 0)],
-        );
+        ).await;
         check_results_for_psid_ext(
             10140616,
             "&regexp_filter=&regexp_filter=.*Sanger",
             "enwiki",
             vec![Title::new("Larry Sanger", 0)],
-        );
+        ).await;
     }
 
     #[tokio::test]
     async fn test_en_categories_sparql_common_wiki_other() {
-        check_results_for_psid(15960820, "frwiki", vec![Title::new("Magnus Manske", 0)]);
+        check_results_for_psid(15960820, "frwiki", vec![Title::new("Magnus Manske", 0)]).await;
     }
 
     #[tokio::test]
