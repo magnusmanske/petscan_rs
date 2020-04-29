@@ -1,4 +1,6 @@
-use crate::app_state::{AppState, DbUserPass};
+use futures::future::join_all;
+use async_trait::async_trait;
+use crate::app_state::AppState;
 use crate::datasource::DataSource;
 use crate::datasource::SQLtuple;
 use crate::pagelist::*;
@@ -9,7 +11,7 @@ use core::ops::Sub;
 use mysql as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::{MutexGuard, RwLock};
+use std::sync::RwLock;
 use wikibase::mediawiki::api::{Api, NamespaceID};
 use wikibase::mediawiki::title::Title;
 
@@ -121,7 +123,7 @@ impl SourceDatabaseParameters {
         }
     }
 
-    pub fn db_params(platform: &Platform) -> SourceDatabaseParameters {
+    pub async fn db_params(platform: &Platform) -> SourceDatabaseParameters {
         let depth_signed: i32 = platform
             .get_param("depth")
             .unwrap_or("0".to_string())
@@ -196,8 +198,8 @@ impl SourceDatabaseParameters {
                 .cloned()
                 .collect::<Vec<usize>>(),
             use_new_category_mode: true,
-            category_namespace_is_case_insensitive: !platform.get_namespace_case_sensitivity(14),
-            template_namespace_is_case_insensitive: !platform.get_namespace_case_sensitivity(10),
+            category_namespace_is_case_insensitive: !platform.get_namespace_case_sensitivity(14).await,
+            template_namespace_is_case_insensitive: !platform.get_namespace_case_sensitivity(10).await,
         };
         ret.templates_yes = Self::vec_to_ucfirst(
             platform.get_param_as_vec("templates_yes", "\n"),
@@ -243,6 +245,7 @@ pub struct SourceDatabase {
     talk_namespace_ids: String,
 }
 
+#[async_trait]
 impl DataSource for SourceDatabase {
     fn name(&self) -> String {
         "categories".to_string()
@@ -258,17 +261,12 @@ impl DataSource for SourceDatabase {
             || platform.has_param("links_to_any")
     }
 
-    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
-        let ret = self.get_pages(&platform.state(), None);
-        match &ret {
-            Ok(pagelist) => {
-                if pagelist.is_empty()? {
-                    platform.warn(format!("<span tt='warn_categories'></span>"))?;
-                }
-            }
-            _ => {}
+    async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+        let ret = self.get_pages(&platform.state(), None).await?;
+        if ret.is_empty()? {
+            platform.warn(format!("<span tt='warn_categories'></span>"))?;
         }
-        ret
+        Ok(ret)
     }
 }
 
@@ -611,7 +609,7 @@ impl SourceDatabase {
         ret
     }
 
-    fn get_pages_for_category_batch(
+    async fn get_pages_for_category_batch(
         &self,
         params: &DsdbParams,
         category_batch: &Vec<Vec<String>>,
@@ -656,7 +654,7 @@ impl SourceDatabase {
         sql.0 += " INNER JOIN (page p";
         sql.0 += ") ON p.page_id=cl0.cl_from";
         let mut pl2 = PageList::new_from_wiki(&params.wiki.clone());
-        let api = state.get_api_for_wiki(params.wiki.clone())?;
+        let api = state.get_api_for_wiki(params.wiki.clone()).await?;
         Platform::profile(
             "DSDB::get_pages [primary:categories] START BATCH",
             Some(sql.1.len()),
@@ -672,7 +670,7 @@ impl SourceDatabase {
             api,
         )?;
         Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH", None);
-        ret.union(&pl2, None)?;
+        ret.union(&pl2, None).await?;
         Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE", None);
         Ok(())
     }
@@ -681,8 +679,12 @@ impl SourceDatabase {
         &mut self,
         state: &AppState,
         primary_pagelist: Option<&PageList>,
-        db_user_pass: &mut DbUserPass,
     ) -> Result<DsdbParams, String> {
+        let mut db_user_pass = state
+            .get_db_mutex()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
+
         // Take wiki from given pagelist
         match primary_pagelist {
             Some(pl) => {
@@ -791,7 +793,7 @@ impl SourceDatabase {
         })
     }
 
-    fn get_pages_categories(
+    async fn get_pages_categories(
         &mut self,
         params: &DsdbParams,
         state: &AppState,
@@ -808,18 +810,17 @@ impl SourceDatabase {
         );
         let ret = PageList::new_from_wiki(&params.wiki);
 
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(10) // TODO More? Less?
-            .build()
-            .map_err(|e| format!("{:?}", e))?
-            .install(|| {
-                category_batches
-                    .par_iter()
-                    .map(|category_batch| {
-                        self.get_pages_for_category_batch(&params, category_batch, &state, &ret)
-                    })
-                    .collect::<Result<Vec<_>, String>>()
-            })?;
+        let futures : Vec<_> = category_batches
+            .iter()
+            .map(|category_batch| self.get_pages_for_category_batch(&params, category_batch, &state, &ret))
+            .collect();
+
+        let results = join_all(futures).await;
+
+        // Check for errors
+        for result in results {
+            result?;
+        }
 
         Platform::profile(
             "DSDB::get_pages [primary:categories] RESULTS end",
@@ -828,12 +829,11 @@ impl SourceDatabase {
         Ok(ret)
     }
 
-    fn get_pages_pagelist(
+    async fn get_pages_pagelist(
         &mut self,
         mut params: DsdbParams,
         state: &AppState,
         primary_pagelist: Option<&PageList>,
-        db_user_pass: MutexGuard<DbUserPass>,
     ) -> Result<PageList, String> {
         let ret = PageList::new_from_wiki(&params.wiki);
         let primary_pagelist = primary_pagelist.ok_or(format!(
@@ -869,61 +869,75 @@ impl SourceDatabase {
         params.is_before_after_done = true;
 
         let wiki = primary_pagelist.wiki()?.ok_or(format!("No wiki 12345"))?;
-        let partial_ret = batches
-            .iter_mut()
-            .filter_map(|mut sql| {
-                let mut conn = match state.get_wiki_db_connection(&db_user_pass, &wiki) {
-                    Ok(conn) => conn,
-                    Err(e) => return Some(Err(e)),
-                };
-                let sql_before_after = params.sql_before_after.clone();
-                let mut is_before_after_done = params.is_before_after_done.clone();
-                let mut pl2 = PageList::new_from_wiki(&wiki.clone());
-                let api = match state.get_api_for_wiki(wiki.clone()) {
-                    Ok(api) => api,
-                    _ => return None,
-                };
-                match self.get_pages_for_primary(
-                    &mut conn,
-                    &params.primary.to_string(),
-                    &mut sql,
-                    sql_before_after,
-                    &mut pl2,
-                    &mut is_before_after_done,
-                    api,
-                ) {
-                    Ok(_) => Some(Ok(pl2)),
-                    _ => None,
-                }
-            })
-            .collect::<Result<Vec<PageList>, String>>()?;
 
-        for pl2 in partial_ret {
-            ret.union(&pl2, None)?;
+        let futures : Vec<_> = batches
+        .iter_mut()
+        .map( |sql|{
+            self.get_pages_pagelist_batch(wiki.clone(),sql,&state,&params)
+        })
+        .collect();
+
+        let results = join_all(futures).await;
+
+        //let mut results = results.drain(..).collect::<Result<Vec<PageList>,String>>()?;
+
+        /*
+        let partial_ret : Vec<PageList> = partial_ret
+            .iter()
+            .cloned()
+            .collect::<Vec<PageList>>()?;
+        */
+        for pl2 in results {
+            ret.union(&pl2?, None).await?;
         }
+        
         return Ok(ret);
     }
 
-    pub fn get_pages(
+    async fn get_pages_pagelist_batch(&self,
+        wiki:String,
+        mut sql:&mut SQLtuple,
+        state:&AppState,
+        params:&DsdbParams,
+    ) -> Result<PageList,String> {
+        let db_user_pass = state
+            .get_db_mutex()
+            .lock()
+            .map_err(|e| format!("{:?}", e))?;
+
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
+        let sql_before_after = params.sql_before_after.clone();
+        let mut is_before_after_done = params.is_before_after_done.clone();
+        let mut pl2 = PageList::new_from_wiki(&wiki.clone());
+        let api = state.get_api_for_wiki(wiki.clone()).await?;
+        self.get_pages_for_primary(
+            &mut conn,
+            &params.primary.to_string(),
+            &mut sql,
+            sql_before_after,
+            &mut pl2,
+            &mut is_before_after_done,
+            api,
+        )?;
+        Ok(pl2)
+    }
+
+    pub async fn get_pages(
         &mut self,
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList, String> {
-        let mut db_user_pass = state
-            .get_db_mutex()
-            .lock()
-            .map_err(|e| format!("{:?}", e))?;
         let mut params =
-            self.get_pages_initialize_query(state, primary_pagelist, &mut db_user_pass)?;
+            self.get_pages_initialize_query(state, primary_pagelist)?;
 
         let mut sql = Platform::sql_tuple();
 
         match params.primary.as_str() {
             "categories" => {
-                return self.get_pages_categories(&params, &state);
+                return self.get_pages_categories(&params, &state).await;
             }
             "pagelist" => {
-                return self.get_pages_pagelist(params, &state, primary_pagelist, db_user_pass);
+                return self.get_pages_pagelist(params, &state, primary_pagelist).await;
             }
             "no_wikidata" => {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
@@ -961,7 +975,7 @@ impl SourceDatabase {
             params.sql_before_after,
             &mut ret,
             &mut params.is_before_after_done,
-            state.get_api_for_wiki(params.wiki.clone())?,
+            state.get_api_for_wiki(params.wiki.clone()).await?,
         )?;
         Ok(ret)
     }
@@ -1298,7 +1312,7 @@ mod tests {
     use std::fs::File;
     use std::sync::Arc;
 
-    fn get_state() -> Arc<AppState> {
+    async fn get_state() -> Arc<AppState> {
         let basedir = env::current_dir()
             .expect("Can't get CWD")
             .to_str()
@@ -1308,30 +1322,30 @@ mod tests {
         let file = File::open(path).expect("Can not open config file");
         let petscan_config: Value =
             serde_json::from_reader(file).expect("Can not parse JSON from config file");
-        Arc::new(AppState::new_from_config(&petscan_config))
+        Arc::new(AppState::new_from_config(&petscan_config).await)
     }
 
-    fn simulate_category_query(url_params: Vec<(&str, &str)>) -> Result<PageList, String> {
-        let state = get_state();
+    async fn simulate_category_query(url_params: Vec<(&str, &str)>) -> Result<PageList, String> {
+        let state = get_state().await;
         let mut fp = FormParameters::new();
         fp.params = url_params
             .iter()
             .map(|pair| (pair.0.to_string(), pair.1.to_string()))
             .collect();
         let platform = Platform::new_from_parameters(&fp, state.clone());
-        let params = SourceDatabaseParameters::db_params(&platform);
+        let params = SourceDatabaseParameters::db_params(&platform).await;
         let mut dbs = SourceDatabase::new(params);
-        dbs.get_pages(&state, None)
+        dbs.get_pages(&state, None).await
     }
 
-    #[test]
-    fn test_category_subset() {
+    #[tokio::test]
+    async fn test_category_subset() {
         let params = vec![
             ("categories", "1974_births\nGerman bioinformaticians"),
             ("language", "en"),
             ("project", "wikipedia"),
         ];
-        let result = simulate_category_query(params).unwrap();
+        let result = simulate_category_query(params).await.unwrap();
         assert_eq!(result.wiki(), Ok(Some("enwiki".to_string())));
         assert!(result.len().unwrap() < 5); // This may change as more articles are written/categories added, please adjust!
         assert!(result
@@ -1342,50 +1356,50 @@ mod tests {
             .any(|entry| entry.title().pretty() == "Magnus Manske"));
     }
 
-    #[test]
-    fn test_category_union() {
+    #[tokio::test]
+    async fn test_category_union() {
         let params = vec![
             ("categories", "1974_births"),
             ("language", "en"),
             ("project", "wikipedia"),
         ];
-        let result_size1 = simulate_category_query(params).unwrap().len();
+        let result_size1 = simulate_category_query(params).await.unwrap().len();
         let params = vec![
             ("categories", "Bioinformaticians"),
             ("language", "en"),
             ("project", "wikipedia"),
         ];
-        let result_size2 = simulate_category_query(params).unwrap().len();
+        let result_size2 = simulate_category_query(params).await.unwrap().len();
         let params = vec![
             ("categories", "1974_births\nBioinformaticians"),
             ("language", "en"),
             ("project", "wikipedia"),
             ("combination", "union"),
         ];
-        let result = simulate_category_query(params).unwrap();
+        let result = simulate_category_query(params).await.unwrap();
         assert!(result.len() > result_size1);
         assert!(result.len() > result_size2);
     }
 
-    #[test]
-    fn test_category_case_sensitive() {
+    #[tokio::test]
+    async fn test_category_case_sensitive() {
         let params = vec![
             ("categories", "français de France"),
             ("language", "fr"),
             ("project", "wiktionary"),
         ];
-        let result = simulate_category_query(params).unwrap();
+        let result = simulate_category_query(params).await.unwrap();
         assert!(result.len().unwrap() > 0);
     }
 
-    #[test]
-    fn test_category_case_insensitive() {
+    #[tokio::test]
+    async fn test_category_case_insensitive() {
         let params = vec![
             ("categories", "biology"),
             ("language", "en"),
             ("project", "wikipedia"),
         ];
-        let result = simulate_category_query(params).unwrap();
+        let result = simulate_category_query(params).await.unwrap();
         assert!(result.len().unwrap() > 0);
     }
 }

@@ -15,12 +15,7 @@ pub mod platform;
 pub mod render;
 pub mod wdfist;
 
-use actix_files as fs;
-use futures::{StreamExt};
-use actix_web::{web, App, Error, HttpResponse};
 use qstring::QString;
-use actix_http::KeepAlive;
-use actix_web::{HttpRequest, HttpServer};
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
 use platform::{MyResponse, Platform, ContentType};
@@ -28,8 +23,12 @@ use serde_json::Value;
 use std::env;
 use std::fs::File;
 use std::sync::Arc;
+use std::{net::SocketAddr};
+use hyper::{Body, Request, Response, Server, Error};
+use hyper::service::{make_service_fn, service_fn};
 
-fn process_form(parameters:&str, state: web::Data<Arc<AppState>>) -> MyResponse {
+
+async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
     let parameter_pairs = QString::from(parameters) ;
     let parameter_pairs = parameter_pairs.to_pairs() ;
     let mut form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
@@ -128,9 +127,9 @@ fn process_form(parameters:&str, state: web::Data<Arc<AppState>>) -> MyResponse 
 
     // Actually do something useful!
     state.modify_threads_running(1);
-    let mut platform = Platform::new_from_parameters(&form_parameters, state.get_ref().clone());
+    let mut platform = Platform::new_from_parameters(&form_parameters, state.clone());
     Platform::profile("platform initialized", None);
-    let platform_result = platform.run();
+    let platform_result = platform.run().await;
     state.log_query_end(started_query_id);
     state.modify_threads_running(-1);
     Platform::profile("platform run complete", None);
@@ -159,7 +158,7 @@ fn process_form(parameters:&str, state: web::Data<Arc<AppState>>) -> MyResponse 
     Platform::profile("PSID set", None);
 
     // Render response
-    let response = match platform.get_response() {
+    let response = match platform.get_response().await {
         Ok(response) => response,
         Err(error) => state.render_error(error, &form_parameters),
     };
@@ -167,21 +166,8 @@ fn process_form(parameters:&str, state: web::Data<Arc<AppState>>) -> MyResponse 
     response
 }
 
-async fn query_handler_get(req: HttpRequest,app_state: web::Data<Arc<AppState>>) -> Result<HttpResponse, Error> {
-    process_form ( req.query_string() , app_state ).respond()
-}
-
-async fn query_handler_post(mut body: web::Payload,app_state: web::Data<Arc<AppState>>) -> Result<HttpResponse, Error> {
-    let mut bytes = web::BytesMut::new();
-    while let Some(item) = body.next().await {
-        bytes.extend_from_slice(&item?);
-    }
-    let parameters = std::str::from_utf8(&bytes).unwrap_or("") ;
-    process_form ( parameters , app_state ).respond()
-}
-
-#[actix_rt::main]
-async fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() {
 
     let basedir = env::current_dir()
         .expect("Can't get CWD")
@@ -193,21 +179,31 @@ async fn main() -> std::io::Result<()> {
     let petscan_config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
-    let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
-    let port = petscan_config["http_port"].as_u64().unwrap_or(80);
+    let _ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
+
+    let port = petscan_config["http_port"].as_u64().unwrap_or(80) as u16;
     
-    let actual_app_state = Arc::new(AppState::new_from_config(&petscan_config)) ;
-    let app_state = web::Data::new(actual_app_state);
-    HttpServer::new(move || {
-        App::new()
-            .app_data(app_state.clone())
-            .route("/", web::get().to(query_handler_get))
-            .route("/", web::post().to(query_handler_post))
-            .service(fs::Files::new("/", "./html").show_files_listing())
-    })
-    .workers(4)
-    .keep_alive(KeepAlive::from(None))
-    .bind(format!("{}:{}",&ip_address,port))?
-    .run()
-    .await
+    let app_state = Arc::new(AppState::new_from_config(&petscan_config).await) ;
+
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+    let make_service = make_service_fn(move |_| {
+        let app_state = app_state.clone();
+
+        async move {
+            Ok::<_, Error>(service_fn(move |_req| {
+                let _x = process_form("test",app_state.clone());
+                let body = Body::from(format!("Request #")) ;
+                let response = Response::new(body) ;
+                async move { Ok::<_, Error>(response) }
+            }))
+        }
+    });
+     let server = Server::bind(&addr).serve(make_service);
+
+    println!("Listening on http://{}", addr);
+
+    if let Err(e) = server.await {
+        eprintln!("server error: {}", e);
+    }
 }

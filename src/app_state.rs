@@ -32,7 +32,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new_from_config(config: &Value) -> Self {
+    pub async fn new_from_config(config: &Value) -> Self {
         let main_page_path = "./html/index.html";
         let tool_db_access_tuple = (
             config["user"]
@@ -49,7 +49,7 @@ impl AppState {
             config: config.to_owned(),
             threads_running: Arc::new(RwLock::new(0)),
             shutting_down: Arc::new(RwLock::new(false)),
-            site_matrix: AppState::load_site_matrix(),
+            site_matrix: AppState::load_site_matrix().await,
             tool_db_mutex: Arc::new(Mutex::new(tool_db_access_tuple)),
             main_page: String::from_utf8_lossy(
                 &fs::read(main_page_path).expect("Could not read index.html file form disk"),
@@ -301,10 +301,10 @@ impl AppState {
         }
     }
 
-    pub fn get_api_for_wiki(&self, wiki: String) -> Result<Api, String> {
+    pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api, String> {
         // TODO cache url and/or api object?
         let url = self.get_server_url_for_wiki(&wiki)? + "/w/api.php";
-        match Api::new(&url) {
+        match Api::new(&url).await {
             Ok(api) => Ok(api),
             Err(e) => Err(format!("{:?}", e)),
         }
@@ -560,14 +560,14 @@ impl AppState {
         ret
     }
 
-    fn load_site_matrix() -> Value {
+    async fn load_site_matrix() -> Value {
         let api =
-            Api::new("https://www.wikidata.org/w/api.php").expect("Can't talk to Wikidata API");
+            Api::new("https://www.wikidata.org/w/api.php").await.expect("Can't talk to Wikidata API");
         let params: HashMap<String, String> = vec![("action", "sitematrix")]
             .par_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        api.get_query_api_json(&params)
+        api.get_query_api_json(&params).await
             .expect("Can't run action=sitematrix on Wikidata API")
     }
 
@@ -599,7 +599,7 @@ mod tests {
     use std::env;
     use std::fs::File;
 
-    fn get_new_state() -> Arc<AppState> {
+    async fn get_new_state() -> Arc<AppState> {
         let basedir = env::current_dir()
             .expect("Can't get CWD")
             .to_str()
@@ -609,19 +609,22 @@ mod tests {
         let file = File::open(path).expect("Can not open config file");
         let petscan_config: Value =
             serde_json::from_reader(file).expect("Can not parse JSON from config file");
-        Arc::new(AppState::new_from_config(&petscan_config))
+        Arc::new(AppState::new_from_config(&petscan_config).await)
     }
 
-    fn get_state() -> Arc<AppState> {
+    async fn get_state() -> Arc<AppState> {
+        get_new_state().await // TODO use static
+        /*
         lazy_static! {
             static ref STATE: Arc<AppState> = get_new_state();
         }
         STATE.clone()
+        */
     }
 
-    #[test]
-    fn test_get_wiki_for_server_url() {
-        let state = get_state();
+    #[tokio::test]
+    async fn test_get_wiki_for_server_url() {
+        let state = get_state().await;
         assert_eq!(
             state.get_wiki_for_server_url(&"https://am.wiktionary.org".to_string()),
             Some("amwiktionary".to_string())
@@ -632,9 +635,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_db_host_and_schema_for_wiki() {
-        let state = get_state();
+    #[tokio::test]
+    async fn test_db_host_and_schema_for_wiki() {
+        let state = get_state().await;
         assert_eq!(
             "enwiki_p".to_string(),
             state
@@ -651,9 +654,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn is_language_rtl() {
-        let state = get_state();
+    #[tokio::test]
+    async fn is_language_rtl() {
+        let state = get_state().await;
         assert!(!state.is_language_rtl("en"));
         assert!(state.is_language_rtl("ar"));
         assert!(!state.is_language_rtl("de"));

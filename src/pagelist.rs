@@ -637,7 +637,7 @@ impl PageList {
         Ok(())
     }
 
-    fn check_before_merging(
+    async fn check_before_merging(
         &self,
         pagelist: &PageList,
         platform: Option<&Platform>,
@@ -662,7 +662,7 @@ impl PageList {
                         .as_str(),
                         None,
                     );
-                    pagelist.convert_to_wiki(&my_wiki, platform)?;
+                    pagelist.convert_to_wiki(&my_wiki, platform).await?;
                 }
                 None => {
                     return Err(format!(
@@ -679,8 +679,8 @@ impl PageList {
         Ok(())
     }
 
-    pub fn union(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<(), String> {
-        self.check_before_merging(&pagelist, platform)?;
+    pub async fn union(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<(), String> {
+        self.check_before_merging(&pagelist, platform).await?;
         Platform::profile("PageList::union START UNION/1", None);
         let mut me = self.entries.write().map_err(|e| format!("{:?}", e))?;
         if me.is_empty() {
@@ -704,12 +704,12 @@ impl PageList {
         Ok(())
     }
 
-    pub fn intersection(
+    pub async fn intersection(
         &self,
         pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
-        self.check_before_merging(&pagelist, platform)?;
+        self.check_before_merging(&pagelist, platform).await?;
         let other_entries = pagelist.entries();
         let other_entries = other_entries.read().map_err(|e| format!("{:?}", e))?;
         self.entries
@@ -719,12 +719,12 @@ impl PageList {
         Ok(())
     }
 
-    pub fn difference(
+    pub async fn difference(
         &self,
         pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
-        self.check_before_merging(&pagelist, platform)?;
+        self.check_before_merging(&pagelist, platform).await?;
         let other_entries = pagelist.entries();
         let other_entries = other_entries.read().map_err(|e| format!("{:?}", e))?;
         self.entries
@@ -1088,14 +1088,14 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         )
     }
 
-    pub fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
+    pub async fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
         // Already that wiki?
         if self.wiki()? == None || self.wiki()? == Some(wiki.to_string()) {
             return Ok(());
         }
         self.convert_to_wikidata(platform)?;
         if wiki != "wikidatawiki" {
-            self.convert_from_wikidata(wiki, platform)?;
+            self.convert_from_wikidata(wiki, platform).await?;
         }
         Ok(())
     }
@@ -1126,7 +1126,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         Ok(())
     }
 
-    fn convert_from_wikidata(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
+    async fn convert_from_wikidata(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
         if !self.is_wikidata() {
             return Ok(());
         }
@@ -1146,7 +1146,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         );
 
         self.clear_entries()?;
-        let api = platform.state().get_api_for_wiki(wiki.to_string())?;
+        let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         Platform::profile("PageList::convert_from_wikidata STARTING BATCHES", None);
 
         batches.chunks(5).for_each(|batch_chunk| {

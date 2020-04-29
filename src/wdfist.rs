@@ -1,3 +1,5 @@
+use std::error::Error;
+use futures::future::join_all;
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
@@ -57,7 +59,7 @@ impl WDfist {
         })
     }
 
-    pub fn run(&mut self) -> Result<Value, String> {
+    pub async fn run(&mut self) -> Result<Value, String> {
         let mut j = json!({"status":"OK","data":{}});
         self.wdf_allow_svg = self.bool_param("wdf_allow_svg");
         self.wdf_only_jpeg = self.bool_param("wdf_only_jpeg");
@@ -66,7 +68,7 @@ impl WDfist {
             return Ok(j);
         }
 
-        self.seed_ignore_files()?;
+        self.seed_ignore_files().await?;
         self.filter_items()?;
         if self.items.is_empty() {
             j["status"] = json!("No items qualify");
@@ -78,10 +80,10 @@ impl WDfist {
             self.follow_language_links()?;
         }
         if self.bool_param("wdf_coords") {
-            self.follow_coords()?;
+            self.follow_coords().await?;
         }
         if self.bool_param("wdf_search_commons") {
-            self.follow_search_commons()?;
+            self.follow_search_commons().await?;
         }
         if self.bool_param("wdf_commons_cats") {
             self.follow_commons_cats()?;
@@ -214,7 +216,7 @@ impl WDfist {
         Ok(())
     }
 
-    fn follow_coords(&mut self) -> Result<(), String> {
+    async fn follow_coords(&mut self) -> Result<(), String> {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -234,65 +236,64 @@ impl WDfist {
             .collect();
 
         // Get nearby files
-        let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(MAX_WIKI_API_THREADS)
-            .build()
-            .expect("follow_coords: Can't build ThreadPool")
-            .install(|| {
-                page_coords
+        let api = Api::new("https://commons.wikimedia.org/w/api.php").await
+            .map_err(|e| format!("{:?}", e))?;
+        //let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
+
+        let params : Vec<_> = page_coords
+            .iter()
+            .map(|(_q, lat, lon)| {
+                api.params_into(&vec![
+                    ("action", "query"),
+                    ("list", "geosearch"),
+                    ("gscoord", format!("{}|{}", lat, lon).as_str()),
+                    (
+                        "gsradius",
+                        format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
+                    ),
+                    ("gslimit", "50"),
+                    ("gsnamespace", "6"),
+                ])
+            })
+            .collect();
+
+        let futures : Vec<_> = params
+            .iter()
+            .map(|params|api.get_query_api_json(&params))
+            .collect();
+
+        let results = join_all(futures).await;
+
+        let add_item_file : Vec<(String, String)> = results.iter()
+            .zip(page_coords)
+            .filter_map(|(result,(q,_lat,_lon))|{
+                let result = result.as_ref().ok()?;
+                let images = result["query"]["geosearch"].as_array()?;
+                let item_file: Vec<(String, String)> = images
                     .par_iter()
-                    .map(|(q, lat, lon)| {
-                        let api = Api::new("https://commons.wikimedia.org/w/api.php")
-                            .map_err(|e| format!("{:?}", e))?;
-                        let params = api.params_into(&vec![
-                            ("action", "query"),
-                            ("list", "geosearch"),
-                            ("gscoord", format!("{}|{}", lat, lon).as_str()),
-                            (
-                                "gsradius",
-                                format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
-                            ),
-                            ("gslimit", "50"),
-                            ("gsnamespace", "6"),
-                        ]);
-                        let result = api
-                            .get_query_api_json(&params)
-                            .map_err(|e| format!("{:?}", e))?;
-                        let images = match result["query"]["geosearch"].as_array() {
-                            Some(a) => a,
-                            None => {
-                                return Ok(());
-                            }
-                        };
-                        let mut item_file: Vec<(String, String)> = images
-                            .par_iter()
-                            .filter_map(|j| match j["title"].as_str() {
-                                Some(filename) => {
-                                    let filename = filename[5..].to_string(); // Remove leading "File:"
-                                    let filename = self.normalize_filename(&filename);
-                                    Some((q.to_string(), filename))
-                                }
-                                None => None,
-                            })
-                            .collect();
-                        add_item_file.lock().unwrap().append(&mut item_file);
-                        Ok(())
+                    .filter_map(|j| match j["title"].as_str() {
+                        Some(filename) => {
+                            let filename = filename[5..].to_string(); // Remove leading "File:"
+                            let filename = self.normalize_filename(&filename);
+                            Some((q.to_string(), filename))
+                        }
+                        None => None,
                     })
-                    .collect::<Result<_, String>>()
-            })?;
+                    .collect();
+                Some(item_file)
+            })
+            .flatten()
+            .collect();
 
         // Add files
         add_item_file
-            .lock()
-            .unwrap()
             .iter()
             .for_each(|(q, file)| self.add_file_to_item(q, file));
 
         Ok(())
     }
 
-    fn follow_search_commons(&mut self) -> Result<(), String> {
+    async fn follow_search_commons(&mut self) -> Result<(), String> {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -312,53 +313,54 @@ impl WDfist {
             .collect();
 
         // Get search results
-        let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(MAX_WIKI_API_THREADS)
-            .build()
-            .map_err(|e| format!("follow_search_commons: Can't build ThreadPool: {:?}", e))?
-            .install(|| {
-                item2label
+        let api = Api::new("https://commons.wikimedia.org/w/api.php").await.map_err(|e| format!("{:?}", e))?;
+
+        let params : Vec<_> = item2label
+            .iter()
+            .map(|(_q, label)|
+                api.params_into(&vec![
+                    ("action", "query"),
+                    ("list", "search"),
+                    ("srnamespace", "6"),
+                    ("srsearch", label.as_str()),
+                ]))
+            .collect();
+
+        let futures : Vec<_> = params
+            .iter()
+            .map(|params|api.get_query_api_json(&params))
+            .collect();
+
+        let results = join_all(futures).await;
+
+        let add_item_file : Vec<(String, String)> = results.iter()
+            .zip(item2label)
+            .filter_map(|(result,(q,_label)):(&Result<Value, Box<dyn Error>>,(String,String))|{
+                let result = result.as_ref().ok()?;
+                let images = match result["query"]["search"].as_array() {
+                    Some(a) => a,
+                    None => {
+                        return None;
+                    }
+                };
+                let item_file: Vec<(String, String)> = images
                     .par_iter()
-                    .map(|(q, label)| {
-                        let api = Api::new("https://commons.wikimedia.org/w/api.php")
-                            .map_err(|e| format!("{:?}", e))?;
-                        let params = api.params_into(&vec![
-                            ("action", "query"),
-                            ("list", "search"),
-                            ("srnamespace", "6"),
-                            ("srsearch", label.as_str()),
-                        ]);
-                        let result = api
-                            .get_query_api_json(&params)
-                            .map_err(|e| format!("{:?}", e))?; // TODO Ignore error?
-                        let images = match result["query"]["search"].as_array() {
-                            Some(a) => a,
-                            None => {
-                                return Ok(());
-                            }
-                        };
-                        let mut item_file: Vec<(String, String)> = images
-                            .par_iter()
-                            .filter_map(|j| match j["title"].as_str() {
-                                Some(filename) => {
-                                    let filename = filename[5..].to_string(); // Remove leading "File:"
-                                    let filename = self.normalize_filename(&filename);
-                                    Some((q.to_string(), filename))
-                                }
-                                None => None,
-                            })
-                            .collect();
-                        add_item_file.lock().unwrap().append(&mut item_file);
-                        Ok(())
+                    .filter_map(|j| match j["title"].as_str() {
+                        Some(filename) => {
+                            let filename = filename[5..].to_string(); // Remove leading "File:"
+                            let filename = self.normalize_filename(&filename);
+                            Some((q.to_string(), filename))
+                        }
+                        None => None,
                     })
-                    .collect::<Result<_, String>>()
-            })?;
+                    .collect();
+                Some(item_file)
+            })
+            .flatten()
+            .collect();
 
         // Add files
         add_item_file
-            .lock()
-            .unwrap()
             .iter()
             .for_each(|(q, file)| self.add_file_to_item(q, file));
 
@@ -377,20 +379,20 @@ impl WDfist {
         }
     }
 
-    fn seed_ignore_files(&mut self) -> Result<(), String> {
-        self.seed_ignore_files_from_wiki_page()?;
+    async fn seed_ignore_files(&mut self) -> Result<(), String> {
+        self.seed_ignore_files_from_wiki_page().await?;
         self.seed_ignore_files_from_ignore_database()?;
         Ok(())
     }
 
-    fn seed_ignore_files_from_wiki_page(&mut self) -> Result<(), String> {
+    async fn seed_ignore_files_from_wiki_page(&mut self) -> Result<(), String> {
         let url_with_ignore_list =
             "http://www.wikidata.org/w/index.php?title=User:Magnus_Manske/FIST_icons&action=raw";
-        let api = match Api::new("https://www.wikidata.org/w/api.php") {
+        let api = match Api::new("https://www.wikidata.org/w/api.php").await {
             Ok(api) => api,
             Err(_e) => return Err(format!("Can't open Wikidata API")),
         };
-        let wikitext = match api.query_raw(url_with_ignore_list, &HashMap::new(), "GET") {
+        let wikitext = match api.query_raw(url_with_ignore_list, &HashMap::new(), "GET").await {
             Ok(t) => t,
             Err(e) => {
                 return Err(format!(
@@ -679,7 +681,7 @@ mod tests {
     use std::env;
     use std::fs::File;
 
-    fn get_state() -> Arc<AppState> {
+    async fn get_state() -> Arc<AppState> {
         let basedir = env::current_dir()
             .expect("Can't get CWD")
             .to_str()
@@ -689,10 +691,10 @@ mod tests {
         let file = File::open(path).expect("Can not open config file");
         let petscan_config: Value =
             serde_json::from_reader(file).expect("Can not parse JSON from config file");
-        Arc::new(AppState::new_from_config(&petscan_config))
+        Arc::new(AppState::new_from_config(&petscan_config).await)
     }
 
-    fn get_wdfist(params: Vec<(&str, &str)>, items: Vec<&str>) -> WDfist {
+    async fn get_wdfist(params: Vec<(&str, &str)>, items: Vec<&str>) -> WDfist {
         let form_parameters = FormParameters {
             params: params
                 .par_iter()
@@ -705,7 +707,7 @@ mod tests {
             items: items.par_iter().map(|s| s.to_string()).collect(),
             files2ignore: HashSet::new(),
             form_parameters: form_parameters,
-            state: get_state(),
+            state: get_state().await,
             wdf_allow_svg: false,
             wdf_only_jpeg: false,
         }
@@ -721,8 +723,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_wdfist_filter_items() {
+    #[tokio::test]
+    async fn test_wdfist_filter_items() {
         let params: Vec<(&str, &str)> = vec![("wdf_only_items_without_p18", "1")];
         let items: Vec<&str> = vec![
             "Q63810120", // Some scientific paper, unlikely to ever get an image, designated survivor of this test
@@ -731,18 +733,18 @@ mod tests {
             "Q21002367", // Disambig item
             "Q10000067", // Redirect
         ];
-        let mut wdfist = get_wdfist(params, items);
-        let _j = wdfist.run().unwrap();
+        let mut wdfist = get_wdfist(params, items).await;
+        let _j = wdfist.run().await.unwrap();
         assert_eq!(wdfist.items, vec!["Q63810120".to_string()]);
     }
 
-    #[test]
-    fn test_filter_files_five_or_is_used() {
+    #[tokio::test]
+    async fn test_filter_files_five_or_is_used() {
         let params: Vec<(&str, &str)> = vec![
             ("wdf_max_five_results", "1"),
             ("wdf_only_files_not_on_wd", "1"),
         ];
-        let mut wdfist = get_wdfist(params, vec![]);
+        let mut wdfist = get_wdfist(params, vec![]).await;
         set_item2files(&mut wdfist, "Q1", vec![("More_than_5.jpg", 0)]);
         set_item2files(&mut wdfist, "Q2", vec![("More_than_5.jpg", 0)]);
         set_item2files(
@@ -770,37 +772,10 @@ mod tests {
         );
     }
 
-    // Deactivated, need to check upstream data changes
-    /*
-    #[test]
-    fn test_filter_files_from_ignore_database() {
-        let params: Vec<(&str, &str)> = vec![("wdf_max_five_results", "1")];
-        let mut wdfist = get_wdfist(params, vec![]);
-        set_item2files(&mut wdfist, "Q3182779", vec![("Wisden_1878.jpg", 0)]); // Should get removed entirely
-        set_item2files(
-            &mut wdfist,
-            "Q6264259",
-            vec![
-                ("Roedean.JPG", 0),
-                ("Designated_survivor.jpg", 0),
-                (
-                    "Brighton_War_Memorial,_Old_Steine,_Brighton_(IoE_Code_480999).jpg",
-                    0,
-                ),
-            ],
-        );
-        wdfist.filter_files_from_ignore_database().unwrap();
-        assert_eq!(
-            json!(wdfist.item2files),
-            json!({"Q6264259":{"Designated_survivor.jpg":0}})
-        );
-    }
-    */
-
-    #[test]
-    fn test_is_valid_filename() {
+    #[tokio::test]
+    async fn test_is_valid_filename() {
         let params: Vec<(&str, &str)> = vec![];
-        let mut wdfist = get_wdfist(params, vec![]);
+        let mut wdfist = get_wdfist(params, vec![]).await;
         assert!(wdfist.is_valid_filename(&"foobar.jpg".to_string()));
         assert!(!wdfist.is_valid_filename(&"foobar.GIF".to_string()));
         assert!(!wdfist.is_valid_filename(&"foobar.pdf".to_string()));
@@ -816,10 +791,10 @@ mod tests {
         assert!(!wdfist.is_valid_filename(&"foobar.svg".to_string()));
     }
 
-    #[test]
-    fn test_follow_language_links() {
+    #[tokio::test]
+    async fn test_follow_language_links() {
         let params: Vec<(&str, &str)> = vec![];
-        let mut wdfist = get_wdfist(params, vec!["Q1481"]);
+        let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
 
         // All files
         wdfist.wdf_allow_svg = true;
@@ -841,7 +816,7 @@ mod tests {
 
         // Page images
         let params: Vec<(&str, &str)> = vec![("wdf_only_page_images", "1")];
-        let mut wdfist = get_wdfist(params, vec!["Q1481"]);
+        let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
         wdfist.follow_language_links().unwrap();
         assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
         assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() < 50);
@@ -852,11 +827,11 @@ mod tests {
             .contains_key(&"Felsberg_(Hessen).jpg".to_string()));
     }
 
-    #[test]
-    fn test_follow_coords() {
+    #[tokio::test]
+    async fn test_follow_coords() {
         let params: Vec<(&str, &str)> = vec![];
-        let mut wdfist = get_wdfist(params, vec!["Q350"]);
-        wdfist.follow_coords().unwrap();
+        let mut wdfist = get_wdfist(params, vec!["Q350"]).await;
+        wdfist.follow_coords().await.unwrap();
         assert!(wdfist.item2files.get(&"Q350".to_string()).unwrap().len() > 40);
         assert!(wdfist
             .item2files
@@ -865,11 +840,11 @@ mod tests {
             .contains_key(&"Cambridge_Wikidata_dinner.jpg".to_string()));
     }
 
-    #[test]
-    fn test_follow_search_commons() {
+    #[tokio::test]
+    async fn test_follow_search_commons() {
         let params: Vec<(&str, &str)> = vec![];
-        let mut wdfist = get_wdfist(params, vec!["Q66711783"]);
-        wdfist.follow_search_commons().unwrap();
+        let mut wdfist = get_wdfist(params, vec!["Q66711783"]).await;
+        wdfist.follow_search_commons().await.unwrap();
         println!(
             "{} results",
             wdfist

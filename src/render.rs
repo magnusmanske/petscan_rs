@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use crate::app_state::AppState;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::{LinkCount, PageListEntry};
@@ -46,8 +47,8 @@ pub struct RenderParams {
 }
 
 impl RenderParams {
-    pub fn new(platform: &Platform, wiki: &String) -> Result<Self, String> {
-        let api = platform.state().get_api_for_wiki(wiki.to_string())?;
+    pub async fn new(platform: &Platform, wiki: &String) -> Result<Self, String> {
+        let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let mut ret = Self {
             wiki: wiki.to_owned(),
             file_data: platform.has_param("ext_image_data"),
@@ -82,8 +83,9 @@ impl RenderParams {
 
 //________________________________________________________________________________________________________________________
 
+#[async_trait]
 pub trait Render {
-    fn response(
+    async fn response(
         &self,
         _platform: &Platform,
         _wiki: &String,
@@ -300,14 +302,15 @@ pub trait Render {
 /// Renders wiki text
 pub struct RenderWiki {}
 
+#[async_trait]
 impl Render for RenderWiki {
-    fn response(
+    async fn response(
         &self,
         platform: &Platform,
         wiki: &String,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
-        let mut params = RenderParams::new(platform, wiki)?;
+        let mut params = RenderParams::new(platform, wiki).await?;
         let mut rows: Vec<String> = vec![];
         rows.push("== ".to_string() + &platform.combination().to_string() + " ==");
 
@@ -446,14 +449,15 @@ pub struct RenderTSV {
     separator: String,
 }
 
+#[async_trait]
 impl Render for RenderTSV {
-    fn response(
+    async fn response(
         &self,
         platform: &Platform,
         wiki: &String,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
-        let mut params = RenderParams::new(platform, wiki)?;
+        let mut params = RenderParams::new(platform, wiki).await?;
         let mut rows: Vec<String> = vec![];
         let mut header: Vec<(&str, &str)> = vec![
             ("number", "number"),
@@ -558,14 +562,15 @@ impl RenderTSV {
 /// Renders HTML
 pub struct RenderHTML {}
 
+#[async_trait]
 impl Render for RenderHTML {
-    fn response(
+    async fn response(
         &self,
         platform: &Platform,
         wiki: &String,
         mut entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
-        let mut params = RenderParams::new(platform, wiki)?;
+        let mut params = RenderParams::new(platform, wiki).await?;
         let mut rows = vec![];
 
         rows.push("<hr/>".to_string());
@@ -982,14 +987,15 @@ impl RenderHTML {
 /// Renders HTML
 pub struct RenderJSON {}
 
+#[async_trait]
 impl Render for RenderJSON {
-    fn response(
+    async fn response(
         &self,
         platform: &Platform,
         wiki: &String,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
-        let mut params = RenderParams::new(platform, wiki)?;
+        let mut params = RenderParams::new(platform, wiki).await?;
         let mut content_type = ContentType::JSON;
         if params.json_pretty {
             content_type = ContentType::Plain;
@@ -1314,14 +1320,15 @@ impl RenderJSON {
 /// Renders PagePile
 pub struct RenderPagePile {}
 
+#[async_trait]
 impl Render for RenderPagePile {
-    fn response(
+    async fn response(
         &self,
         platform: &Platform,
         wiki: &String,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
-        let api = platform.state().get_api_for_wiki(wiki.to_string())?;
+        let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let url = "https://tools.wmflabs.org/pagepile/api.php";
         let data: String = entries
             .iter()
@@ -1335,7 +1342,7 @@ impl Render for RenderPagePile {
                 .collect();
         params.insert("data".to_string(), data);
 
-        let result = match api.query_raw(url, &params, "POST") {
+        let result = match api.query_raw(url, &params, "POST").await {
             Ok(r) => r,
             Err(e) => return Err(format!("PagePile generation failed: {:?}", e)),
         };
