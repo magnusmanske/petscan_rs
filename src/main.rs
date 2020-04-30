@@ -255,13 +255,15 @@ async fn main() -> Result<(),Error> {
     let petscan_config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
-    let _ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
+    let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
+    let ip_address : Vec<u8> = ip_address.split('.').map(|s|s.parse::<u8>().unwrap()).collect();
+    let ip_address = std::net::Ipv4Addr::new(ip_address[0],ip_address[1],ip_address[2],ip_address[3],);
 
     let port = petscan_config["http_port"].as_u64().unwrap_or(80) as u16;
     
     let app_state = Arc::new(AppState::new_from_config(&petscan_config).await) ;
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::from((ip_address, port));
 
     let make_service = make_service_fn(move |_| {
         let app_state = app_state.clone();
