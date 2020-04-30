@@ -261,7 +261,7 @@ async fn main() -> Result<(),Error> {
     
     let app_state = Arc::new(AppState::new_from_config(&petscan_config).await) ;
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let make_service = make_service_fn(move |_| {
         let app_state = app_state.clone();
