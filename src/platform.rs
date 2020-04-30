@@ -1461,15 +1461,14 @@ impl Platform {
         drop(result);
         self.apply_results_limit(&mut pages);
 
-        let renderer: Box<dyn Render> = match self.get_param_blank("format").as_str() {
-            "wiki" => RenderWiki::new(),
-            "csv" => RenderTSV::new(","),
-            "tsv" => RenderTSV::new("\t"),
-            "json" => RenderJSON::new(),
-            "pagepile" => RenderPagePile::new(),
-            _ => RenderHTML::new(),
-        };
-        renderer.response(&self, &wiki, pages).await
+        match self.get_param_blank("format").as_str() {
+            "wiki" => RenderWiki::new().response(&self, &wiki, pages).await,
+            "csv" => RenderTSV::new(",").response(&self, &wiki, pages).await,
+            "tsv" => RenderTSV::new("\t").response(&self, &wiki, pages).await,
+            "json" => RenderJSON::new().response(&self, &wiki, pages).await,
+            "pagepile" => RenderPagePile::new().response(&self, &wiki, pages).await,
+            _ => RenderHTML::new().response(&self, &wiki, pages).await,
+        }
     }
 
     pub fn get_param_as_vec(&self, param: &str, separator: &str) -> Vec<String> {

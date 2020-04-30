@@ -24,8 +24,9 @@ use std::env;
 use std::fs::File;
 use std::sync::Arc;
 use std::{net::SocketAddr};
-use hyper::{Body, Request, Response, Server, Error};
+use hyper::{header, Body, Request, Response, Server, Error, StatusCode};
 use hyper::service::{make_service_fn, service_fn};
+//type GenericError = Box<dyn std::error::Error + Send + Sync>;
 
 
 async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
@@ -166,8 +167,54 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
     response
 }
 
+async fn process_request(req: Request<Body>,app_state:Arc<AppState>) -> Result<Response<Body>,Error> {
+    // URL GET query
+    match req.uri().query() {
+        Some(query) => {
+            if !query.is_empty() {
+                let ret = process_form(query,app_state).await;
+                let response = Response::builder()
+                .header(header::CONTENT_TYPE, ret.content_type.as_str())
+                .body(Body::from(ret.s))
+                .unwrap();
+                return Ok(response);
+            }
+        },
+        None => {}
+    } ;
+    // Fallback
+    Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body("NOT FOUND".into())
+                .unwrap())
+
+                    /*
+    let _x = process_form("test",app_state.clone());
+    let query = match req.uri().query() {
+        Some(q) => q,
+        None => {
+            //let _result = req.body().collect::<Vec<u8>>().await;
+            let body = hyper::body::to_bytes(req.body_mut()).await.unwrap();
+            "post"
+        }
+    } ;
+    let body = Body::from(format!("Request:{:?}",query)) ;
+    let response = Response::new(body) ;
+    Ok(response)
+    */
+
+
+    /*
+    Ok(Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap()
+    */
+    //async move { Ok::<_, Error>(response) }.await
+}
+
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(),Error> {
 
     let basedir = env::current_dir()
         .expect("Can't get CWD")
@@ -187,23 +234,35 @@ async fn main() {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
+    /*
     let make_service = make_service_fn(move |_| {
         let app_state = app_state.clone();
 
         async move {
-            Ok::<_, Error>(service_fn(move |_req| {
-                let _x = process_form("test",app_state.clone());
-                let body = Body::from(format!("Request #")) ;
-                let response = Response::new(body) ;
-                async move { Ok::<_, Error>(response) }
+            Ok::<_, Error>(service_fn(move |req: Request<Body>| {
+                process_request(req,app_state)
             }))
         }
     });
-     let server = Server::bind(&addr).serve(make_service);
+    */
+
+    let make_service = make_service_fn(move |_| {
+        // Move a clone of `client` into the `service_fn`.
+        //let client = client.clone();
+        let app_state = app_state.clone();
+        async {
+            Ok::<_, Error>(service_fn(move |req|  {
+                // Clone again to ensure that client outlives this closure.
+                process_request(req,app_state.to_owned())
+            }))
+        }
+    });
+    
+    let server = Server::bind(&addr).serve(make_service);
 
     println!("Listening on http://{}", addr);
 
-    if let Err(e) = server.await {
-        eprintln!("server error: {}", e);
-    }
+    server.await?;
+
+    Ok(())
 }

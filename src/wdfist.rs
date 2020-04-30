@@ -1,5 +1,3 @@
-use std::error::Error;
-use futures::future::join_all;
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
@@ -257,17 +255,26 @@ impl WDfist {
             })
             .collect();
 
+        /*
         let futures : Vec<_> = params
             .iter()
             .map(|params|api.get_query_api_json(&params))
             .collect();
 
         let results = join_all(futures).await;
+        */
+
+        let mut results : Vec<_> = vec![] ;
+        for param in params {
+            match api.get_query_api_json(&param).await {
+                Ok(x) => { results.push ( x ) }
+                _ => { results.push(json!({})) } // Ignore
+            }
+        }
 
         let add_item_file : Vec<(String, String)> = results.iter()
             .zip(page_coords)
             .filter_map(|(result,(q,_lat,_lon))|{
-                let result = result.as_ref().ok()?;
                 let images = result["query"]["geosearch"].as_array()?;
                 let item_file: Vec<(String, String)> = images
                     .par_iter()
@@ -326,17 +333,27 @@ impl WDfist {
                 ]))
             .collect();
 
+        /*
         let futures : Vec<_> = params
             .iter()
             .map(|params|api.get_query_api_json(&params))
             .collect();
 
         let results = join_all(futures).await;
+        */
+
+        let mut results : Vec<_> = vec![] ;
+        for param in params {
+            match api.get_query_api_json(&param).await {
+                Ok(x) => { results.push ( x ) }
+                _ => { results.push(json!({})) } // Ignore
+            }
+        }
+
 
         let add_item_file : Vec<(String, String)> = results.iter()
             .zip(item2label)
-            .filter_map(|(result,(q,_label)):(&Result<Value, Box<dyn Error>>,(String,String))|{
-                let result = result.as_ref().ok()?;
+            .filter_map(|(result,(q,_label)):(&Value,(String,String))|{
                 let images = match result["query"]["search"].as_array() {
                     Some(a) => a,
                     None => {
