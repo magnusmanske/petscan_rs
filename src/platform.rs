@@ -49,16 +49,6 @@ pub struct MyResponse {
     pub content_type: ContentType,
 }
 
-/*
-impl warp::Reply for MyResponse {
-    fn into_response(self) -> Response {
-        Response::builder()
-            .header("content-type", self.content_type.as_str())
-            .body(self.s)
-    }
-}
-*/
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Combination {
     None,

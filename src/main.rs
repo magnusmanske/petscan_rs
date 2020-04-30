@@ -15,6 +15,8 @@ pub mod platform;
 pub mod render;
 pub mod wdfist;
 
+use tokio::fs::File as TokioFile;
+use tokio_util::codec::{BytesCodec, FramedRead};
 use qstring::QString;
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
@@ -24,10 +26,11 @@ use std::env;
 use std::fs::File;
 use std::sync::Arc;
 use std::{net::SocketAddr};
-use hyper::{header, Body, Request, Response, Server, Error, StatusCode};
+use hyper::{header, Body, Request, Response, Server, Error, StatusCode, Method};
 use hyper::service::{make_service_fn, service_fn};
 //type GenericError = Box<dyn std::error::Error + Send + Sync>;
 
+static NOTFOUND: &[u8] = b"Not Found";
 
 async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
     let parameter_pairs = QString::from(parameters) ;
@@ -167,7 +170,45 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
     response
 }
 
-async fn process_request(req: Request<Body>,app_state:Arc<AppState>) -> Result<Response<Body>,Error> {
+
+
+/// HTTP status code 404
+fn not_found() -> Result<Response<Body>,Error> {
+    Ok(Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(NOTFOUND.into())
+        .unwrap())
+}
+
+async fn simple_file_send(filename: &str,content_type: &str) -> Result<Response<Body>,Error> {
+    // Serve a file by asynchronously reading it by chunks using tokio-util crate.
+    let filename = format!("html{}",filename);
+    if let Ok(file) = TokioFile::open(filename).await {
+        let stream = FramedRead::new(file, BytesCodec::new());
+        let body = Body::wrap_stream(stream);
+        let response = Response::builder()
+        .header(header::CONTENT_TYPE, content_type)
+        .body(body)
+        .unwrap();
+        return Ok(response);
+    }
+
+    not_found()
+}
+
+async fn serve_file_path(filename:&str) -> Result<Response<Body>,Error> {
+    match filename {
+        "/" => simple_file_send("/index.html","text/html; charset=utf-8").await,
+        "/index.html" => simple_file_send(filename,"text/html; charset=utf-8").await,
+        "/autolist.js" => simple_file_send(filename,"application/javascript; charset=utf-8").await,
+        "/main.js" => simple_file_send(filename,"application/javascript; charset=utf-8").await,
+        "/favicon.ico" => simple_file_send(filename,"image/x-icon; charset=utf-8").await,
+        "/robots.txt" => simple_file_send(filename,"text/plain; charset=utf-8").await,
+        _ => not_found()
+    }
+}
+
+async fn process_request(mut req: Request<Body>,app_state:Arc<AppState>) -> Result<Response<Body>,Error> {
     // URL GET query
     match req.uri().query() {
         Some(query) => {
@@ -182,35 +223,23 @@ async fn process_request(req: Request<Body>,app_state:Arc<AppState>) -> Result<R
         },
         None => {}
     } ;
-    // Fallback
-    Ok(Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body("NOT FOUND".into())
-                .unwrap())
 
-                    /*
-    let _x = process_form("test",app_state.clone());
-    let query = match req.uri().query() {
-        Some(q) => q,
-        None => {
-            //let _result = req.body().collect::<Vec<u8>>().await;
-            let body = hyper::body::to_bytes(req.body_mut()).await.unwrap();
-            "post"
+    // POST
+    if req.method() == Method::POST {
+        let query = hyper::body::to_bytes(req.body_mut()).await.unwrap();
+        if !query.is_empty() {
+            let query = String::from_utf8_lossy(&query);
+            let ret = process_form(&query,app_state).await;
+            let response = Response::builder()
+            .header(header::CONTENT_TYPE, ret.content_type.as_str())
+            .body(Body::from(ret.s))
+            .unwrap();
+            return Ok(response);
         }
-    } ;
-    let body = Body::from(format!("Request:{:?}",query)) ;
-    let response = Response::new(body) ;
-    Ok(response)
-    */
+    }
 
-
-    /*
-    Ok(Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::empty())
-            .unwrap()
-    */
-    //async move { Ok::<_, Error>(response) }.await
+    // Fallback: Static file
+    serve_file_path(req.uri().path()).await
 }
 
 #[tokio::main]
@@ -234,25 +263,10 @@ async fn main() -> Result<(),Error> {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
-    /*
     let make_service = make_service_fn(move |_| {
-        let app_state = app_state.clone();
-
-        async move {
-            Ok::<_, Error>(service_fn(move |req: Request<Body>| {
-                process_request(req,app_state)
-            }))
-        }
-    });
-    */
-
-    let make_service = make_service_fn(move |_| {
-        // Move a clone of `client` into the `service_fn`.
-        //let client = client.clone();
         let app_state = app_state.clone();
         async {
             Ok::<_, Error>(service_fn(move |req|  {
-                // Clone again to ensure that client outlives this closure.
                 process_request(req,app_state.to_owned())
             }))
         }
