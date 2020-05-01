@@ -15,6 +15,7 @@ pub mod platform;
 pub mod render;
 pub mod wdfist;
 
+use tokio::task;
 use tokio::fs::File as TokioFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use qstring::QString;
@@ -209,6 +210,7 @@ async fn serve_file_path(filename:&str) -> Result<Response<Body>,Error> {
 }
 
 async fn process_request(mut req: Request<Body>,app_state:Arc<AppState>) -> Result<Response<Body>,Error> {
+    println!("QUERY START");
     // URL GET query
     match req.uri().query() {
         Some(query) => {
@@ -218,6 +220,7 @@ async fn process_request(mut req: Request<Body>,app_state:Arc<AppState>) -> Resu
                 .header(header::CONTENT_TYPE, ret.content_type.as_str())
                 .body(Body::from(ret.s))
                 .unwrap();
+                println!("QUERY END GET");
                 return Ok(response);
             }
         },
@@ -234,11 +237,13 @@ async fn process_request(mut req: Request<Body>,app_state:Arc<AppState>) -> Resu
             .header(header::CONTENT_TYPE, ret.content_type.as_str())
             .body(Body::from(ret.s))
             .unwrap();
+            println!("QUERY END POST");
             return Ok(response);
         }
     }
 
     // Fallback: Static file
+    println!("QUERY END STATIC FILE");
     serve_file_path(req.uri().path()).await
 }
 
@@ -267,6 +272,7 @@ async fn main() -> Result<(),Error> {
 
     let make_service = make_service_fn(move |_| {
         let app_state = app_state.clone();
+        
         async {
             Ok::<_, Error>(service_fn(move |req|  {
                 process_request(req,app_state.to_owned())
