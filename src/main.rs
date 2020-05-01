@@ -15,7 +15,7 @@ pub mod platform;
 pub mod render;
 pub mod wdfist;
 
-use tokio::task;
+
 use tokio::fs::File as TokioFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use qstring::QString;
@@ -209,19 +209,21 @@ async fn serve_file_path(filename:&str) -> Result<Response<Body>,Error> {
     }
 }
 
+async fn process_from_query(query:&str,app_state:Arc<AppState>) -> Result<Response<Body>,Error> {
+    let ret = process_form(query,app_state).await;
+    let response = Response::builder()
+    .header(header::CONTENT_TYPE, ret.content_type.as_str())
+    .body(Body::from(ret.s))
+    .unwrap();
+    return Ok(response);
+}
+
 async fn process_request(mut req: Request<Body>,app_state:Arc<AppState>) -> Result<Response<Body>,Error> {
-    println!("QUERY START");
     // URL GET query
     match req.uri().query() {
         Some(query) => {
             if !query.is_empty() {
-                let ret = process_form(query,app_state).await;
-                let response = Response::builder()
-                .header(header::CONTENT_TYPE, ret.content_type.as_str())
-                .body(Body::from(ret.s))
-                .unwrap();
-                println!("QUERY END GET");
-                return Ok(response);
+                return process_from_query(query,app_state).await;
             }
         },
         None => {}
@@ -232,18 +234,11 @@ async fn process_request(mut req: Request<Body>,app_state:Arc<AppState>) -> Resu
         let query = hyper::body::to_bytes(req.body_mut()).await.unwrap();
         if !query.is_empty() {
             let query = String::from_utf8_lossy(&query);
-            let ret = process_form(&query,app_state).await;
-            let response = Response::builder()
-            .header(header::CONTENT_TYPE, ret.content_type.as_str())
-            .body(Body::from(ret.s))
-            .unwrap();
-            println!("QUERY END POST");
-            return Ok(response);
+            return process_from_query(&query,app_state).await;
         }
     }
 
     // Fallback: Static file
-    println!("QUERY END STATIC FILE");
     serve_file_path(req.uri().path()).await
 }
 
@@ -261,13 +256,11 @@ async fn main() -> Result<(),Error> {
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 
     let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
-    let ip_address : Vec<u8> = ip_address.split('.').map(|s|s.parse::<u8>().unwrap()).collect();
-    let ip_address = std::net::Ipv4Addr::new(ip_address[0],ip_address[1],ip_address[2],ip_address[3],);
-
-    let port = petscan_config["http_port"].as_u64().unwrap_or(80) as u16;
-    
+    let port = petscan_config["http_port"].as_u64().unwrap_or(80) as u16;    
     let app_state = Arc::new(AppState::new_from_config(&petscan_config).await) ;
 
+    let ip_address : Vec<u8> = ip_address.split('.').map(|s|s.parse::<u8>().unwrap()).collect();
+    let ip_address = std::net::Ipv4Addr::new(ip_address[0],ip_address[1],ip_address[2],ip_address[3],);
     let addr = SocketAddr::from((ip_address, port));
 
     let make_service = make_service_fn(move |_| {

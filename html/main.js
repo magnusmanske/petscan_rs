@@ -631,7 +631,7 @@ $(document).ready ( function () {
 	} ) ;
 
 
-	$.get ( 'https://ores.wikimedia.org/v3/scores/' , function ( d ) {
+	$.getJSON ( 'https://ores.wikimedia.org/v3/scores/?callback=?' , function ( d ) {
 		ores_data = d ;
 		fin() ;
 	} , 'json' ) ;
