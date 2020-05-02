@@ -665,7 +665,7 @@ impl SourceDatabase {
             &state,
             &params.wiki,
             &params.primary.to_string(),
-            &mut sql,
+            sql,
             &mut params.sql_before_after.clone(),
             &mut pl2,
             &mut params.is_before_after_done.clone(),
@@ -677,7 +677,7 @@ impl SourceDatabase {
         Ok(())
     }
 
-    fn get_pages_initialize_query(
+    async fn get_pages_initialize_query(
         &mut self,
         state: &AppState,
         primary_pagelist: Option<&PageList>,
@@ -685,7 +685,7 @@ impl SourceDatabase {
         let db_user_pass = state
             .get_db_mutex()
             .lock()
-            .map_err(|e| format!("{:?}", e))?;
+            .await;
 
         // Take wiki from given pagelist
         match primary_pagelist {
@@ -776,11 +776,11 @@ impl SourceDatabase {
             }
             if !before.is_empty() {
                 sql_before_after.0 += " AND r.rev_timestamp<=?";
-                sql_before_after.1.push(before);
+                sql_before_after.1.push(MyValue::Bytes(before.into()));
             }
             if !after.is_empty() {
                 sql_before_after.0 += " AND r.rev_timestamp>=?";
-                sql_before_after.1.push(after);
+                sql_before_after.1.push(MyValue::Bytes(after.into()));
             }
             sql_before_after.0 += " ";
         }
@@ -882,7 +882,7 @@ impl SourceDatabase {
             futures = batches
             .iter_mut()
             .map( |sql|{
-                self.get_pages_pagelist_batch(wiki.clone(),sql,&state,&params,db_user_pass.clone())
+                self.get_pages_pagelist_batch(wiki.clone(),sql.clone(),&state,&params,db_user_pass.clone()) // TODO FIXME sql clone
             })
             .collect();
         }
@@ -907,7 +907,7 @@ impl SourceDatabase {
 
     async fn get_pages_pagelist_batch(&self,
         wiki:String,
-        mut sql:&mut SQLtuple,
+        sql:SQLtuple,
         state:&AppState,
         params:&DsdbParams,
         db_user_pass:DbUserPass
@@ -920,7 +920,7 @@ impl SourceDatabase {
         self.get_pages_for_primary(
             &mut conn,
             &params.primary.to_string(),
-            &mut sql,
+            sql,
             sql_before_after,
             &mut pl2,
             &mut is_before_after_done,
@@ -935,7 +935,7 @@ impl SourceDatabase {
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList, String> {
         let mut params =
-            self.get_pages_initialize_query(state, primary_pagelist)?;
+            self.get_pages_initialize_query(state, primary_pagelist).await?;
 
         let mut sql = Platform::sql_tuple();
 
@@ -978,12 +978,12 @@ impl SourceDatabase {
         self.get_pages_for_primary(
             &mut params.conn,
             &params.primary.to_string(),
-            &mut sql,
+            sql,
             params.sql_before_after,
             &mut ret,
             &mut params.is_before_after_done,
             state.get_api_for_wiki(params.wiki.clone()).await?,
-        )?;
+        ).await?;
         Ok(ret)
     }
 
@@ -992,7 +992,7 @@ impl SourceDatabase {
         state: &AppState,
         wiki: &String,
         primary: &String,
-        sql: &mut SQLtuple,
+        sql:SQLtuple,
         sql_before_after: &mut SQLtuple,
         pages_sublist: &mut PageList,
         is_before_after_done: &mut bool,
@@ -1001,7 +1001,7 @@ impl SourceDatabase {
         let db_user_pass = state
             .get_db_mutex()
             .lock()
-            .map_err(|e| format!("{:?}", e))?;
+            .await;
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
         Platform::profile(
             "DSDB::get_pages_for_primary_new_connection STARTING",
@@ -1022,7 +1022,7 @@ impl SourceDatabase {
         &self,
         conn: &mut my::Conn,
         primary: &String,
-        mut sql: &mut SQLtuple,
+        mut sql: SQLtuple,
         sql_before_after: SQLtuple,
         pages_sublist: &mut PageList,
         is_before_after_done: &mut bool,
@@ -1152,7 +1152,7 @@ impl SourceDatabase {
                 || self.params.ores_prob_to.is_some())
         {
             sql.0 += " AND EXISTS (SELECT * FROM ores_classification WHERE p.page_latest=oresc_rev AND oresc_model IN (SELECT oresm_id FROM ores_model WHERE oresm_is_current=1 AND oresm_name=?)" ;
-            sql.1.push(self.params.ores_type.to_owned());
+            sql.1.push(MyValue::Bytes(self.params.ores_type.to_owned().into()));
             match self.params.ores_prediction.as_str() {
                 "yes" => sql.0 += " AND oresc_is_predicted=1",
                 "no" => sql.0 += " AND oresc_is_predicted=0",
@@ -1224,7 +1224,7 @@ impl SourceDatabase {
 
         // Last edit/created before/after
         if !*is_before_after_done {
-            Platform::append_sql(sql, sql_before_after);
+            Platform::append_sql(&mut sql, sql_before_after);
             *is_before_after_done = true;
         }
 
@@ -1243,7 +1243,7 @@ impl SourceDatabase {
         if !having.is_empty() {
             sql.0 += " HAVING ";
             for h in having {
-                Platform::append_sql(sql, h);
+                Platform::append_sql(&mut sql, h);
             }
         }
 
@@ -1261,6 +1261,7 @@ impl SourceDatabase {
             Some(sql.1.len()),
         );
 
+        let sql_1_len = sql.1.len() ;
         let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
             .map_and_drop(|row| from_row::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>(row))
@@ -1269,7 +1270,7 @@ impl SourceDatabase {
 
         Platform::profile(
             "DSDB::get_pages_for_primary RUN FINISHED",
-            Some(sql.1.len()),
+            Some(sql_1_len),
         );
 
         pages_sublist.set_wiki(Some(wiki.to_string()))?;
@@ -1277,19 +1278,21 @@ impl SourceDatabase {
 
         Platform::profile(
             "DSDB::get_pages_for_primary RETRIEVING RESULT",
-            Some(sql.1.len()),
+            Some(sql_1_len),
         );
+
         rows
+            .iter()
             .for_each(
                 |(page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count)| {
                     let page_title = String::from_utf8_lossy(&page_title).into_owned();
                     let page_timestamp = String::from_utf8_lossy(&page_timestamp).into_owned();
-                    let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
-                    entry.page_id = Some(page_id);
-                    entry.page_bytes = Some(page_bytes);
+                    let mut entry = PageListEntry::new(Title::new(&page_title, *page_namespace));
+                    entry.page_id = Some(*page_id);
+                    entry.page_bytes = Some(*page_bytes);
                     entry.set_page_timestamp(Some(page_timestamp));
                     if self.params.gather_link_count {
-                        entry.link_count = Some(link_count);
+                        entry.link_count = Some(*link_count);
                     }
                     match pages_sublist.add_entry(entry) {
                         Ok(_) => {}
@@ -1298,7 +1301,7 @@ impl SourceDatabase {
                 },
             );
 
-        Platform::profile("DSDB::get_pages_for_primary COMPLETE", Some(sql.1.len()));
+        Platform::profile("DSDB::get_pages_for_primary COMPLETE", Some(sql_1_len));
 
         Ok(())
     }
