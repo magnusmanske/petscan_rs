@@ -518,38 +518,33 @@ impl AppState {
 
         // Check for existing entry
         let sql = (
-            "SELECT id FROM query WHERE querystring=? LIMIT 1".to_string(),
-            vec![query_string.to_owned()],
+            "SELECT id FROM query WHERE querystring=? LIMIT 1",
+            vec![MyValue::Bytes(query_string.to_owned().into())],
         );
-        match conn.prep_exec(sql.0, sql.1) {
-            Ok(result) => {
-                let ret = result
-                    .filter_map(|row_result| row_result.ok())
-                    .filter_map(|row| my::from_row_opt::<u64>(row).ok())
-                    .next();
-                match ret {
-                    Some(ret) => return Ok(ret),
-                    None => {}
-                };
-            }
-            Err(_) => {}
+
+        let rows = conn.exec_iter(sql.0,mysql_async::Params::Positional(sql.1)).await
+            .map_err(|e|format!("{:?}",e))?
+            .map_and_drop(|row| from_row::<u64>(row))
+            .await
+            .map_err(|e|format!("{:?}",e))?;
+
+        for id in rows {
+            return Ok(id);
         }
 
         // Create new entry
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
         let sql = (
-            "INSERT IGNORE INTO `query` (querystring,created) VALUES (?,?)".to_string(),
-            vec![query_string.to_owned(), now],
+            "INSERT IGNORE INTO `query` (querystring,created) VALUES (?,?)",
+            vec![MyValue::Bytes(query_string.to_owned().into()), MyValue::Bytes(now.into())],
         );
-        let ret = match conn.prep_exec(sql.0, sql.1) {
-            Ok(r) => Ok(r.last_insert_id()),
-            Err(e) => Err(format!(
-                "AppState::get_new_psid_for_query query error: {:?}",
-                e
-            )),
-        };
-        ret
+
+        conn.exec_drop(sql.0,mysql_async::Params::Positional(sql.1)).await;
+        match conn.last_insert_id() {
+            Some(id) => Ok(id),
+            None => Err(format!("get_or_create_psid_for_query: Could not insert new PSID"))
+        }
     }
 
     async fn load_site_matrix() -> Value {

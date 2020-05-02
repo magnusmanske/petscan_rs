@@ -152,7 +152,7 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
 
     platform.psid = match single_psid {
         Some(psid) => Some(psid),
-        None => match state.get_or_create_psid_for_query(&form_parameters.to_string()) {
+        None => match state.get_or_create_psid_for_query(&form_parameters.to_string()).await {
             Ok(psid) => Some(psid),
             Err(e) => {
                 state.log_query_end(started_query_id);
