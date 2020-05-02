@@ -1,7 +1,9 @@
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
+use mysql_async::Value as MyValue;
 use mysql_async as my;
+use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
@@ -795,7 +797,7 @@ impl PageList {
         Ok(())
     }
 
-    fn run_batch_query(
+    async fn run_batch_query(
         &self,
         state: &AppState,
         sql: &SQLtuple,
@@ -804,14 +806,20 @@ impl PageList {
         let db_user_pass = state
             .get_db_mutex()
             .lock()
-            .map_err(|e| format!("PageList::run_batch_query: {:?}", e))?;
+            .await;
         let mut conn = state
             .get_wiki_db_connection(&db_user_pass, &wiki)
+            .await
             .map_err(|e| format!("PageList::run_batch_query: get_wiki_db_connection: {:?}", e))?;
-        let result = conn
-            .prep_exec(&sql.0, &sql.1)
-            .map_err(|e| format!("PageList::run_batch_query: SQL query error: {:?}", e))?;
-        Ok(result.filter_map(|row| row.ok()).collect())
+
+        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+            .map_err(|e|format!("PageList::run_batch_query: SQL query error[1]: {:?}",e))?
+            .collect_and_drop()
+            //.map_and_drop(|row| from_row::<(Vec<u8>,i64,usize)>(row))
+            .await
+            .map_err(|e|format!("PageList::run_batch_query: SQL query error[2]: {:?}",e))?;
+
+        Ok(rows)
     }
 
     /// Runs batched queries for process_batch_results and annotate_batch_results
@@ -1135,7 +1143,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             .par_iter_mut()
             .map(|sql|{
                 sql.0 = "SELECT ips_site_page FROM wb_items_per_site,page WHERE ips_item_id=substr(page_title,2)*1 AND ".to_owned()+&sql.0+" AND ips_site_id=?";
-                sql.1.push(wiki.to_string());
+                sql.1.push(MyValue::Bytes(wiki.into()));
                 sql.to_owned()
             })
             .collect::<Vec<SQLtuple>>();

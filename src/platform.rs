@@ -10,6 +10,7 @@ use crate::pagelist::*;
 use crate::render::*;
 use crate::wdfist::*;
 use chrono::Local;
+use mysql_async as my;
 use mysql_async::Value as MyValue;
 use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
@@ -364,7 +365,7 @@ impl Platform {
         }
         self.process_redlinks(&result).await?;
         Platform::profile("after process_redlinks", Some(result.len()?));
-        self.process_creator(&result)?;
+        self.process_creator(&result).await?;
         Platform::profile("after process_creator", Some(result.len()?));
 
         Ok(())
@@ -425,7 +426,7 @@ impl Platform {
 
     // Prepares for JS "creator" mode
     // Chackes which labels already exist on Wikidata
-    fn process_creator(&self, result: &PageList) -> Result<(), String> {
+    async fn process_creator(&self, result: &PageList) -> Result<(), String> {
         if result.is_empty()? || result.is_wikidata() {
             return Ok(());
         }
@@ -446,7 +447,13 @@ impl Platform {
                 sql_batch.0 += ")";
                 // Looking for labels, so spaces instead of underscores
                 for element in sql_batch.1.iter_mut() {
-                    *element = Title::underscores_to_spaces(element);
+                    *element = match element {
+                        MyValue::Bytes(x) => {
+                            let u2s = Title::underscores_to_spaces(&String::from_utf8_lossy(x)) ;
+                            MyValue::Bytes(u2s.into())
+                        }
+                        _ => {continue;}
+                    } ;
                 }
                 sql_batch.to_owned()
             })
@@ -456,24 +463,21 @@ impl Platform {
         let db_user_pass = state
             .get_db_mutex()
             .lock()
-            .map_err(|e| format!("{:?}", e))?;
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
+            .await;
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string()).await?;
 
-        batches.iter().for_each(|sql| {
-            let labels = conn.exec_map(
-                sql.0,
-                sql.1,
-                |wbx_text|String::from_utf8_lossy(&wbx_text)
-                );
-            labels.iter().for_each(|label|{
-                match self.existing_labels.write() {
-                    Ok(mut el) => {
-                            el.insert(label);
-                        }
-                        _ => {}
-                    }
-            });
-        });
+        for sql in batches {
+            let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+                .map_err(|e|format!("{:?}",e))?
+                .map_and_drop(|row| from_row::<Vec<u8>>(row))
+                .await
+                .map_err(|e|format!("{:?}",e))?;
+
+            for wbx_text in rows {
+                let label = String::from_utf8_lossy(&wbx_text) ;
+                self.existing_labels.write().unwrap().insert(label.to_string());
+            }
+        }
         Ok(())
     }
 
@@ -519,6 +523,7 @@ impl Platform {
         let mut conn = self
             .state
             .get_wiki_db_connection(&db_user_pass, &wiki)
+            .await
             .map_err(|e| format!("{:?}", e))?;
 
         for sql in batches {
@@ -597,7 +602,7 @@ impl Platform {
                 .state
                 .get_db_mutex()
                 .lock().await;
-            let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki)?;
+            let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
 
             for (title, namespace_id) in title_ns {
                 let sql: SQLtuple = (
@@ -858,32 +863,23 @@ impl Platform {
         // Duplicated from Patelist::annotate_batch_results
         let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
 
-        batches.par_iter().map(|sql| {
+        for sql in batches {
             // Get DB connection
-            let db_user_pass = self.state.get_db_mutex().lock().map_err(|e| format!("{:?}", e))?;
-            let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string()).map_err(|e| format!("{:?}", e))?;
+            let db_user_pass = self.state.get_db_mutex().lock().await;
+            let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string()).await.map_err(|e| format!("{:?}", e))?;
 
             // Run query
+            let mut result = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+                .map_err(|e|format!("{:?}",e))?
+                .collect_and_drop()
+                .await
+                .map_err(|e|format!("{:?}",e))?;
 
-            let result = conn.exec_iter(
-                &sql.0,
-                sql.1,
-                ).collect();
-
-            /*
-            let mut result = conn.prep_exec(&sql.0, &sql.1).map_err(|e| format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e))?
-            .filter_map(|row| row.ok()).collect();
-            */
-            rows.lock()
-            .map_err(|e| format!("Platform::annotate_with_wikidata_item: Can't unlock mutex: {:?}", e))?
-            .append(&mut result);
-            Ok(())
-        })
-        .collect::<Result<_,String>>()?;
+            rows.lock().await.append(&mut result);
+        }
 
         // Rows to entries
-        rows.lock()
-            .map_err(|e| format!("{:?}", e))?
+        rows.lock().await
             .iter()
             .for_each(|row| {
                 let full_page_title = match row.get(0) {
@@ -989,8 +985,8 @@ impl Platform {
             .to_sql_batches(PAGE_BATCH_SIZE)?
             .par_iter_mut()
             .map(|sql_batch| {
-                let tmp = Platform::prep_quote(&sql_batch.1);
-                sql_batch.0 = sql.0.to_owned() + &tmp.0 + ")";
+                let question_marks = Platform::get_questionmarks(sql.1.len()) ;
+                sql_batch.0 = sql.0.to_owned() + &question_marks + ")";
                 sql_batch.1.splice(..0, sql.1.to_owned());
                 sql_batch.to_owned()
             })

@@ -43,7 +43,8 @@ impl DataSource for SourceLabels {
         let sql = platform.get_label_sql();
         let mut conn = platform
             .state()
-            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
+            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())
+            .await?;
 
         let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
@@ -112,7 +113,8 @@ impl DataSource for SourceWikidata {
             .lock().await;
         let mut conn = platform
             .state()
-            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
+            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())
+            .await?;
 
         let rows = conn.exec_iter(sql.as_str(),()).await
             .map_err(|e|format!("{:?}",e))?

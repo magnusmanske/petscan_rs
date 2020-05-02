@@ -190,24 +190,15 @@ impl AppState {
         }
     }
 
-    fn set_group_concat_max_len(&self, wiki: &String, conn: &mut my::Conn) -> Result<(), String> {
+    async fn set_group_concat_max_len(&self, wiki: &String, conn: &mut my::Conn) -> Result<(), String> {
         if wiki != "commonswiki" {
             return Ok(()); // Only needed for commonswiki, in platform::process_files
         }
-        let sql: SQLtuple = (
-            "SET SESSION group_concat_max_len = 1000000000".to_string(),
-            vec![],
-        );
-        conn.prep_exec(&sql.0, &sql.1).map_err(|e| {
-            format!(
-                "AppState::set_group_concat_max_len: SQL query error: {:?}",
-                e
-            )
-        })?;
+        conn.exec_drop("SET SESSION group_concat_max_len = 1000000000",()).await.map_err(|e|format!("{:?}",e))?;
         Ok(())
     }
 
-    pub fn get_wiki_db_connection(
+    pub async fn get_wiki_db_connection(
         &self,
         db_user_pass: &DbUserPass,
         wiki: &String,
@@ -227,7 +218,7 @@ impl AppState {
 
             match my::Conn::new(builder) {
                 Ok(mut con) => {
-                    self.set_group_concat_max_len(wiki, &mut con)?;
+                    self.set_group_concat_max_len(wiki, &mut con).await?;
                     return Ok(con);
                 }
                 Err(e) => {
@@ -495,7 +486,7 @@ impl AppState {
 
         match conn.last_insert_id() {
             Some(id) => Ok(id),
-            None => Err(format!("Could not insert {:?}",&sql))
+            None => Err(format!("AppState::log_query_start: Could not insert"))
         }
     }
 

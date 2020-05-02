@@ -9,6 +9,9 @@ use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use chrono::prelude::*;
 use chrono::Duration;
 use core::ops::Sub;
+use mysql_async::prelude::Queryable;
+use mysql_async::Value as MyValue;
+use mysql_async::from_row;
 use mysql_async as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -314,7 +317,7 @@ impl SourceDatabase {
             .collect()
     }
 
-    fn go_depth_batch(
+    async fn go_depth_batch(
         &self,
         state: &AppState,
         wiki: &String,
@@ -325,8 +328,8 @@ impl SourceDatabase {
         let db_user_pass = state
             .get_db_mutex()
             .lock()
-            .map_err(|e| format!("{:?}", e))?;
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
+            .await;
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         categories_batch.iter().for_each(|c| {
             // Don't par_iter, already in pool!
@@ -340,16 +343,14 @@ impl SourceDatabase {
         Platform::append_sql(&mut sql, Platform::prep_quote(&categories_batch));
         sql.0 += ")";
 
-        let result = match conn.prep_exec(sql.0, sql.1) {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(format!("datasource_database::go_depth: {:?}", e));
-            }
-        };
+        let result = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+            .map_err(|e|format!("{:?}",e))?
+            .map_and_drop(|row| from_row::<Vec<u8>>(row))
+            .await
+            .map_err(|e|format!("{:?}",e))?;
 
         result
-            .filter_map(|row_result| row_result.ok())
-            .filter_map(|row| my::from_row_opt::<Vec<u8>>(row).ok())
+            .iter()
             .map(|row| String::from_utf8_lossy(&row).into_owned())
             .for_each(|page_title| {
                 let do_add = match categories_done.read() {
@@ -669,7 +670,7 @@ impl SourceDatabase {
             &mut pl2,
             &mut params.is_before_after_done.clone(),
             api,
-        )?;
+        ).await?;
         Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH", None);
         ret.union(&pl2, None).await?;
         Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE", None);
@@ -720,7 +721,7 @@ impl SourceDatabase {
             &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
         )?;
 
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
         self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn)?;
 
         self.has_pos_templates =
@@ -876,7 +877,7 @@ impl SourceDatabase {
             let db_user_pass = state
                 .get_db_mutex()
                 .lock()
-                .map_err(|e| format!("{:?}", e))?;
+                .await;
 
             futures = batches
             .iter_mut()
@@ -911,7 +912,7 @@ impl SourceDatabase {
         params:&DsdbParams,
         db_user_pass:DbUserPass
     ) -> Result<PageList,String> {
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
         let sql_before_after = params.sql_before_after.clone();
         let mut is_before_after_done = params.is_before_after_done.clone();
         let mut pl2 = PageList::new_from_wiki(&wiki.clone());
@@ -924,7 +925,7 @@ impl SourceDatabase {
             &mut pl2,
             &mut is_before_after_done,
             api,
-        )?;
+        ).await?;
         Ok(pl2)
     }
 
@@ -986,7 +987,7 @@ impl SourceDatabase {
         Ok(ret)
     }
 
-    fn get_pages_for_primary_new_connection(
+    async fn get_pages_for_primary_new_connection(
         &self,
         state: &AppState,
         wiki: &String,
@@ -1001,7 +1002,7 @@ impl SourceDatabase {
             .get_db_mutex()
             .lock()
             .map_err(|e| format!("{:?}", e))?;
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki)?;
+        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
         Platform::profile(
             "DSDB::get_pages_for_primary_new_connection STARTING",
             Some(sql.1.len()),
@@ -1014,10 +1015,10 @@ impl SourceDatabase {
             pages_sublist,
             is_before_after_done,
             api,
-        )
+        ).await
     }
 
-    fn get_pages_for_primary(
+    async fn get_pages_for_primary(
         &self,
         conn: &mut my::Conn,
         primary: &String,
@@ -1260,12 +1261,11 @@ impl SourceDatabase {
             Some(sql.1.len()),
         );
 
-        let result = match conn.prep_exec(sql.0.to_owned(), sql.1.to_owned()) {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(format!("{:?}", &e));
-            }
-        };
+        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+            .map_err(|e|format!("{:?}",e))?
+            .map_and_drop(|row| from_row::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>(row))
+            .await
+            .map_err(|e|format!("{:?}",e))?;
 
         Platform::profile(
             "DSDB::get_pages_for_primary RUN FINISHED",
@@ -1279,11 +1279,7 @@ impl SourceDatabase {
             "DSDB::get_pages_for_primary RETRIEVING RESULT",
             Some(sql.1.len()),
         );
-        result
-            .filter_map(|row_result| row_result.ok())
-            .filter_map(|row| {
-                my::from_row_opt::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>(row).ok()
-            })
+        rows
             .for_each(
                 |(page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count)| {
                     let page_title = String::from_utf8_lossy(&page_title).into_owned();
