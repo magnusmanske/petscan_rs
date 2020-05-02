@@ -499,23 +499,20 @@ impl AppState {
         }
     }
 
-    pub async  fn log_query_end(&self, query_id: u64) {
+    pub async fn log_query_end(&self, query_id: u64) {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = match self.get_tool_db_connection(tool_db_user_pass.clone()) {
             Ok(conn) => conn,
             _ => return,
         };
         let sql = (
-            "DELETE FROM `started_queries` WHERE id=?".to_string(),
-            vec![format!("{}", query_id)],
+            "DELETE FROM `started_queries` WHERE id=?",
+            vec![MyValue::UInt(query_id)],
         );
-        match conn.prep_exec(sql.0, sql.1) {
-            Ok(_r) => {}
-            Err(_e) => {}
-        };
+        conn.exec_drop(sql.0,mysql_async::Params::Positional(sql.1)).await;
     }
 
-    pub async  fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
+    pub async fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
