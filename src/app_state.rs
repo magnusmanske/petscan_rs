@@ -2,7 +2,7 @@ use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::platform::{ContentType, MyResponse};
 use chrono::prelude::*;
-use mysql as my;
+use mysql_async as my;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use regex::Regex;
@@ -207,7 +207,7 @@ impl AppState {
         &self,
         db_user_pass: &DbUserPass,
         wiki: &String,
-    ) -> Result<my::Conn, String> {
+    ) -> Result<mysql_async::Conn, String> {
         let mut loops_left = MYSQL_MAX_CONNECTION_ATTEMPTS;
         let mut milliseconds = MYSQL_CONNECTION_INITIAL_DELAY_MS;
         let (host, schema) = self.db_host_and_schema_for_wiki(wiki)?;

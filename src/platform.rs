@@ -8,7 +8,8 @@ use crate::pagelist::*;
 use crate::render::*;
 use crate::wdfist::*;
 use chrono::Local;
-use mysql as my;
+use mysql_async::Value as MyValue;
+use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
@@ -255,20 +256,6 @@ impl Platform {
         }
         drop(tmp_results);
 
-        // TODO check above
-        /*
-        let mut results: HashMap<String, PageList> = results
-            .iter()
-            .zip(available_sources.clone())
-            .filter_map(|(result,name)|{
-                match result {
-                    Ok(result) => Some((name,result)),
-                    _ => None
-                }
-            })
-            .collect();
-        */
-
         self.wiki_by_source = results
             .iter()
             .filter_map(|(name, data)| match data.wiki().unwrap_or(None) {
@@ -373,7 +360,7 @@ impl Platform {
             Some(regexp) => result.regexp_filter(&regexp)?,
             None => {}
         }
-        self.process_redlinks(&result)?;
+        self.process_redlinks(&result).await?;
         Platform::profile("after process_redlinks", Some(result.len()?));
         self.process_creator(&result)?;
         Platform::profile("after process_creator", Some(result.len()?));
@@ -470,40 +457,25 @@ impl Platform {
             .map_err(|e| format!("{:?}", e))?;
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
 
-        let mut error: Option<String> = None;
         batches.iter().for_each(|sql| {
-            let result = match conn.prep_exec(&sql.0, &sql.1) {
-                Ok(r) => r,
-                Err(e) => {
-                    error = Some(format!("{:?}", e));
-                    return;
-                }
-            };
-            for row in result {
-                match row {
-                    Ok(row) => match my::from_row_opt::<Vec<u8>>(row) {
-                        Ok(wbx_text) => {
-                            let wbx_text = String::from_utf8_lossy(&wbx_text).into_owned();
-                            match self.existing_labels.write() {
-                                Ok(mut el) => {
-                                    el.insert(wbx_text);
-                                }
-                                _ => {}
-                            }
+            let labels = conn.exec_map(
+                sql.0,
+                sql.1,
+                |wbx_text|String::from_utf8_lossy(&wbx_text)
+                );
+            labels.iter().for_each(|label|{
+                match self.existing_labels.write() {
+                    Ok(mut el) => {
+                            el.insert(label);
                         }
-                        Err(_e) => {}
-                    },
-                    _ => {} // Ignore error
-                }
-            }
+                        _ => {}
+                    }
+            });
         });
-        match error {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
-    fn process_redlinks(&self, result: &PageList) -> Result<(), String> {
+    async fn process_redlinks(&self, result: &PageList) -> Result<(), String> {
         if result.is_empty()? || !self.do_output_redlinks() || result.is_wikidata() {
             return Ok(());
         }
@@ -537,6 +509,10 @@ impl Platform {
             None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
         };
 
+
+        for sql in batches {
+// task::spawn_blocking            
+        }
         rayon::ThreadPoolBuilder::new()
             .num_threads(5) // TODO More? Less?
             .build()
@@ -554,6 +530,15 @@ impl Platform {
                             .state
                             .get_wiki_db_connection(&db_user_pass, &wiki)
                             .map_err(|e| format!("{:?}", e))?;
+
+                        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+                            .map_err(|e|format!("{:?}",e))?
+                            .map_and_drop(|row| from_row::<(Vec<u8>,usize,usize)>(row))
+                            .await
+                            .map_err(|e|format!("{:?}",e))?;
+
+                        rows.iter().
+
                         let new_result = conn
                             .prep_exec(&sql.0, &sql.1)
                             .map_err(|e| format!("{:?}", e))?;
@@ -578,6 +563,9 @@ impl Platform {
                                 _ => {} // Ignore error
                             }
                         }
+
+
+
                         Ok(())
                     })
                     .collect::<Result<_, String>>()
@@ -874,12 +862,13 @@ impl Platform {
         let mut batches: Vec<SQLtuple> = vec![];
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
 
-            let escaped: Vec<String> = chunk
+            let escaped: Vec<MyValue> = chunk
                 .par_iter()
                 .filter_map(|s| match s.trim() {
                     "" => None,
                     other => Some(other.to_string()),
                 })
+                .map(|s|s.into())
                 .collect();
             let mut sql = (Platform::get_questionmarks(escaped.len()), escaped);
 
@@ -896,9 +885,16 @@ impl Platform {
             let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string()).map_err(|e| format!("{:?}", e))?;
 
             // Run query
+
+            let result = conn.exec_iter(
+                &sql.0,
+                sql.1,
+                ).collect();
+
+            /*
             let mut result = conn.prep_exec(&sql.0, &sql.1).map_err(|e| format!("Platform::annotate_with_wikidata_item: Can't connect to wikidatawiki: {:?}", e))?
             .filter_map(|row| row.ok()).collect();
-
+            */
             rows.lock()
             .map_err(|e| format!("Platform::annotate_with_wikidata_item: Can't unlock mutex: {:?}", e))?
             .append(&mut result);
@@ -1223,7 +1219,7 @@ impl Platform {
 
         sitelinks_yes.iter().for_each(|site|{
             sql.0 += " AND EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id=? LIMIT 1)" ;
-            sql.1.push(site.to_string());
+            sql.1.push(site.into());
         });
         if !sitelinks_any.is_empty() {
             sql.0 += " AND EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id IN (" ;
@@ -1233,7 +1229,7 @@ impl Platform {
         }
         sitelinks_no.iter().for_each(|site|{
             sql.0 += " AND NOT EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id=? LIMIT 1)" ;
-            sql.1.push(site.to_string());
+            sql.1.push(site.into());
         });
         sql.0 += " AND ";
 
@@ -1312,11 +1308,11 @@ impl Platform {
             .filter_map(|s| match s.chars().nth(0) {
                 Some('Q') => Some((
                     "(SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=0 AND pl_title=?)".to_string(),
-                    vec![s.to_string()],
+                    vec![s.into()],
                 )),
                 Some('P') => Some((
                     "(SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=120 AND pl_title=?)".to_string(),
-                    vec![s.to_string()],
+                    vec![s.into()],
                 )),
                 _ => None,
             })

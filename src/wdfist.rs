@@ -3,7 +3,7 @@ use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 use crate::platform::*;
-use mysql as my;
+use mysql_async as my;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;

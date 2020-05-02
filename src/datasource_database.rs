@@ -9,7 +9,7 @@ use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use chrono::prelude::*;
 use chrono::Duration;
 use core::ops::Sub;
-use mysql as my;
+use mysql_async as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;

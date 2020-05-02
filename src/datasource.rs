@@ -1,6 +1,8 @@
+use mysql_async::from_row;
 use crate::pagelist::*;
 use crate::platform::Platform;
-use mysql as my;
+use mysql_async::prelude::Queryable;
+use mysql_async::Value as MyValue;
 use rayon::prelude::*;
 use serde_json::value::Value;
 use std::collections::HashMap;
@@ -9,7 +11,7 @@ use wikibase::mediawiki::api::Api;
 use wikibase::mediawiki::title::Title;
 use async_trait::async_trait;
 
-pub type SQLtuple = (String, Vec<String>);
+pub type SQLtuple = (String, Vec<MyValue>);
 
 #[async_trait]
 pub trait DataSource {
@@ -43,18 +45,19 @@ impl DataSource for SourceLabels {
         let mut conn = platform
             .state()
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
-        let result = match conn.prep_exec(sql.0, sql.1) {
-            Ok(r) => r,
-            Err(e) => return Err(format!("{:?}", e)),
-        };
 
-        let ret = PageList::new_from_wiki("wikidatawiki");
-        result
-            .filter_map(|row_result| row_result.ok())
-            .filter_map(|row| my::from_row_opt::<Vec<u8>>(row).ok())
-            .map(|row| String::from_utf8_lossy(&row).into_owned())
-            .filter_map(|row| Platform::entry_from_entity(&row))
-            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
+        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+            .map_err(|e|format!("{:?}",e))?
+            .map_and_drop(|row| from_row::<(Vec<u8>,)>(row))
+            .await
+            .map_err(|e|format!("{:?}",e))?;
+        let ret = PageList::new_from_wiki_with_capacity("wikidatawiki",rows.len());
+        rows
+            .iter()
+            .map(|row|String::from_utf8_lossy(&row.0))
+            .filter_map(|item|Platform::entry_from_entity(&item))
+            .for_each(|entry| ret.add_entry(entry).unwrap_or(()) );
+
         Ok(ret)
     }
 }

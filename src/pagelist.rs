@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
-use mysql as my;
+use mysql_async as my;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;

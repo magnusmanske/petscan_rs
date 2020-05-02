@@ -16,7 +16,8 @@ url = "*"
 rayon = "*"
 htmlescape = "*"
 rand = "*"
-mysql = { version="^17" }#, features = ["ssl"] }
+#mysql = { version="^17" }#, features = ["ssl"] }
+mysql_async = "0.24.0-alpha"
 reqwest = { version = "*", features = ["json"] }
 time = "^0.2.9"
 percent-encoding = "*"
@@ -28,7 +29,6 @@ tokio = { version = "^0.2", features = ["macros","fs"] }
 tokio-util = "*"
 hyper = "*"
 #warp = "0.2.2"
-
 qstring = "*"
 futures = "*"
 
