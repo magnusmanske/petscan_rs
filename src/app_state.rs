@@ -1,15 +1,19 @@
+use tokio::sync::Mutex;
 use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::platform::{ContentType, MyResponse};
 use chrono::prelude::*;
+use mysql_async::prelude::Queryable;
+use mysql_async::from_row;
 use mysql_async as my;
+use mysql_async::Value as MyValue;
 use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::{thread, time};
 use wikibase::mediawiki::api::Api;
 
@@ -449,8 +453,8 @@ impl AppState {
         &self.tool_db_mutex
     }
 
-    pub fn get_query_from_psid(&self, psid: &String) -> Result<String, String> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().map_err(|e| format!("{:?}", e))?;
+    pub async fn get_query_from_psid(&self, psid: &String) -> Result<String, String> {
+        let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
         let psid = match psid.parse::<usize>() {
@@ -458,27 +462,21 @@ impl AppState {
             Err(e) => return Err(format!("{:?}", e)),
         };
         let sql = format!("SELECT querystring FROM query WHERE id={}", psid);
-        let result = match conn.prep_exec(sql, ()) {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(format!(
-                    "AppState::get_query_from_psid query error: {:?}",
-                    e
-                ))
-            }
-        };
-        let ret = result
-            .filter_map(|row_result| row_result.ok())
-            .filter_map(|row| my::from_row_opt::<Vec<u8>>(row).ok())
-            .next();
-        match ret {
+
+        let rows = conn.exec_iter(sql.as_str(),()).await
+            .map_err(|e|format!("{:?}",e))?
+            .map_and_drop(|row| from_row::<Vec<u8>>(row))
+            .await
+            .map_err(|e|format!("{:?}",e))?;
+
+        match rows.get(0) {
             Some(ret) => Ok(String::from_utf8_lossy(&ret).into_owned()),
             None => Err("No such PSID in the database".to_string()),
         }
     }
 
-    pub fn log_query_start(&self, query_string: &String) -> Result<u64, String> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().map_err(|e| format!("{:?}", e))?;
+    pub async fn log_query_start(&self, query_string: &String) -> Result<u64, String> {
+        let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -486,26 +484,23 @@ impl AppState {
             "INSERT INTO `started_queries` (querystring,created,process_id) VALUES (?,?,?)"
                 .to_string(),
             vec![
-                query_string.to_owned(),
-                now,
-                format!("{}", std::process::id()),
+                MyValue::Bytes(query_string.to_owned().into()),
+                MyValue::Bytes(now.into()),
+                MyValue::UInt(std::process::id().into()),
             ],
         );
-        let ret = match conn.prep_exec(sql.0, sql.1) {
-            Ok(r) => Ok(r.last_insert_id()),
-            Err(e) => Err(format!(
-                "AppState::get_new_psid_for_query query error: {:?}",
-                e
-            )),
-        };
-        ret
+
+
+        conn.exec_drop(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await;
+
+        match conn.last_insert_id() {
+            Some(id) => Ok(id),
+            None => Err(format!("Could not insert {:?}",&sql))
+        }
     }
 
-    pub fn log_query_end(&self, query_id: u64) {
-        let tool_db_user_pass = match self.tool_db_mutex.lock() {
-            Ok(x) => x,
-            Err(_e) => return,
-        };
+    pub async  fn log_query_end(&self, query_id: u64) {
+        let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = match self.get_tool_db_connection(tool_db_user_pass.clone()) {
             Ok(conn) => conn,
             _ => return,
@@ -520,8 +515,8 @@ impl AppState {
         };
     }
 
-    pub fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().map_err(|e| format!("{:?}", e))?;
+    pub async  fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
+        let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
 
         // Check for existing entry

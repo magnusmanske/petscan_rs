@@ -1,6 +1,6 @@
-use mysql_async::from_row;
 use crate::pagelist::*;
 use crate::platform::Platform;
+use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use mysql_async::Value as MyValue;
 use rayon::prelude::*;
@@ -39,8 +39,7 @@ impl DataSource for SourceLabels {
         let state = platform.state();
         let db_user_pass = state
             .get_db_mutex()
-            .lock()
-            .map_err(|e| format!("{:?}", e))?;
+            .lock().await;
         let sql = platform.get_label_sql();
         let mut conn = platform
             .state()
@@ -110,29 +109,26 @@ impl DataSource for SourceWikidata {
         let state = platform.state();
         let db_user_pass = state
             .get_db_mutex()
-            .lock()
-            .map_err(|e| format!("{:?}", e))?;
+            .lock().await;
         let mut conn = platform
             .state()
             .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())?;
-        let result = conn
-            .prep_exec(sql, sites.1)
-            .map_err(|e| format!("{:?}", e))?;
+
+        let rows = conn.exec_iter(sql.as_str(),()).await
+            .map_err(|e|format!("{:?}",e))?
+            .map_and_drop(|row| from_row::<usize>(row))
+            .await
+            .map_err(|e|format!("{:?}",e))?;
 
         let ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
-        result
-            .filter_map(|row| row.ok())
-            .filter_map(|row_inner| match my::from_row_opt::<usize>(row_inner) {
-                Ok(ips_item_id) => {
-                    let term_full_entity_id = format!("Q{}", ips_item_id);
-                    Platform::entry_from_entity(&term_full_entity_id)
-                }
-                Err(_e) => {
-                    // TODO error log for failed usize conversion?
-                    None
-                }
-            })
-            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
+        for ips_item_id in rows {
+            let term_full_entity_id = format!("Q{}", ips_item_id);
+            match Platform::entry_from_entity(&term_full_entity_id) {
+                Some(entry) => {ret.add_entry(entry).unwrap_or(());}
+                None => {}
+            }
+        }
+
         Ok(ret)
     }
 }

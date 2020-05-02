@@ -1,3 +1,5 @@
+use tokio::sync::Mutex;
+use mysql_async::from_row;
 use async_recursion::async_recursion;
 use futures::future::join_all;
 use crate::app_state::AppState;
@@ -14,7 +16,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 use wikibase::mediawiki::api::NamespaceID;
 use wikibase::mediawiki::title::Title;
@@ -345,7 +347,7 @@ impl Platform {
         Platform::profile("after process_files", Some(result.len()?));
         self.process_pages(&result)?;
         Platform::profile("after process_pages", Some(result.len()?));
-        self.process_subpages(&result)?;
+        self.process_subpages(&result).await?;
         Platform::profile("after process_subpages", Some(result.len()?));
         self.annotate_with_wikidata_item(result).await?;
         Platform::profile("after annotate_with_wikidata_item [2]", Some(result.len()?));
@@ -501,8 +503,8 @@ impl Platform {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-        let redlink_counter: HashMap<Title, LinkCount> = HashMap::new();
-        let redlink_counter = RwLock::new(redlink_counter);
+        let mut redlink_counter: HashMap<Title, LinkCount> = HashMap::new();
+        //let redlink_counter = RwLock::new(redlink_counter);
 
         let wiki = match result.wiki()? {
             Some(wiki) => wiki.to_owned(),
@@ -510,72 +512,26 @@ impl Platform {
         };
 
 
+        let db_user_pass = self
+            .state
+            .get_db_mutex()
+            .lock().await;
+        let mut conn = self
+            .state
+            .get_wiki_db_connection(&db_user_pass, &wiki)
+            .map_err(|e| format!("{:?}", e))?;
+
         for sql in batches {
-// task::spawn_blocking            
+            self.process_redlinks_batch(&mut conn,sql,&mut redlink_counter).await?;
         }
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(5) // TODO More? Less?
-            .build()
-            .map_err(|e| format!("process_redlinks: can't build ThreadPool: {:?}", e))?
-            .install(|| {
-                batches
-                    .par_iter()
-                    .map(|sql| {
-                        let db_user_pass = self
-                            .state
-                            .get_db_mutex()
-                            .lock()
-                            .map_err(|e| format!("{:?}", e))?;
-                        let mut conn = self
-                            .state
-                            .get_wiki_db_connection(&db_user_pass, &wiki)
-                            .map_err(|e| format!("{:?}", e))?;
-
-                        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
-                            .map_err(|e|format!("{:?}",e))?
-                            .map_and_drop(|row| from_row::<(Vec<u8>,usize,usize)>(row))
-                            .await
-                            .map_err(|e|format!("{:?}",e))?;
-
-                        rows.iter().
-
-                        let new_result = conn
-                            .prep_exec(&sql.0, &sql.1)
-                            .map_err(|e| format!("{:?}", e))?;
-                        for row in new_result {
-                            match row {
-                                Ok(row) => {
-                                    let (page_title, namespace_id, _count) =
-                                        my::from_row::<(String, NamespaceID, u8)>(row);
-                                    let title = Title::new(&page_title, namespace_id);
-                                    let new_value =
-                                        match &redlink_counter.read().unwrap().get(&title) {
-                                            Some(x) => *x + 1,
-                                            None => 1,
-                                        };
-                                    match redlink_counter.write() {
-                                        Ok(mut rc) => {
-                                            rc.insert(title, new_value);
-                                        }
-                                        _ => {} // Ignore error
-                                    }
-                                }
-                                _ => {} // Ignore error
-                            }
-                        }
-
-
-
-                        Ok(())
-                    })
-                    .collect::<Result<_, String>>()
-            })?;
+        drop(conn);
+        drop(db_user_pass);
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
             .parse::<LinkCount>()
             .unwrap_or(1);
-        let mut redlink_counter = redlink_counter.write().map_err(|e| format!("{:?}", e))?;
+        //let mut redlink_counter = redlink_counter.write().map_err(|e| format!("{:?}", e))?;
         redlink_counter.retain(|_, &mut v| v >= min_redlinks);
         result.set_entries(
             redlink_counter
@@ -590,7 +546,29 @@ impl Platform {
         Ok(())
     }
 
-    fn process_subpages(&self, result: &PageList) -> Result<(), String> {
+    async fn process_redlinks_batch(&self,conn:&mut mysql_async::Conn,sql:SQLtuple,redlink_counter: &mut HashMap<Title, LinkCount>) -> Result<(), String> {
+        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+            .map_err(|e|format!("{:?}",e))?
+            .map_and_drop(|row| from_row::<(Vec<u8>,i64,usize)>(row))
+            .await
+            .map_err(|e|format!("{:?}",e))?;
+
+        for (page_title,namespace_id,_count) in rows {
+            let page_title = String::from_utf8_lossy(&page_title).to_string() ;
+            let title = Title::new(&page_title, namespace_id);
+
+            // TODO get_mut()?
+            let new_value =
+                match &redlink_counter.get(&title) {
+                    Some(x) => *x + 1,
+                    None => 1,
+                };
+            redlink_counter.insert(title, new_value);
+        }
+        Ok(())
+    }
+
+    async fn process_subpages(&self, result: &PageList) -> Result<(), String> {
         let add_subpages = self.has_param("add_subpages");
         let subpage_filter = self.get_param_default("subpage_filter", "either");
         if !add_subpages && subpage_filter != "subpages" && subpage_filter != "no_subpages" {
@@ -618,26 +596,27 @@ impl Platform {
             let db_user_pass = self
                 .state
                 .get_db_mutex()
-                .lock()
-                .map_err(|e| format!("{:?}", e))?;
+                .lock().await;
             let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki)?;
 
-            title_ns.iter().map(|(title, namespace_id)| {
+            for (title, namespace_id) in title_ns {
                 let sql: SQLtuple = (
                     "SELECT page_title,page_namespace FROM page WHERE page_namespace=? AND page_title LIKE ?"
                         .to_string(),
-                    vec![namespace_id.to_string(), format!("{}/%", &title)],
+                    vec![MyValue::Int(namespace_id), MyValue::Bytes(format!("{}/%", &title).into())],
                 );
-                let db_result = conn.prep_exec(&sql.0, &sql.1).map_err(|e| format!("{:?}", e))?;
-                db_result.filter_map(|row_result|row_result.ok())
-                .filter_map(|row| my::from_row_opt::<(Vec<u8>,NamespaceID)>(row).ok() )
-                .for_each(|(page_title,page_namespace)|{
-                    let page_title = String::from_utf8_lossy(&page_title).into_owned();
+
+                let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+                    .map_err(|e|format!("{:?}",e))?
+                    .map_and_drop(|row| from_row::<(Vec<u8>,i64)>(row))
+                    .await
+                    .map_err(|e|format!("{:?}",e))?;
+
+                for (page_title,page_namespace) in rows {
+                    let page_title = String::from_utf8_lossy(&page_title);
                     result.add_entry(PageListEntry::new(Title::new(&page_title,page_namespace))).unwrap_or(());
-                });
-                Ok(())
-            })
-            .collect::<Result<_,String>>()?;
+                }
+            }
             // TODO if new pages were added, they should get some of the post_process_result treatment as well
         }
 
@@ -1828,7 +1807,7 @@ mod tests {
 
     async fn run_psid_ext(psid: usize, addendum: &str) -> Result<Platform, String> {
         let state = get_state().await;
-        let form_parameters = match state.get_query_from_psid(&format!("{}", &psid)) {
+        let form_parameters = match state.get_query_from_psid(&format!("{}", &psid)).await {
             Ok(psid_query) => {
                 let query = psid_query + addendum;
                 FormParameters::outcome_from_query(&query)?

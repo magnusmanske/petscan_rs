@@ -86,7 +86,7 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
                 if form_parameters.params.len() == 1 {
                     single_psid = psid.parse::<u64>().ok()
                 }
-                match state.get_query_from_psid(&psid.to_string()) {
+                match state.get_query_from_psid(&psid.to_string()).await {
                     Ok(psid_query) => {
                         let psid_params = match FormParameters::outcome_from_query(&psid_query) {
                             Ok(pp) => pp,
@@ -125,7 +125,7 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
         }
     }
 
-    let started_query_id = match state.log_query_start(&form_parameters.to_string()) {
+    let started_query_id = match state.log_query_start(&form_parameters.to_string()).await {
         Ok(id) => id,
         Err(e) => return state.render_error(e, &form_parameters),
     };
