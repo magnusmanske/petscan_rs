@@ -733,9 +733,8 @@ impl Platform {
                 .to_sql_batches_namespace(PAGE_BATCH_SIZE,6)?
                 .par_iter_mut()
                 .map(|mut sql_batch| {
-                    let tmp = Platform::prep_quote(&sql_batch.1);
                     sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
-                    sql_batch.0 += &tmp.0 ;
+                    sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
                     sql_batch.0 += ")";
                     if file_usage_data_ns0  {sql_batch.0 += " AND gil_page_namespace_id=0" ;}
                     sql_batch.0 += " GROUP BY gil_to" ;
@@ -764,9 +763,8 @@ impl Platform {
                 .to_sql_batches(PAGE_BATCH_SIZE)?
                 .par_iter_mut()
                 .map(|mut sql_batch| {
-                    let tmp = Platform::prep_quote(&sql_batch.1);
                     sql_batch.0 = "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN (".to_string() ;
-                    sql_batch.0 += &tmp.0 ;
+                    sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
                     sql_batch.0 += ")";
                     sql_batch.to_owned()
                 })
@@ -1052,7 +1050,7 @@ impl Platform {
             }
             if has_pattern {
                 ret.0 += " AND wbxl_text_id=wbx_id AND wbx_text LIKE ?";
-                ret.1.push(s.to_string());
+                ret.1.push(MyValue::Bytes(s.into()));
             }
         }
     }
@@ -1464,21 +1462,22 @@ impl Platform {
 
     /// Returns a tuple with a string containing comma-separated question marks, and the (non-empty) Vec elements
     pub fn prep_quote(strings: &[String]) -> SQLtuple {
-        let escaped: Vec<String> = strings
+        let escaped: Vec<MyValue> = strings
             .par_iter()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
+            .map(|s| MyValue::Bytes(s.into()))
             .collect();
         (Platform::get_questionmarks(escaped.len()), escaped)
     }
 
     pub fn full_entity_id_to_number(strings: &[String]) -> SQLtuple {
-        let escaped: Vec<String> = strings
+        let escaped: Vec<MyValue> = strings
             .par_iter()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| s[1..].to_string())
+            .map(|s|MyValue::Bytes(s.into()))
             .collect();
         (Platform::get_questionmarks(escaped.len()), escaped)
     }
@@ -1540,7 +1539,7 @@ impl Platform {
         yes.iter().for_each(|s| {
             if s != "%" {
                 ret.0 += &(" AND wbx_text LIKE ?".to_owned());
-                ret.1.push(s.to_string());
+                ret.1.push(MyValue::Bytes(s.to_owned().into()));
             }
             if !langs_yes.is_empty() {
                 let mut tmp = Self::prep_quote(&langs_yes);
@@ -1561,7 +1560,7 @@ impl Platform {
                 }
                 if s != "%" {
                     ret.0 += &(" ( wbx_text LIKE ?".to_owned());
-                    ret.1.push(s.to_string());
+                    ret.1.push(MyValue::Bytes(s.to_owned().into()));
                 }
                 if !langs_any.is_empty() {
                     let mut tmp = Self::prep_quote(&langs_any);
@@ -1590,7 +1589,7 @@ impl Platform {
                 AND wbt_type2.wby_name='item'";
             if s != "%" {
                 ret.0 += &(" AND wbt_text2.wbx_text LIKE ?".to_owned());
-                ret.1.push(s.to_string());
+                ret.1.push(MyValue::Bytes(s.to_owned().into()));
             }
             if !langs_no.is_empty() {
                 let mut tmp = Self::prep_quote(&langs_no);

@@ -1,3 +1,4 @@
+use async_recursion::async_recursion;
 use crate::app_state::DbUserPass;
 use futures::future::join_all;
 use async_trait::async_trait;
@@ -365,7 +366,8 @@ impl SourceDatabase {
         Ok(())
     }
 
-    fn go_depth(
+    #[async_recursion]
+    async fn go_depth(
         &self,
         state: &AppState,
         wiki: &String,
@@ -381,27 +383,22 @@ impl SourceDatabase {
         let new_categories: Vec<String> = vec![];
         let new_categories = RwLock::new(new_categories);
 
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(5) // TODO More? Less?
-            .build()
-            .map_err(|e| format!("{:?}", e))?
-            .install(|| {
-                categories_to_check
-                    .par_iter()
-                    .chunks(PAGE_BATCH_SIZE)
-                    .map(|categories_batch| {
-                        let categories_batch: Vec<String> =
-                            categories_batch.par_iter().map(|s| s.to_string()).collect();
-                        self.go_depth_batch(
-                            &state,
-                            wiki,
-                            &categories_batch,
-                            &categories_done,
-                            &new_categories,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, String>>()
-            })?;
+        // TODO parallel
+        let category_batches = categories_to_check
+            .par_iter()
+            .chunks(PAGE_BATCH_SIZE)
+            .collect::<Vec<Vec<&String>>>();
+        for categories_batch in category_batches {
+            let categories_batch: Vec<String> =
+                categories_batch.par_iter().map(|s| s.to_string()).collect();
+            self.go_depth_batch(
+                &state,
+                wiki,
+                &categories_batch,
+                &categories_done,
+                &new_categories,
+            ).await?;
+        }
 
         let new_categories = new_categories
             .into_inner()
@@ -419,11 +416,11 @@ impl SourceDatabase {
             ),
         );
 
-        self.go_depth(&state, wiki, categories_done, &new_categories, depth - 1)?;
+        self.go_depth(&state, wiki, categories_done, &new_categories, depth - 1).await?;
         Ok(())
     }
 
-    fn get_categories_in_tree(
+    async fn get_categories_in_tree(
         &self,
         state: &AppState,
         wiki: &String,
@@ -436,27 +433,28 @@ impl SourceDatabase {
             self.params.category_namespace_is_case_insensitive,
         );
         (*categories_done.write().map_err(|e| format!("{:?}", e))?).insert(title.to_owned());
-        self.go_depth(&state, wiki, &categories_done, &vec![title], depth)?;
+        self.go_depth(&state, wiki, &categories_done, &vec![title], depth).await?;
         let mut tmp = categories_done
             .into_inner()
             .map_err(|e| format!("{:?}", e))?;
         Ok(tmp.drain().collect())
     }
 
-    pub fn parse_category_list(
+    pub async fn parse_category_list(
         &self,
         state: &AppState,
         wiki: &String,
         input: &Vec<SourceDatabaseCatDepth>,
     ) -> Result<Vec<Vec<String>>, String> {
-        input
-            .par_iter()
-            .map(|i| self.get_categories_in_tree(&state, wiki, &i.name, i.depth))
-            .filter(|i| match i {
-                Ok(i) => !i.is_empty(),
-                _ => true,
-            })
-            .collect()
+        // TODO parallel
+        let mut ret = vec![] ;
+        for i in input {
+            let i = self.get_categories_in_tree(&state, wiki, &i.name, i.depth).await?;
+            if !i.is_empty() {
+                ret.push ( i ) ;
+            }
+        }
+        Ok(ret)
     }
 
     async fn get_talk_namespace_ids(&self, conn: &mut my::Conn) -> Result<String, String> {
@@ -707,14 +705,14 @@ impl SourceDatabase {
             &state,
             &wiki,
             &self.parse_category_depth(&self.params.cat_pos, self.params.depth),
-        )?;
+        ).await?;
 
         // Get negative categories serial list
         self.cat_neg = self.parse_category_list(
             &state,
             &wiki,
             &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
-        )?;
+        ).await?;
 
         let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
         self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn).await?;

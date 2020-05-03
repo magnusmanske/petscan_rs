@@ -6,6 +6,7 @@ use crate::platform::*;
 use mysql_async as my;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
+use mysql_async::Value as MyValue;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
@@ -69,7 +70,7 @@ impl WDfist {
         }
 
         self.seed_ignore_files().await?;
-        self.filter_items()?;
+        self.filter_items().await?;
         if self.items.is_empty() {
             j["status"] = json!("No items qualify");
             return Ok(j);
@@ -77,7 +78,7 @@ impl WDfist {
 
         // Main process
         if self.bool_param("wdf_langlinks") {
-            self.follow_language_links()?;
+            self.follow_language_links().await?;
         }
         if self.bool_param("wdf_coords") {
             self.follow_coords().await?;
@@ -95,19 +96,24 @@ impl WDfist {
         Ok(j)
     }
 
-    fn get_language_links(&self) -> Result<HashMap<String, Vec<(String, String)>>, String> {
+    async fn get_language_links(&self) -> Result<HashMap<String, Vec<(String, String)>>, String> {
         // Prepare batches to get item/wiki/title triples
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = Platform::prep_quote(&chunk);
             sql.0 = format!("SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN ({})",&sql.0) ;
-            sql.1 = sql.1.par_iter().map(|q|q[1..].to_string()).collect();
+            sql.1 = sql.1.par_iter().filter_map(|q|{
+                match q {
+                    MyValue::Bytes(q) => Some(MyValue::Bytes(q[1..].into())),
+                    _ => None
+                }
+            }).collect();
             batches.push(sql);
         });
 
         // Run batches
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(&self.state, batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
 
         // Collect pages and items, per wiki
         let mut wiki2title_q: HashMap<String, Vec<(String, String)>> = HashMap::new();
@@ -132,7 +138,7 @@ impl WDfist {
         Ok(wiki2title_q)
     }
 
-    fn filter_page_images(
+    async fn filter_page_images(
         &self,
         wiki: &String,
         page_file: Vec<(String, String)>,
@@ -157,7 +163,7 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki(wiki);
-        let rows = pagelist.run_batch_queries(&self.state, batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
         let ret: Vec<(String, String)> = rows
             .par_iter()
             .map(|row| my::from_row::<(String, String)>(row.to_owned()))
@@ -167,10 +173,10 @@ impl WDfist {
         Ok(ret)
     }
 
-    fn follow_language_links(&mut self) -> Result<(), String> {
+    async fn follow_language_links(&mut self) -> Result<(), String> {
         let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
-        let wiki2title_q = self.get_language_links()?;
-        wiki2title_q.par_iter().map(|(wiki, title_q)|{
+        let wiki2title_q = self.get_language_links().await?;
+        for (wiki, title_q) in wiki2title_q {
             // Prepare batches
             let page2q: HashMap<String, String> = title_q
                 .par_iter()
@@ -187,14 +193,14 @@ impl WDfist {
             });
 
             // Run batches
-            let rows = PageList::new_from_wiki("commonswiki").run_batch_queries(&self.state, batches).map_err(|e|format!("{:?}",e))?;
+            let rows = PageList::new_from_wiki("commonswiki").run_batch_queries(&self.state, batches).await.map_err(|e|format!("{:?}",e))?;
 
             // Collect pages and items, per wiki
             let page_file: Vec<(String, String)> = rows
                     .par_iter()
                     .map(|row| my::from_row::<(String, String)>(row.to_owned()))
                     .collect();
-            let mut page_file = self.filter_page_images(wiki, page_file).map_err(|e|format!("{:?}",e))?
+            let mut page_file = self.filter_page_images(&wiki, page_file).await.map_err(|e|format!("{:?}",e))?
                 .par_iter()
                 .filter_map(|(page, file)| match page2q.get(page) {
                     Some(q) => {
@@ -203,8 +209,7 @@ impl WDfist {
                     None => None
                 }).collect();
             add_item_file.lock().unwrap().append(&mut page_file);
-            Ok(())
-        }).collect::<Result<_,String>>()?;
+        }
 
         // Add files
         add_item_file
@@ -227,7 +232,7 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(&self.state, batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
 
         // Process results
         let page_coords: Vec<(String, f64, f64)> = rows
@@ -313,7 +318,7 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(&self.state, batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
 
         // Process results
         let item2label: Vec<(String, String)> = rows
@@ -457,7 +462,7 @@ impl WDfist {
         Ok(())
     }
 
-    fn filter_items(&mut self) -> Result<(), String> {
+    async fn filter_items(&mut self) -> Result<(), String> {
         // To batches (all items are ns=0)
         let wdf_only_items_without_p18 = self.bool_param("wdf_only_items_without_p18");
         let mut batches: Vec<SQLtuple> = vec![];
@@ -471,7 +476,7 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(&self.state, batches)?;
+        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
 
         self.items = rows
             .par_iter()
@@ -482,7 +487,7 @@ impl WDfist {
 
     async fn filter_files(&mut self) -> Result<(), String> {
         self.filter_files_from_ignore_database().await?;
-        self.filter_files_five_or_is_used()?;
+        self.filter_files_five_or_is_used().await?;
         self.remove_items_with_no_file_candidates()?;
         Ok(())
     }
@@ -540,7 +545,7 @@ impl WDfist {
         Ok(())
     }
 
-    fn filter_files_five_or_is_used(&mut self) -> Result<(), String> {
+    async fn filter_files_five_or_is_used(&mut self) -> Result<(), String> {
         if self.item2files.is_empty() {
             return Ok(());
         }
@@ -578,7 +583,7 @@ impl WDfist {
 
             // Run batches, and get a list of files to remove
             let pagelist = PageList::new_from_wiki("wikidatawiki");
-            let rows = pagelist.run_batch_queries(&self.state, batches)?;
+            let rows = pagelist.run_batch_queries(&self.state, batches).await?;
             files_to_remove = rows
                 .par_iter()
                 .map(|row| my::from_row::<String>(row.to_owned()))
@@ -775,7 +780,7 @@ mod tests {
             ],
         );
         set_item2files(&mut wdfist, "Q6", vec![("More_than_5.jpg", 0)]);
-        wdfist.filter_files_five_or_is_used().unwrap();
+        wdfist.filter_files_five_or_is_used().await.unwrap();
         assert_eq!(
             json!(wdfist.item2files),
             json!({"Q5":{"This_is_a_test_no_such_file_exists.jpg":0}})
@@ -808,14 +813,14 @@ mod tests {
 
         // All files
         wdfist.wdf_allow_svg = true;
-        wdfist.follow_language_links().unwrap();
+        wdfist.follow_language_links().await.unwrap();
         assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
         assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() > 90);
 
         // No SVG
         wdfist.item2files.clear();
         wdfist.wdf_allow_svg = false;
-        wdfist.follow_language_links().unwrap();
+        wdfist.follow_language_links().await.unwrap();
         assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
         assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() < 50);
         assert!(wdfist
@@ -827,7 +832,7 @@ mod tests {
         // Page images
         let params: Vec<(&str, &str)> = vec![("wdf_only_page_images", "1")];
         let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
-        wdfist.follow_language_links().unwrap();
+        wdfist.follow_language_links().await.unwrap();
         assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
         assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() < 50);
         assert!(wdfist

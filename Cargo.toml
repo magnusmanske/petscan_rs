@@ -32,8 +32,8 @@ hyper = "*"
 qstring = "*"
 futures = "*"
 
-[profile.release]
-lto = "fat"
-codegen-units = 1
+#[profile.release]
+#lto = "fat"
+#codegen-units = 1
 #target-cpu = "native"
-panic = "abort"
+#panic = "abort"

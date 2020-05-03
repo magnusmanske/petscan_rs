@@ -177,10 +177,6 @@ impl AppState {
                 Some(db) => db,
                 None => continue,
             };
-            // make sure mutex is not poisoned
-            if ret.is_poisoned() {
-                continue;
-            }
             // make sure mutex is available
             match ret.try_lock() {
                 Ok(_) => return &ret,

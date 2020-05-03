@@ -812,7 +812,7 @@ impl PageList {
             .await
             .map_err(|e| format!("PageList::run_batch_query: get_wiki_db_connection: {:?}", e))?;
 
-        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1.to_owned())).await // TODO fix to_owned
             .map_err(|e|format!("PageList::run_batch_query: SQL query error[1]: {:?}",e))?
             .collect_and_drop()
             //.map_and_drop(|row| from_row::<(Vec<u8>,i64,usize)>(row))
@@ -823,7 +823,7 @@ impl PageList {
     }
 
     /// Runs batched queries for process_batch_results and annotate_batch_results
-    pub fn run_batch_queries(
+    pub async fn run_batch_queries(
         &self,
         state: &AppState,
         batches: Vec<SQLtuple>,
@@ -833,15 +833,15 @@ impl PageList {
             .ok_or(format!("PageList::run_batch_queries: No wiki"))?;
 
         if true {
-            self.run_batch_queries_mutex(&state, batches, wiki)
+            self.run_batch_queries_mutex(&state, batches, wiki).await
         } else {
-            self.run_batch_queries_serial(&state, batches, wiki)
+            self.run_batch_queries_serial(&state, batches, wiki).await
         }
     }
 
     /// Runs batched queries for process_batch_results and annotate_batch_results
     /// Uses serial processing (not Mutex)
-    fn run_batch_queries_serial(
+    async fn run_batch_queries_serial(
         &self,
         state: &AppState,
         batches: Vec<SQLtuple>,
@@ -850,7 +850,7 @@ impl PageList {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
         let mut rows: Vec<my::Row> = vec![];
         for sql in batches {
-            let mut data = self.run_batch_query(state, &sql, &wiki)?;
+            let mut data = self.run_batch_query(state, &sql, &wiki).await?;
             rows.append(&mut data);
         }
         Ok(rows)
@@ -858,7 +858,7 @@ impl PageList {
 
     /// Runs batched queries for process_batch_results and annotate_batch_results
     /// Uses Mutex.
-    fn run_batch_queries_mutex(
+    async fn run_batch_queries_mutex(
         &self,
         state: &AppState,
         batches: Vec<SQLtuple>,
@@ -866,23 +866,26 @@ impl PageList {
     ) -> Result<Vec<my::Row>, String> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
 
-        Ok(batches
-            .par_iter()
-            .map(|sql| self.run_batch_query(state, sql, &wiki))
-            .collect::<Result<Vec<_>, String>>()?
+        // TODO parallel
+        let mut ret = vec![] ;
+        for sql in batches {
+            ret.push(self.run_batch_query(state, &sql, &wiki).await?);
+        }
+
+        Ok(ret
             .into_iter()
             .flatten()
             .collect())
     }
 
     /// Adds/replaces entries based on SQL query batch results.
-    pub fn process_batch_results(
+    pub async fn process_batch_results(
         &self,
         state: &AppState,
         batches: Vec<SQLtuple>,
         f: &dyn Fn(my::Row) -> Option<PageListEntry>,
     ) -> Result<(), String> {
-        self.run_batch_queries(&state, batches)?
+        self.run_batch_queries(&state, batches).await?
             .iter()
             .filter_map(|row| f(row.to_owned()))
             .for_each(|entry| self.add_entry(entry).unwrap_or(()));
@@ -911,7 +914,7 @@ impl PageList {
     }
 
     /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
-    pub fn annotate_batch_results(
+    pub async fn annotate_batch_results(
         &self,
         state: &AppState,
         batches: Vec<SQLtuple>,
@@ -919,7 +922,7 @@ impl PageList {
         col_ns: usize,
         f: &dyn Fn(my::Row, &mut PageListEntry),
     ) -> Result<(), String> {
-        self.run_batch_queries(&state, batches)?
+        self.run_batch_queries(&state, batches).await?
             .iter()
             .filter_map(|row| {
                 self.entry_from_row(row, col_title, col_ns)
@@ -938,7 +941,7 @@ impl PageList {
         Ok(())
     }
 
-    fn load_missing_page_metadata(&self, platform: &Platform) -> Result<(), String> {
+    async fn load_missing_page_metadata(&self, platform: &Platform) -> Result<(), String> {
         if self
             .entries
             .read()
@@ -989,17 +992,17 @@ impl PageList {
                     }
                     Err(_e) => {}
                 },
-            )?;
+            ).await?;
         }
         Ok(())
     }
 
-    pub fn load_missing_metadata(
+    pub async fn load_missing_metadata(
         &self,
         wikidata_language: Option<String>,
         platform: &Platform,
     ) -> Result<(), String> {
-        self.load_missing_page_metadata(platform)?;
+        self.load_missing_page_metadata(platform).await?;
 
         // All done
         if !self.is_wikidata() || wikidata_language.is_none() {
@@ -1013,20 +1016,20 @@ impl PageList {
 
         match wikidata_language {
             Some(wikidata_language) => {
-                self.add_wikidata_labels_for_namespace(0, "item", &wikidata_language, platform)?;
+                self.add_wikidata_labels_for_namespace(0, "item", &wikidata_language, platform).await?;
                 self.add_wikidata_labels_for_namespace(
                     120,
                     "property",
                     &wikidata_language,
                     platform,
-                )?;
+                ).await?;
             }
             None => {}
         }
         Ok(())
     }
 
-    fn add_wikidata_labels_for_namespace(
+    async fn add_wikidata_labels_for_namespace(
         &self,
         namespace_id: NamespaceID,
         entity_type: &str,
@@ -1058,8 +1061,13 @@ impl PageList {
                     "property" => "wbpt_term_in_lang_id",
                     _ => return None
                 } ;
-                let item_ids = sql_batch.1.iter().map(|s|s[1..].to_string()).collect::<Vec<String>>().join(",");
-                sql_batch.1 = vec![wikidata_language.to_string()];
+                let item_ids = sql_batch.1.iter().map(|s|{
+                    match s {
+                        MyValue::Bytes(s) => String::from_utf8_lossy(s)[1..].to_string(),
+                        _ => "".to_string()
+                    }
+                }).collect::<Vec<String>>().join(",");
+                sql_batch.1 = vec![MyValue::Bytes(wikidata_language.to_owned().into())];
                 sql_batch.0 = format!("SELECT concat('{}',{}) AS term_full_entity_id,{} AS dummy_namespace,wbx_text as term_text,wby_name as term_type
 FROM {}
 INNER JOIN wbt_term_in_lang ON {} = wbtl_id
@@ -1093,7 +1101,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                 }
                 _ => {}
             },
-        )
+        ).await
     }
 
     pub async fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
@@ -1157,7 +1165,9 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         Platform::profile("PageList::convert_from_wikidata STARTING BATCHES", None);
 
-        batches.chunks(5).for_each(|batch_chunk| {
+        // TODO parallel
+        let batches = batches.chunks(5).collect::<Vec<_>>();
+        for batch_chunk in batches {
             Platform::profile("PageList::convert_from_wikidata STARTING BATCH CHUNK", None);
             let res = self.process_batch_results(
                 &platform.state(),
@@ -1170,7 +1180,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                         &api,
                     )))
                 },
-            );
+            ).await;
             match res {
                 Ok(_) => {
                     Platform::profile("PageList::convert_from_wikidata ENDING BATCH CHUNK", None)
@@ -1180,7 +1190,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                     None,
                 ),
             }
-        });
+        }
         Platform::profile("PageList::convert_from_wikidata ALL BATCHES COMPLETE", None);
         self.set_wiki(Some(wiki.to_string()))?;
         Platform::profile("PageList::convert_from_wikidata END", None);
