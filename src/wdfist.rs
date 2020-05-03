@@ -4,6 +4,8 @@ use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 use crate::platform::*;
 use mysql_async as my;
+use mysql_async::from_row;
+use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
@@ -87,7 +89,7 @@ impl WDfist {
             self.follow_commons_cats()?;
         }
 
-        self.filter_files()?;
+        self.filter_files().await?;
 
         j["data"] = json!(&self.item2files);
         Ok(j)
@@ -398,7 +400,7 @@ impl WDfist {
 
     async fn seed_ignore_files(&mut self) -> Result<(), String> {
         self.seed_ignore_files_from_wiki_page().await?;
-        self.seed_ignore_files_from_ignore_database()?;
+        self.seed_ignore_files_from_ignore_database().await?;
         Ok(())
     }
 
@@ -429,34 +431,28 @@ impl WDfist {
         Ok(())
     }
 
-    fn seed_ignore_files_from_ignore_database(&mut self) -> Result<(), String> {
+    async fn seed_ignore_files_from_ignore_database(&mut self) -> Result<(), String> {
         let state = self.state.clone();
         let tool_db_user_pass = state
             .get_tool_db_user_pass()
-            .lock()
-            .map_err(|e| format!("{:?}", e))?;
-        let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone())?;
+            .lock().await;
+        let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone()).await?;
 
         let sql = format!("SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={}",MIN_IGNORE_DB_FILE_COUNT);
-        let result = match conn.prep_exec(sql, ()) {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(format!(
-                    "wdfist::seed_ignore_files_from_ignore_database: {:?}",
-                    e
-                ))
-            }
-        };
 
-        result
-            .filter_map(|row_result| row_result.ok())
-            .map(|row| my::from_row::<String>(row))
-            .for_each(|filename| {
-                let filename = self.normalize_filename(&filename.to_string());
-                if self.is_valid_filename(&filename) {
-                    self.files2ignore.insert(filename);
-                }
-            });
+        let rows = conn.exec_iter(sql.as_str(),()).await
+            .map_err(|e|format!("{:?}",e))?
+            .map_and_drop(|row| from_row::<Vec<u8>>(row))
+            .await
+            .map_err(|e|format!("{:?}",e))?;
+
+        for filename in rows {
+            let filename = String::from_utf8_lossy(&filename);
+            let filename = self.normalize_filename(&filename.to_string());
+            if self.is_valid_filename(&filename) {
+                self.files2ignore.insert(filename);
+            }
+        }
 
         Ok(())
     }
@@ -484,14 +480,14 @@ impl WDfist {
         Ok(())
     }
 
-    fn filter_files(&mut self) -> Result<(), String> {
-        self.filter_files_from_ignore_database()?;
+    async fn filter_files(&mut self) -> Result<(), String> {
+        self.filter_files_from_ignore_database().await?;
         self.filter_files_five_or_is_used()?;
         self.remove_items_with_no_file_candidates()?;
         Ok(())
     }
 
-    fn filter_files_from_ignore_database(&mut self) -> Result<(), String> {
+    async fn filter_files_from_ignore_database(&mut self) -> Result<(), String> {
         if self.items.is_empty() {
             return Ok(());
         }
@@ -517,34 +513,31 @@ impl WDfist {
         let tool_db_user_pass = state
             .get_tool_db_user_pass()
             .lock()
-            .map_err(|e| format!("{:?}", e))?;
-        let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone())?;
+            .await;
+        let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone()).await?;
 
         // Run batches sequentially
-        batches
-            .iter()
-            .map(|sql| {
-                let result = conn
-                    .prep_exec(&sql.0, &sql.1)
-                    .map_err(|e| format!("{:?}", e))?;
-                result
-                    .filter_map(|row_result| row_result.ok())
-                    .map(|row| my::from_row::<(String, String)>(row))
-                    .for_each(|(item, filename)| {
-                        let filename = self.normalize_filename(&filename.to_string());
-                        match self.item2files.get_mut(&item) {
-                            Some(ref mut files) => {
-                                files.remove(&filename);
-                                if files.is_empty() {
-                                    self.item2files.remove(&item);
-                                }
-                            }
-                            None => return, // Odd
+        for sql in batches {
+            let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+                .map_err(|e|format!("{:?}",e))?
+                .map_and_drop(|row| from_row::<(String, String)>(row))
+                .await
+                .map_err(|e|format!("{:?}",e))?;
+
+            for (item, filename) in rows {
+                let filename = self.normalize_filename(&filename.to_string());
+                match self.item2files.get_mut(&item) {
+                    Some(ref mut files) => {
+                        files.remove(&filename);
+                        if files.is_empty() {
+                            self.item2files.remove(&item);
                         }
-                    });
-                Ok(())
-            })
-            .collect::<Result<_, String>>()
+                    }
+                    None => {}, // Odd
+                }
+            }
+        }
+        Ok(())
     }
 
     fn filter_files_five_or_is_used(&mut self) -> Result<(), String> {

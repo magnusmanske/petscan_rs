@@ -1,5 +1,4 @@
 use tokio::sync::Mutex;
-use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::platform::{ContentType, MyResponse};
 use chrono::prelude::*;
@@ -208,15 +207,14 @@ impl AppState {
         let (host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
         let (user, pass) = db_user_pass;
         loop {
-            let mut builder = my::OptsBuilder::new();
-            builder
-                .ip_or_hostname(Some(host.to_owned()))
+            let opts = my::OptsBuilder::default()
+                .ip_or_hostname(host.to_owned())
                 .db_name(Some(schema.to_owned()))
                 .user(Some(user))
-                .pass(Some(pass));
-            builder.tcp_port(self.config["db_port"].as_u64().unwrap_or(3306) as u16);
+                .pass(Some(pass))
+                .tcp_port(self.config["db_port"].as_u64().unwrap_or(3306) as u16);
 
-            match my::Conn::new(builder) {
+            match my::Conn::new(opts).await {
                 Ok(mut con) => {
                     self.set_group_concat_max_len(wiki, &mut con).await?;
                     return Ok(con);
@@ -412,26 +410,25 @@ impl AppState {
             ))
     }
 
-    pub fn get_tool_db_connection(
+    pub async fn get_tool_db_connection(
         &self,
         tool_db_user_pass: DbUserPass,
     ) -> Result<my::Conn, String> {
         let (host, schema) = self.db_host_and_schema_for_tool_db();
         let (user, pass) = tool_db_user_pass.clone();
-        let mut builder = my::OptsBuilder::new();
-        builder
-            .ip_or_hostname(Some(host.to_owned()))
-            .db_name(Some(schema))
-            .user(Some(user))
-            .pass(Some(pass));
         let port: u16 = match self.config["host"].as_str() {
             Some("127.0.0.1") => 3308,
             Some(_host) => self.config["db_port"].as_u64().unwrap_or(3306) as u16,
             None => 3306, // Fallback
         };
-        builder.tcp_port(port);
+        let opts = my::OptsBuilder::default()
+            .ip_or_hostname(host.to_owned())
+            .db_name(Some(schema))
+            .user(Some(user))
+            .pass(Some(pass))
+            .tcp_port(port);
 
-        match my::Conn::new(builder) {
+        match my::Conn::new(opts).await {
             Ok(conn) => Ok(conn),
             Err(e) => Err(format!(
                 "AppState::get_tool_db_connection can't get DB connection to {}:{} : '{}'",
@@ -446,7 +443,7 @@ impl AppState {
 
     pub async fn get_query_from_psid(&self, psid: &String) -> Result<String, String> {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
+        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
 
         let psid = match psid.parse::<usize>() {
             Ok(psid) => psid,
@@ -468,7 +465,7 @@ impl AppState {
 
     pub async fn log_query_start(&self, query_string: &String) -> Result<u64, String> {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
+        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
         let sql = (
@@ -492,7 +489,7 @@ impl AppState {
 
     pub async fn log_query_end(&self, query_id: u64) {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = match self.get_tool_db_connection(tool_db_user_pass.clone()) {
+        let mut conn = match self.get_tool_db_connection(tool_db_user_pass.clone()).await {
             Ok(conn) => conn,
             _ => return,
         };
@@ -505,7 +502,7 @@ impl AppState {
 
     pub async fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone())?;
+        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
 
         // Check for existing entry
         let sql = (
