@@ -344,9 +344,9 @@ impl Platform {
         }
         self.process_by_wikidata_item(&result).await?;
         Platform::profile("after process_by_wikidata_item", Some(result.len()?));
-        self.process_files(&result)?;
+        self.process_files(&result).await?;
         Platform::profile("after process_files", Some(result.len()?));
-        self.process_pages(&result)?;
+        self.process_pages(&result).await?;
         Platform::profile("after process_pages", Some(result.len()?));
         self.process_subpages(&result).await?;
         Platform::profile("after process_subpages", Some(result.len()?));
@@ -643,7 +643,7 @@ impl Platform {
         Ok(())
     }
 
-    fn process_pages(&self, result: &PageList) -> Result<(), String> {
+    async fn process_pages(&self, result: &PageList) -> Result<(), String> {
         let add_coordinates = self.has_param("add_coordinates");
         let add_image = self.has_param("add_image");
         let add_defaultsort = self.has_param("add_defaultsort");
@@ -712,16 +712,29 @@ impl Platform {
                 };
             }
         };
-        result.annotate_batch_results(
-            &self.state(),
-            batches,
-            0,
-            1,
-            &the_f
-        )
+
+        let col_title : usize = 0 ;
+        let col_ns : usize = 1 ;
+        result.run_batch_queries(&self.state(), batches).await?
+            .iter()
+            .filter_map(|row| {
+                result.entry_from_row(row, col_title, col_ns)
+                    .map(|entry| (row, entry))
+            })
+            .filter_map(|(row, entry)| {
+                match result.entries().read() {
+                    Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
+                    _ => None, // TODO error?
+                }
+            })
+            .for_each(|(row, mut entry)| {
+                the_f(row.clone(), &mut entry);
+                result.add_entry(entry).unwrap_or(());
+            });
+        Ok(())
     }
 
-    fn process_files(&self, result: &PageList) -> Result<(), String> {
+    async fn process_files(&self, result: &PageList) -> Result<(), String> {
         let giu = self.has_param("giu");
         let file_data = self.has_param("ext_image_data")
             || self.get_param("sortby") == Some("filesize".to_string())
@@ -743,20 +756,32 @@ impl Platform {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-            result.annotate_batch_results(
-                &self.state(),
-                batches,
-                0,
-                1,
-                &|row: my::Row, entry: &mut PageListEntry| match PageList::string_from_row(&row, 2)
-                {
-                    Some(gil_group) => {
-                        let fi = FileInfo::new_from_gil_group(&gil_group);
-                        entry.set_file_info(Some(fi));
+            let the_f = |row: my::Row, entry: &mut PageListEntry| match PageList::string_from_row(&row, 2)
+                    {
+                        Some(gil_group) => {
+                            let fi = FileInfo::new_from_gil_group(&gil_group);
+                            entry.set_file_info(Some(fi));
+                        }
+                        None => {}
+                    } ;
+            let col_title : usize = 0 ;
+            let col_ns : usize = 1 ;
+            result.run_batch_queries(&self.state(), batches).await?
+                .iter()
+                .filter_map(|row| {
+                    result.entry_from_row(row, col_title, col_ns)
+                        .map(|entry| (row, entry))
+                })
+                .filter_map(|(row, entry)| {
+                    match result.entries().read() {
+                        Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
+                        _ => None, // TODO error?
                     }
-                    None => {}
-                },
-            )?;
+                })
+                .for_each(|(row, mut entry)| {
+                    the_f(row.clone(), &mut entry);
+                    result.add_entry(entry).unwrap_or(());
+                });
         }
 
         if file_data {
@@ -771,12 +796,7 @@ impl Platform {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-            result.annotate_batch_results(
-                &self.state(),
-                batches,
-                0,
-                1,
-                &|row: my::Row, entry: &mut PageListEntry| {
+            let the_f = |row: my::Row, entry: &mut PageListEntry| {
                     let (
                         _img_name,
                         _namespace_id,
@@ -816,8 +836,25 @@ impl Platform {
                     file_info.img_timestamp = Some(img_timestamp);
                     file_info.img_sha1 = Some(img_sha1);
                     entry.set_file_info(Some(file_info));
-                },
-            )?;
+                } ;
+            let col_title : usize = 0 ;
+            let col_ns : usize = 1 ;
+            result.run_batch_queries(&self.state(), batches).await?
+                .iter()
+                .filter_map(|row| {
+                    result.entry_from_row(row, col_title, col_ns)
+                        .map(|entry| (row, entry))
+                })
+                .filter_map(|(row, entry)| {
+                    match result.entries().read() {
+                        Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
+                        _ => None, // TODO error?
+                    }
+                })
+                .for_each(|(row, mut entry)| {
+                    the_f(row.clone(), &mut entry);
+                    result.add_entry(entry).unwrap_or(());
+                });
         }
         Ok(())
     }
@@ -1057,7 +1094,7 @@ impl Platform {
             }
             if has_pattern {
                 ret.0 += " AND wbxl_text_id=wbx_id AND wbx_text LIKE ?";
-                ret.1.push(MyValue::Bytes(s.into()));
+                ret.1.push(MyValue::Bytes(s.to_owned().into()));
             }
         }
     }

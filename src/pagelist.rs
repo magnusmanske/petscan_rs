@@ -885,7 +885,7 @@ impl PageList {
         }
     }
 
-    fn entry_from_row(
+    pub fn entry_from_row(
         &self,
         row: &my::Row,
         col_title: usize,
