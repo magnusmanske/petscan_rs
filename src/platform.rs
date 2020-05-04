@@ -1,6 +1,6 @@
 use tokio::sync::Mutex;
 use mysql_async::from_row;
-use async_recursion::async_recursion;
+use futures::future::FutureExt;
 use futures::future::join_all;
 use crate::app_state::AppState;
 use crate::datasource::*;
@@ -270,7 +270,7 @@ impl Platform {
 
         self.combination = self.get_combination(&available_sources);
         Platform::profile("before combine_results", None);
-        let result = self.combine_results(&mut results, &self.combination).await?;
+        let result = self.combine_results(&mut results, &self.combination)?;
         drop(results);
 
         self.result = Some(result);
@@ -357,7 +357,7 @@ impl Platform {
             "wikidata_label_language",
             &self.get_param_default("interface_language", "en"),
         );
-        result.load_missing_metadata(Some(wikidata_label_language), &self)?;
+        result.load_missing_metadata(Some(wikidata_label_language), &self).await?;
         Platform::profile("after load_missing_metadata", Some(result.len()?));
         match self.get_param("regexp_filter") {
             Some(regexp) => result.regexp_filter(&regexp)?,
@@ -673,50 +673,51 @@ impl Platform {
                 })
                 .collect::<Vec<SQLtuple>>();
 
+        let the_f = |row: my::Row, entry: &mut PageListEntry| {
+            let mut parts = row.unwrap(); // Unwrap into vector, should be safe
+            parts.remove(0); // page_title
+            parts.remove(0); // page_namespace
+            if add_image {
+                entry.set_page_image(match parts.remove(0) {
+                    my::Value::Bytes(s) => String::from_utf8(s).ok(),
+                    _ => None,
+                });
+            }
+            if add_coordinates {
+                let coordinates = match parts.remove(0) {
+                    my::Value::Bytes(s) => match String::from_utf8(s) {
+                        Ok(lat_lon) => PageCoordinates::new_from_lat_lon(&lat_lon),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                entry.set_coordinates(coordinates);
+            }
+            if add_defaultsort {
+                entry.set_defaultsort(match parts.remove(0) {
+                    my::Value::Bytes(s) => String::from_utf8(s).ok(),
+                    _ => None,
+                });
+            }
+            if add_disambiguation {
+                entry.disambiguation = match parts.remove(0) {
+                    my::Value::NULL => TriState::No,
+                    _ => TriState::Yes,
+                }
+            }
+            if add_incoming_links {
+                entry.incoming_links = match parts.remove(0) {
+                    my::Value::Int(i) => Some(i as LinkCount),
+                    _ => None,
+                };
+            }
+        };
         result.annotate_batch_results(
             &self.state(),
             batches,
             0,
             1,
-            &|row: my::Row, entry: &mut PageListEntry| {
-                let mut parts = row.unwrap(); // Unwrap into vector, should be safe
-                parts.remove(0); // page_title
-                parts.remove(0); // page_namespace
-                if add_image {
-                    entry.set_page_image(match parts.remove(0) {
-                        my::Value::Bytes(s) => String::from_utf8(s).ok(),
-                        _ => None,
-                    });
-                }
-                if add_coordinates {
-                    let coordinates = match parts.remove(0) {
-                        my::Value::Bytes(s) => match String::from_utf8(s) {
-                            Ok(lat_lon) => PageCoordinates::new_from_lat_lon(&lat_lon),
-                            _ => None,
-                        },
-                        _ => None,
-                    };
-                    entry.set_coordinates(coordinates);
-                }
-                if add_defaultsort {
-                    entry.set_defaultsort(match parts.remove(0) {
-                        my::Value::Bytes(s) => String::from_utf8(s).ok(),
-                        _ => None,
-                    });
-                }
-                if add_disambiguation {
-                    entry.disambiguation = match parts.remove(0) {
-                        my::Value::NULL => TriState::No,
-                        _ => TriState::Yes,
-                    }
-                }
-                if add_incoming_links {
-                    entry.incoming_links = match parts.remove(0) {
-                        my::Value::Int(i) => Some(i as LinkCount),
-                        _ => None,
-                    };
-                }
-            },
+            &the_f
         )
     }
 
@@ -991,10 +992,16 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries()?;
-        result.process_batch_results(&self.state(), batches, &|row: my::Row| {
+        let the_f = |row: my::Row| {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
-        })
+        };
+        result.run_batch_queries(&self.state(), batches)
+            .await?
+            .iter()
+            .filter_map(|row| the_f(row.to_owned()))
+            .for_each(|entry| result.add_entry(entry).unwrap_or(()));
+        Ok(())
     }
 
     //________________________________________________________________________________________________
@@ -1140,10 +1147,16 @@ impl Platform {
             .collect();
 
         result.clear_entries()?;
-        result.process_batch_results(&self.state(), batches, &|row: my::Row| {
+        let the_f = |row: my::Row| {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
-        })
+        } ;
+        result.run_batch_queries(&self.state(), batches)
+            .await?
+            .iter()
+            .filter_map(|row| the_f(row.to_owned()))
+            .for_each(|entry| result.add_entry(entry).unwrap_or(()));
+        Ok(())
     }
 
     async fn process_labels(&self, result: &PageList) -> Result<(), String> {
@@ -1237,10 +1250,17 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries()?;
-        result.process_batch_results(&self.state(), batches, &|row: my::Row| {
+        let state = self.state();
+        let the_f = |row: my::Row| {
             let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
             Some(PageListEntry::new(Title::new(&page_title, 0)))
-        })?;
+        } ;
+
+        result.run_batch_queries(&state, batches)
+            .await?
+            .iter()
+            .filter_map(|row| the_f(row.to_owned()))
+            .for_each(|entry| result.add_entry(entry).unwrap_or(()));
 
         match old_wiki {
             Some(wiki) => result.convert_to_wiki(&wiki, &self).await?,
@@ -1338,15 +1358,22 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         result.clear_entries()?;
-        let ret = result.process_batch_results(&self.state(), batches, &|row: my::Row| {
+        let state = self.state();
+        let the_f = |row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
-        });
+        } ;
+        result.run_batch_queries(&state, batches)
+            .await?
+            .iter()
+            .filter_map(|row| the_f(row.to_owned()))
+            .for_each(|entry| result.add_entry(entry).unwrap_or(()));
+
         match original_wiki {
             Some(wiki) => result.convert_to_wiki(&wiki, &self).await?,
             None => {}
         }
-        ret
+        Ok(())
     }
 
     pub fn entry_from_entity(entity: &str) -> Option<PageListEntry> {
@@ -1711,8 +1738,7 @@ impl Platform {
         }
     }
 
-    #[async_recursion]
-    async fn combine_results(
+    fn combine_results(
         &self,
         results: &mut HashMap<String, PageList>,
         combination: &Combination,
@@ -1723,12 +1749,14 @@ impl Platform {
                 None => Err(format!("No result for source {}", &s)),
             },
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, c) => self.combine_results(results, c).await,
-                (c, Combination::None) => self.combine_results(results, c).await,
+                (Combination::None, c) => self.combine_results(results, c),
+                (c, Combination::None) => self.combine_results(results, c),
                 (c, d) => {
-                    let r1 = self.combine_results(results, c).await?;
-                    let r2 = self.combine_results(results, d).await?;
-                    r1.union(&r2, Some(&self)).await?;
+                    let r1 = self.combine_results(results, c)?;
+                    let r2 = self.combine_results(results, d)?;
+                    async move {
+                        r1.union(&r2, Some(&self)).await;
+                    };
                     Ok(r1)
                 }
             },
@@ -1740,19 +1768,23 @@ impl Platform {
                     Err(format!("Intersection with Combination::None found"))
                 }
                 (c, d) => {
-                    let r1 = self.combine_results(results, c).await?;
-                    let r2 = self.combine_results(results, d).await?;
-                    r1.intersection(&r2, Some(&self)).await?;
+                    let r1 = self.combine_results(results, c)?;
+                    let r2 = self.combine_results(results, d)?;
+                    async move {
+                        r1.intersection(&r2, Some(&self)).await;
+                    };
                     Ok(r1)
                 }
             },
             Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
                 (Combination::None, _c) => Err(format!("Not with Combination::None found")),
-                (c, Combination::None) => self.combine_results(results, c).await,
+                (c, Combination::None) => self.combine_results(results, c),
                 (c, d) => {
-                    let r1 = self.combine_results(results, c).await?;
-                    let r2 = self.combine_results(results, d).await?;
-                    r1.difference(&r2, Some(&self)).await?;
+                    let r1 = self.combine_results(results, c)?;
+                    let r2 = self.combine_results(results, d)?;
+                    async move {
+                        r1.difference(&r2, Some(&self)).await;
+                    };
                     Ok(r1)
                 }
             },

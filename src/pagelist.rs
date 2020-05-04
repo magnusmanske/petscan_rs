@@ -878,20 +878,6 @@ impl PageList {
             .collect())
     }
 
-    /// Adds/replaces entries based on SQL query batch results.
-    pub async fn process_batch_results(
-        &self,
-        state: &AppState,
-        batches: Vec<SQLtuple>,
-        f: &dyn Fn(my::Row) -> Option<PageListEntry>,
-    ) -> Result<(), String> {
-        self.run_batch_queries(&state, batches).await?
-            .iter()
-            .filter_map(|row| f(row.to_owned()))
-            .for_each(|entry| self.add_entry(entry).unwrap_or(()));
-        Ok(())
-    }
-
     pub fn string_from_row(row: &my::Row, col_num: usize) -> Option<String> {
         match row.get(col_num)? {
             my::Value::Bytes(uv) => String::from_utf8(uv).ok(),
@@ -911,34 +897,6 @@ impl PageList {
             _ => return None,
         };
         Some(PageListEntry::new(Title::new(&page_title, namespace_id)))
-    }
-
-    /// Similar to `process_batch_results` but to modify existing entrties. Does not add new entries.
-    pub async fn annotate_batch_results(
-        &self,
-        state: &AppState,
-        batches: Vec<SQLtuple>,
-        col_title: usize,
-        col_ns: usize,
-        f: &dyn Fn(my::Row, &mut PageListEntry),
-    ) -> Result<(), String> {
-        self.run_batch_queries(&state, batches).await?
-            .iter()
-            .filter_map(|row| {
-                self.entry_from_row(row, col_title, col_ns)
-                    .map(|entry| (row, entry))
-            })
-            .filter_map(|(row, entry)| {
-                match self.entries.read() {
-                    Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
-                    _ => None, // TODO error?
-                }
-            })
-            .for_each(|(row, mut entry)| {
-                f(row.clone(), &mut entry);
-                self.add_entry(entry).unwrap_or(());
-            });
-        Ok(())
     }
 
     async fn load_missing_page_metadata(&self, platform: &Platform) -> Result<(), String> {
@@ -964,35 +922,47 @@ impl PageList {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-            self.annotate_batch_results(
-                &platform.state(),
-                batches,
-                0,
-                1,
-                &|row: my::Row, entry: &mut PageListEntry| match my::from_row_opt::<(
-                    Vec<u8>,
-                    NamespaceID,
-                    u32,
-                    u32,
-                    Vec<u8>,
-                )>(row)
-                {
-                    Ok((
-                        _page_title,
-                        _page_namespace,
-                        page_id,
-                        page_len,
-                        page_last_rev_timestamp,
-                    )) => {
-                        let page_last_rev_timestamp =
-                            String::from_utf8_lossy(&page_last_rev_timestamp).into_owned();
-                        entry.page_id = Some(page_id);
-                        entry.page_bytes = Some(page_len);
-                        entry.set_page_timestamp(Some(page_last_rev_timestamp));
+            let the_f = |row: my::Row, entry: &mut PageListEntry| match my::from_row_opt::<(
+                Vec<u8>,
+                NamespaceID,
+                u32,
+                u32,
+                Vec<u8>,
+            )>(row)
+            {
+                Ok((
+                    _page_title,
+                    _page_namespace,
+                    page_id,
+                    page_len,
+                    page_last_rev_timestamp,
+                )) => {
+                    let page_last_rev_timestamp =
+                        String::from_utf8_lossy(&page_last_rev_timestamp).into_owned();
+                    entry.page_id = Some(page_id);
+                    entry.page_bytes = Some(page_len);
+                    entry.set_page_timestamp(Some(page_last_rev_timestamp));
+                }
+                Err(_e) => {}
+            } ;
+            let col_title = 0 ;
+            let col_ns = 1 ;
+            self.run_batch_queries(&platform.state(), batches).await?
+                .iter()
+                .filter_map(|row| {
+                    self.entry_from_row(row, col_title, col_ns)
+                        .map(|entry| (row, entry))
+                })
+                .filter_map(|(row, entry)| {
+                    match self.entries.read() {
+                        Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
+                        _ => None, // TODO error?
                     }
-                    Err(_e) => {}
-                },
-            ).await?;
+                })
+                .for_each(|(row, mut entry)| {
+                    the_f(row.clone(), &mut entry);
+                    self.add_entry(entry).unwrap_or(());
+                });
         }
         Ok(())
     }
@@ -1079,12 +1049,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             })
             .collect::<Vec<SQLtuple>>();
 
-        self.annotate_batch_results(
-            &platform.state(),
-            batches,
-            0,
-            1,
-            &|row: my::Row, entry: &mut PageListEntry| match my::from_row_opt::<(
+        let the_f = |row: my::Row, entry: &mut PageListEntry| match my::from_row_opt::<(
                 Vec<u8>,
                 NamespaceID,
                 Vec<u8>,
@@ -1100,8 +1065,26 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                     }
                 }
                 _ => {}
-            },
-        ).await
+            } ;
+        let col_title = 0 ;
+        let col_ns = 1 ;
+        self.run_batch_queries(&platform.state(), batches).await?
+            .iter()
+            .filter_map(|row| {
+                self.entry_from_row(row, col_title, col_ns)
+                    .map(|entry| (row, entry))
+            })
+            .filter_map(|(row, entry)| {
+                match self.entries.read() {
+                    Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
+                    _ => None, // TODO error?
+                }
+            })
+            .for_each(|(row, mut entry)| {
+                the_f(row.clone(), &mut entry);
+                self.add_entry(entry).unwrap_or(());
+            });
+        Ok(())
     }
 
     pub async fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
@@ -1109,14 +1092,14 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         if self.wiki()? == None || self.wiki()? == Some(wiki.to_string()) {
             return Ok(());
         }
-        self.convert_to_wikidata(platform)?;
+        self.convert_to_wikidata(platform).await?;
         if wiki != "wikidatawiki" {
             self.convert_from_wikidata(wiki, platform).await?;
         }
         Ok(())
     }
 
-    fn convert_to_wikidata(&self, platform: &Platform) -> Result<(), String> {
+    async fn convert_to_wikidata(&self, platform: &Platform) -> Result<(), String> {
         if self.wiki()? == None || self.is_wikidata() {
             return Ok(());
         }
@@ -1129,7 +1112,8 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             })
             .collect::<Vec<SQLtuple>>();
         self.clear_entries()?;
-        self.process_batch_results(&platform.state(), batches, &|row: my::Row| {
+        let state = platform.state();
+        let the_f = |row: my::Row| {
             match my::from_row_opt::<Vec<u8>>(row) {
                 Ok(pp_value) => {
                     let pp_value = String::from_utf8_lossy(&pp_value).into_owned();
@@ -1137,7 +1121,13 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                 }
                 Err(_e) => None,
             }
-        })?;
+        };
+
+        self.run_batch_queries(&state, batches).await?
+            .iter()
+            .filter_map(|row| the_f(row.to_owned()))
+            .for_each(|entry| self.add_entry(entry).unwrap_or(()));
+
         self.set_wiki(Some("wikidatawiki".to_string()))?;
         Ok(())
     }
@@ -1169,27 +1159,21 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         let batches = batches.chunks(5).collect::<Vec<_>>();
         for batch_chunk in batches {
             Platform::profile("PageList::convert_from_wikidata STARTING BATCH CHUNK", None);
-            let res = self.process_batch_results(
-                &platform.state(),
-                batch_chunk.to_vec(),
-                &|row: my::Row| {
+            let state = platform.state() ;
+            let the_fn = |row: my::Row| {
                     let ips_site_page = my::from_row_opt::<Vec<u8>>(row).ok()?;
                     let ips_site_page = String::from_utf8_lossy(&ips_site_page).into_owned();
                     Some(PageListEntry::new(Title::new_from_full(
                         &ips_site_page,
                         &api,
                     )))
-                },
-            ).await;
-            match res {
-                Ok(_) => {
-                    Platform::profile("PageList::convert_from_wikidata ENDING BATCH CHUNK", None)
-                }
-                _ => Platform::profile(
-                    "PageList::convert_from_wikidata ENDING BATCH CHUNK FAILED",
-                    None,
-                ),
-            }
+                };
+            let res = self.run_batch_queries(&state, batch_chunk.to_vec())
+                .await?
+                .iter()
+                .filter_map(|row| the_fn(row.to_owned()))
+                .for_each(|entry| self.add_entry(entry).unwrap_or(()));
+            Platform::profile("PageList::convert_from_wikidata ENDING BATCH CHUNK", None)
         }
         Platform::profile("PageList::convert_from_wikidata ALL BATCHES COMPLETE", None);
         self.set_wiki(Some(wiki.to_string()))?;
