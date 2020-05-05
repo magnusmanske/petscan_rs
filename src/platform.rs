@@ -1791,9 +1791,11 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    async move {
-                        r1.union(&r2, Some(&self)).await;
+                    let x = async {
+                        let x = r1.union(&r2, Some(&self)).await;
+                        x.unwrap();
                     };
+                    drop(x);
                     Ok(r1)
                 }
             },
@@ -1807,9 +1809,11 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    async move {
-                        r1.intersection(&r2, Some(&self)).await;
+                    let x = async {
+                        let x = r1.intersection(&r2, Some(&self)).await;
+                        x.unwrap();
                     };
+                    drop(x);
                     Ok(r1)
                 }
             },
@@ -1819,9 +1823,11 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    async move {
-                        r1.difference(&r2, Some(&self)).await;
+                    let x = async {
+                        let x = r1.difference(&r2, Some(&self)).await;
+                        x.unwrap();
                     };
+                    drop(x);
                     Ok(r1)
                 }
             },
