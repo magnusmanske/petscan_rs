@@ -135,7 +135,9 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
     let mut platform = Platform::new_from_parameters(&form_parameters, state.clone());
     Platform::profile("platform initialized", None);
     let platform_result = platform.run().await;
-    state.log_query_end(started_query_id);
+    match state.log_query_end(started_query_id).await {
+        _ => {} // Ignore error
+    }
     state.modify_threads_running(-1);
     Platform::profile("platform run complete", None);
 
@@ -155,7 +157,9 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
         None => match state.get_or_create_psid_for_query(&form_parameters.to_string()).await {
             Ok(psid) => Some(psid),
             Err(e) => {
-                state.log_query_end(started_query_id);
+                match state.log_query_end(started_query_id).await {
+                    _ => {} // Ignore error
+                }
                 return state.render_error(e, &form_parameters);
             }
         },

@@ -1,5 +1,4 @@
 use async_recursion::async_recursion;
-use crate::app_state::DbUserPass;
 use futures::future::join_all;
 use async_trait::async_trait;
 use crate::app_state::AppState;
@@ -29,7 +28,6 @@ struct DsdbParams {
     primary: String,
     sql_before_after: SQLtuple,
     is_before_after_done: bool,
-    conn: my::Conn,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -326,11 +324,6 @@ impl SourceDatabase {
         categories_done: &RwLock<HashSet<String>>,
         new_categories: &RwLock<Vec<String>>,
     ) -> Result<(), String> {
-        let db_user_pass = state
-            .get_db_mutex()
-            .lock()
-            .await;
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         categories_batch.iter().for_each(|c| {
             // Don't par_iter, already in pool!
@@ -344,7 +337,10 @@ impl SourceDatabase {
         Platform::append_sql(&mut sql, Platform::prep_quote(&categories_batch));
         sql.0 += ")";
 
-        let result = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+        let result = state
+            .get_wiki_db_connection(&wiki)
+            .await?
+            .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
             .map_and_drop(|row| from_row::<Vec<u8>>(row))
             .await
@@ -675,11 +671,6 @@ impl SourceDatabase {
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<DsdbParams, String> {
-        let db_user_pass = state
-            .get_db_mutex()
-            .lock()
-            .await;
-
         // Take wiki from given pagelist
         match primary_pagelist {
             Some(pl) => {
@@ -714,8 +705,9 @@ impl SourceDatabase {
             &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
         ).await?;
 
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
+        let mut conn = state.get_wiki_db_connection(&wiki).await?;
         self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn).await?;
+        drop(conn);
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
@@ -784,7 +776,6 @@ impl SourceDatabase {
             primary: primary.to_string(),
             sql_before_after: sql_before_after,
             is_before_after_done: is_before_after_done,
-            conn: conn,
         })
     }
 
@@ -867,15 +858,10 @@ impl SourceDatabase {
 
         let mut futures : Vec<_> = vec![] ;
         if true {
-            let db_user_pass = state
-                .get_db_mutex()
-                .lock()
-                .await;
-
             futures = batches
             .iter_mut()
             .map( |sql|{
-                self.get_pages_pagelist_batch(wiki.clone(),sql.clone(),&state,&params,db_user_pass.clone()) // TODO FIXME sql clone
+                self.get_pages_pagelist_batch(wiki.clone(),sql.clone(),&state,&params) // TODO FIXME sql clone
             })
             .collect();
         }
@@ -903,9 +889,8 @@ impl SourceDatabase {
         sql:SQLtuple,
         state:&AppState,
         params:&DsdbParams,
-        db_user_pass:DbUserPass
     ) -> Result<PageList,String> {
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
+        let mut conn = state.get_wiki_db_connection(&wiki).await?;
         let sql_before_after = params.sql_before_after.clone();
         let mut is_before_after_done = params.is_before_after_done.clone();
         let mut pl2 = PageList::new_from_wiki(&wiki.clone());
@@ -919,6 +904,7 @@ impl SourceDatabase {
             &mut is_before_after_done,
             api,
         ).await?;
+        drop(conn);
         Ok(pl2)
     }
 
@@ -968,8 +954,9 @@ impl SourceDatabase {
         }
 
         let mut ret = PageList::new_from_wiki(&params.wiki);
+        let mut conn = state.get_wiki_db_connection(&params.wiki).await?;
         self.get_pages_for_primary(
-            &mut params.conn,
+            &mut conn,
             &params.primary.to_string(),
             sql,
             params.sql_before_after,
@@ -977,6 +964,7 @@ impl SourceDatabase {
             &mut params.is_before_after_done,
             state.get_api_for_wiki(params.wiki.clone()).await?,
         ).await?;
+        drop(conn);
         Ok(ret)
     }
 
@@ -991,16 +979,12 @@ impl SourceDatabase {
         is_before_after_done: &mut bool,
         api: Api,
     ) -> Result<(), String> {
-        let db_user_pass = state
-            .get_db_mutex()
-            .lock()
-            .await;
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
+        let mut conn = state.get_wiki_db_connection(&wiki).await?;
         Platform::profile(
             "DSDB::get_pages_for_primary_new_connection STARTING",
             Some(sql.1.len()),
         );
-        self.get_pages_for_primary(
+        let ret = self.get_pages_for_primary(
             &mut conn,
             primary,
             sql,
@@ -1008,7 +992,8 @@ impl SourceDatabase {
             pages_sublist,
             is_before_after_done,
             api,
-        ).await
+        ).await;
+        ret
     }
 
     async fn get_pages_for_primary(

@@ -1,6 +1,5 @@
-use tokio::sync::Mutex;
-use mysql_async::from_row;
-use futures::future::FutureExt;
+use futures::executor::block_on;
+use tokio::sync::Mutex as TokioMutex;
 use futures::future::join_all;
 use crate::app_state::AppState;
 use crate::datasource::*;
@@ -10,6 +9,7 @@ use crate::pagelist::*;
 use crate::render::*;
 use crate::wdfist::*;
 use chrono::Local;
+use mysql_async::from_row;
 use mysql_async as my;
 use mysql_async::Value as MyValue;
 use mysql_async::prelude::Queryable;
@@ -460,11 +460,7 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         let state = self.state();
-        let db_user_pass = state
-            .get_db_mutex()
-            .lock()
-            .await;
-        let mut conn = state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string()).await?;
+        let mut conn = state.get_wiki_db_connection(&"wikidatawiki".to_string()).await?;
 
         for sql in batches {
             let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
@@ -478,6 +474,7 @@ impl Platform {
                 self.existing_labels.write().unwrap().insert(label.to_string());
             }
         }
+        drop(conn);
         Ok(())
     }
 
@@ -516,13 +513,9 @@ impl Platform {
         };
 
 
-        let db_user_pass = self
-            .state
-            .get_db_mutex()
-            .lock().await;
         let mut conn = self
             .state
-            .get_wiki_db_connection(&db_user_pass, &wiki)
+            .get_wiki_db_connection(&wiki)
             .await
             .map_err(|e| format!("{:?}", e))?;
 
@@ -530,7 +523,6 @@ impl Platform {
             self.process_redlinks_batch(&mut conn,sql,&mut redlink_counter).await?;
         }
         drop(conn);
-        drop(db_user_pass);
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
@@ -598,11 +590,7 @@ impl Platform {
                 Some(wiki) => wiki.to_owned(),
                 None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
             };
-            let db_user_pass = self
-                .state
-                .get_db_mutex()
-                .lock().await;
-            let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &wiki).await?;
+            let mut conn = self.state.get_wiki_db_connection(&wiki).await?;
 
             for (title, namespace_id) in title_ns {
                 let sql: SQLtuple = (
@@ -897,15 +885,15 @@ impl Platform {
         });
 
         // Duplicated from Patelist::annotate_batch_results
-        let rows: Mutex<Vec<my::Row>> = Mutex::new(vec![]);
+        let rows: TokioMutex<Vec<my::Row>> = TokioMutex::new(vec![]);
 
         for sql in batches {
-            // Get DB connection
-            let db_user_pass = self.state.get_db_mutex().lock().await;
-            let mut conn = self.state.get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string()).await.map_err(|e| format!("{:?}", e))?;
-
             // Run query
-            let mut result = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+            let mut result = self.state
+                .get_wiki_db_connection(&"wikidatawiki".to_string())
+                .await
+                .map_err(|e| format!("{:?}", e))?
+                .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
                 .map_err(|e|format!("{:?}",e))?
                 .collect_and_drop()
                 .await
@@ -1780,10 +1768,14 @@ impl Platform {
         results: &mut HashMap<String, PageList>,
         combination: &Combination,
     ) -> Result<PageList, String> {
+        println!("Combination: {:?}",&combination);
         match combination {
-            Combination::Source(s) => match results.remove(s) {
-                Some(r) => Ok(r),
-                None => Err(format!("No result for source {}", &s)),
+            Combination::Source(s) => {
+                println!("Size: {}",results[s].len().unwrap());
+                    match results.remove(s) {
+                    Some(r) => Ok(r),
+                    None => Err(format!("No result for source {}", &s)),
+                }
             },
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
                 (Combination::None, c) => self.combine_results(results, c),
@@ -1791,11 +1783,8 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    let x = async {
-                        let x = r1.union(&r2, Some(&self)).await;
-                        x.unwrap();
-                    };
-                    drop(x);
+                    let fut = r1.union(&r2, Some(&self)) ;
+                    block_on(fut)?;
                     Ok(r1)
                 }
             },
@@ -1809,11 +1798,11 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    let x = async {
-                        let x = r1.intersection(&r2, Some(&self)).await;
-                        x.unwrap();
-                    };
-                    drop(x);
+                    println!("ASYNC BEFORE: {}",r1.len().unwrap());
+                    let fut = r1.intersection(&r2, Some(&self)) ;
+                    println!("0");
+                    block_on(fut)?;
+                    println!("ASYNC AFTER: {}",r1.len().unwrap());
                     Ok(r1)
                 }
             },

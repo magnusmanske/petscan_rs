@@ -834,12 +834,9 @@ mod tests {
         let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
         wdfist.follow_language_links().await.unwrap();
         assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
-        assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() < 50);
-        assert!(wdfist
-            .item2files
-            .get(&"Q1481".to_string())
-            .unwrap()
-            .contains_key(&"Felsberg_(Hessen).jpg".to_string()));
+        let x = wdfist.item2files.get(&"Q1481".to_string()).unwrap() ;
+        assert!(x.len() < 50);
+        assert!(x.contains_key(&"Felsberg_(Hessen).jpg".to_string()));
     }
 
     #[tokio::test]

@@ -644,16 +644,20 @@ impl PageList {
         pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
+        println!("check_before_merging:1");
         let my_wiki = match self.wiki()? {
             Some(wiki) => wiki,
             None => return Err("PageList::check_before_merging self.wiki is not set".to_string()),
         };
+        println!("check_before_merging:2");
         if pagelist.wiki()?.is_none() {
             return Err("PageList::check_before_merging pagelist.wiki is not set".to_string());
         }
+        println!("check_before_merging:3");
         if self.wiki()? != pagelist.wiki()? {
             match platform {
                 Some(platform) => {
+        println!("check_before_merging:4");
                     Platform::profile(
                         format!(
                             "PageList::check_before_merging Converting {} entries from {} to {}",
@@ -664,9 +668,12 @@ impl PageList {
                         .as_str(),
                         None,
                     );
+        println!("check_before_merging:5");
                     pagelist.convert_to_wiki(&my_wiki, platform).await?;
+        println!("check_before_merging:6");
                 }
                 None => {
+        println!("check_before_merging:7");
                     return Err(format!(
                         "PageList::check_before_merging wikis are not identical: {}/{}",
                         self.wiki()?
@@ -678,6 +685,7 @@ impl PageList {
                 }
             }
         }
+        println!("check_before_merging:8");
         Ok(())
     }
 
@@ -711,13 +719,18 @@ impl PageList {
         pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
+        println!("AA");
         self.check_before_merging(&pagelist, platform).await?;
+        println!("A");
         let other_entries = pagelist.entries();
+        println!("B");
         let other_entries = other_entries.read().map_err(|e| format!("{:?}", e))?;
+        println!("C");
         self.entries
             .write()
             .map_err(|e| format!("{:?}", e))?
             .retain(|x| other_entries.contains(&x));
+        println!("D");
         Ok(())
     }
 
@@ -803,21 +816,19 @@ impl PageList {
         sql: &SQLtuple,
         wiki: &String,
     ) -> Result<Vec<my::Row>, String> {
-        let db_user_pass = state
-            .get_db_mutex()
-            .lock()
-            .await;
+println!("run_batch_query: 1");
         let mut conn = state
-            .get_wiki_db_connection(&db_user_pass, &wiki)
+            .get_wiki_db_connection(&wiki)
             .await
             .map_err(|e| format!("PageList::run_batch_query: get_wiki_db_connection: {:?}", e))?;
-
+println!("run_batch_query: 3");
         let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1.to_owned())).await // TODO fix to_owned
             .map_err(|e|format!("PageList::run_batch_query: SQL query error[1]: {:?}",e))?
             .collect_and_drop()
             //.map_and_drop(|row| from_row::<(Vec<u8>,i64,usize)>(row))
             .await
             .map_err(|e|format!("PageList::run_batch_query: SQL query error[2]: {:?}",e))?;
+println!("run_batch_query: 4");
 
         Ok(rows)
     }
@@ -1088,22 +1099,29 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
     }
 
     pub async fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
+        println!("convert_to_wiki: 1");
         // Already that wiki?
         if self.wiki()? == None || self.wiki()? == Some(wiki.to_string()) {
             return Ok(());
         }
+        println!("convert_to_wiki: 2");
         self.convert_to_wikidata(platform).await?;
+        println!("convert_to_wiki: 3");
         if wiki != "wikidatawiki" {
+            println!("convert_to_wiki: 4");
             self.convert_from_wikidata(wiki, platform).await?;
         }
+        println!("convert_to_wiki: 5");
         Ok(())
     }
 
     async fn convert_to_wikidata(&self, platform: &Platform) -> Result<(), String> {
+        println!("convert_to_wikidata: 1");
         if self.wiki()? == None || self.is_wikidata() {
             return Ok(());
         }
 
+        println!("convert_to_wikidata: 2");
         let batches: Vec<SQLtuple> = self.to_sql_batches(PAGE_BATCH_SIZE)?
             .par_iter_mut()
             .map(|sql|{
@@ -1111,7 +1129,9 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                 sql.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
+        println!("convert_to_wikidata: 3");
         self.clear_entries()?;
+        println!("convert_to_wikidata: 4");
         let state = platform.state();
         let the_f = |row: my::Row| {
             match my::from_row_opt::<Vec<u8>>(row) {
@@ -1122,13 +1142,20 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                 Err(_e) => None,
             }
         };
+        println!("convert_to_wikidata: 5");
 
-        self.run_batch_queries(&state, batches).await?
+        let results = self.run_batch_queries(&state, batches) ;
+        println!("convert_to_wikidata: 5a");
+        let results = results.await?;
+        println!("convert_to_wikidata: 5b");
+        results
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
             .for_each(|entry| self.add_entry(entry).unwrap_or(()));
 
+        println!("convert_to_wikidata: 6");
         self.set_wiki(Some("wikidatawiki".to_string()))?;
+        println!("convert_to_wikidata: 7");
         Ok(())
     }
 
@@ -1168,7 +1195,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                         &api,
                     )))
                 };
-            let res = self.run_batch_queries(&state, batch_chunk.to_vec())
+            self.run_batch_queries(&state, batch_chunk.to_vec())
                 .await?
                 .iter()
                 .filter_map(|row| the_fn(row.to_owned()))

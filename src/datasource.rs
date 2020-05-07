@@ -36,17 +36,12 @@ impl DataSource for SourceLabels {
     }
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
-        let state = platform.state();
-        let db_user_pass = state
-            .get_db_mutex()
-            .lock().await;
         let sql = platform.get_label_sql();
-        let mut conn = platform
+        let rows = platform
             .state()
-            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())
-            .await?;
-
-        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
+            .get_wiki_db_connection( &"wikidatawiki".to_string())
+            .await?
+            .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
             .map_and_drop(|row| from_row::<(Vec<u8>,)>(row))
             .await
@@ -57,7 +52,6 @@ impl DataSource for SourceLabels {
             .map(|row|String::from_utf8_lossy(&row.0))
             .filter_map(|item|Platform::entry_from_entity(&item))
             .for_each(|entry| ret.add_entry(entry).unwrap_or(()) );
-
         Ok(ret)
     }
 }
@@ -107,16 +101,11 @@ impl DataSource for SourceWikidata {
         }
 
         // Perform DB query
-        let state = platform.state();
-        let db_user_pass = state
-            .get_db_mutex()
-            .lock().await;
-        let mut conn = platform
+        let rows = platform
             .state()
-            .get_wiki_db_connection(&db_user_pass, &"wikidatawiki".to_string())
-            .await?;
-
-        let rows = conn.exec_iter(sql.as_str(),()).await
+            .get_wiki_db_connection(&"wikidatawiki".to_string())
+            .await?
+            .exec_iter(sql.as_str(),()).await
             .map_err(|e|format!("{:?}",e))?
             .map_and_drop(|row| from_row::<usize>(row))
             .await
@@ -130,7 +119,6 @@ impl DataSource for SourceWikidata {
                 None => {}
             }
         }
-
         Ok(ret)
     }
 }
