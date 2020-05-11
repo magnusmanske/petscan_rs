@@ -184,6 +184,14 @@ impl AppState {
         Ok(())
     }
 
+    async fn connect_to_db(&self, wiki: &String, conn: &mut my::Conn) -> Result<(), String> {
+        let (_host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
+        let sql = "USE ".to_string()+&schema ;
+        println!("get_wiki_db_connection: 3 \"{}\"",&sql);
+        conn.exec_drop(sql.as_str(),()).await.map_err(|e|format!("{:?}",e))?;
+        Ok(())
+    }
+
     pub async fn get_wiki_db_connection(
         &self,
         wiki: &String,
@@ -196,9 +204,7 @@ impl AppState {
                     match pool.get_conn().await {
                         Ok(mut conn) => {
                             println!("get_wiki_db_connection: 2");
-                            let (_host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
-                            println!("get_wiki_db_connection: 3");
-                            conn.query_drop("USE ".to_owned()+&schema).await.map_err(|e|format!("{:?}",e))?;
+                            self.connect_to_db(wiki,&mut conn).await?;
                             println!("get_wiki_db_connection: 4");
                             self.set_group_concat_max_len(wiki,&mut conn).await?;
                             println!("get_wiki_db_connection: 5");

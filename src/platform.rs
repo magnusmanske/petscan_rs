@@ -1771,7 +1771,7 @@ impl Platform {
         println!("Combination: {:?}",&combination);
         match combination {
             Combination::Source(s) => {
-                println!("Size: {}",results[s].len().unwrap());
+                //println!("Size: {}",results.get(s).map_err(|e|format!("combine_results: {:?}",e))?.len()?);
                     match results.remove(s) {
                     Some(r) => Ok(r),
                     None => Err(format!("No result for source {}", &s)),
@@ -1798,11 +1798,11 @@ impl Platform {
                 (c, d) => {
                     let r1 = self.combine_results(results, c)?;
                     let r2 = self.combine_results(results, d)?;
-                    println!("ASYNC BEFORE: {}",r1.len().unwrap());
+                    println!("ASYNC BEFORE: {}",r1.len()?);
                     let fut = r1.intersection(&r2, Some(&self)) ;
                     println!("0");
                     block_on(fut)?;
-                    println!("ASYNC AFTER: {}",r1.len().unwrap());
+                    println!("ASYNC AFTER: {}",r1.len()?);
                     Ok(r1)
                 }
             },
@@ -1814,7 +1814,7 @@ impl Platform {
                     let r2 = self.combine_results(results, d)?;
                     let x = async {
                         let x = r1.difference(&r2, Some(&self)).await;
-                        x.unwrap();
+                        x.unwrap_or(());
                     };
                     drop(x);
                     Ok(r1)
@@ -1874,7 +1874,7 @@ mod tests {
             Err(e) => return Err(e),
         };
         let mut platform = Platform::new_from_parameters(&form_parameters, state);
-        platform.run().await.unwrap();
+        platform.run().await?;
         Ok(platform)
     }
 
