@@ -829,6 +829,7 @@ println!("run_batch_query: 3");
             .await
             .map_err(|e|format!("PageList::run_batch_query: SQL query error[2]: {:?}",e))?;
 println!("run_batch_query: 4");
+        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
 
         Ok(rows)
     }

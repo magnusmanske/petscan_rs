@@ -1,3 +1,5 @@
+use rand::seq::SliceRandom;
+use rand::prelude::thread_rng;
 use tokio::sync::Mutex;
 use crate::form_parameters::FormParameters;
 use crate::platform::{ContentType, MyResponse};
@@ -25,8 +27,8 @@ pub type DbUserPass = (String, String);
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    db_pools:Vec<my::Pool>,
-    pub config: Value,
+    dbpool:Arc<Mutex<Vec<DbUserPass>>>,
+    config: Value,
     tool_db_mutex: Arc<Mutex<DbUserPass>>,
     threads_running: Arc<RwLock<i64>>,
     shutting_down: Arc<RwLock<bool>>,
@@ -47,8 +49,8 @@ impl AppState {
                 .expect("No password key in config file")
                 .to_string(),
         );
-        let mut ret = Self {
-            db_pools : vec![],
+        let ret = Self {
+            dbpool : Arc::new(Mutex::new(vec![])),
             config: config.to_owned(),
             threads_running: Arc::new(RwLock::new(0)),
             shutting_down: Arc::new(RwLock::new(false)),
@@ -64,7 +66,8 @@ impl AppState {
 
         match config["mysql"].as_array() {
             Some(up_list) => {
-                up_list.iter().for_each(|up| {
+                let mut pool = ret.dbpool.lock().await ;
+                for up in up_list {
                     let user = up[0]
                         .as_str()
                         .expect("Parsing user from mysql array in config failed")
@@ -76,44 +79,33 @@ impl AppState {
                     let connections = up[2].as_u64().unwrap_or(5);
                     // Ignore toolname up[3]
 
-                    let ( host , schema ) = ret.db_host_and_schema_for_wiki(&"wikidatawiki".to_string()).unwrap();
-                    let pool_constraints = my::PoolConstraints::new(0, connections as usize).unwrap() ;
-                    let pool_opts = my::PoolOpts::default()
-                        .with_constraints(pool_constraints)
-                        . with_inactive_connection_ttl( core::time::Duration::new(120, 0));
-                    let opts = my::OptsBuilder::default()
-                        .ip_or_hostname(host.to_owned())
-                        .db_name(Some(schema.to_owned()))
-                        .pool_opts(pool_opts)
-                        .user(Some(user))
-                        .pass(Some(pass))
-                        .tcp_port(config["db_port"].as_u64().unwrap_or(3306) as u16);
-                    let pool = my::Pool::new(opts);
-                    ret.db_pools.push ( pool ) ;
-                });
-            }
-            None => {
-                /*
-                for _x in 1..MAX_CONCURRENT_DB_CONNECTIONS {
-                    let tuple = (
-                        config["user"]
-                            .as_str()
-                            .expect("No user key in config file")
-                            .to_string(),
-                        config["password"]
-                            .as_str()
-                            .expect("No password key in config file")
-                            .to_string(),
-                    );
-                    ret.db_pool.push(Arc::new(Mutex::new(tuple)));
+                    for _num in 1 .. connections {
+                        pool.push ( (user.to_string(),pass.to_string()) );
+                    }
                 }
-                */
+                pool.shuffle(&mut thread_rng());
             }
+            None => {}
         }
-        if ret.db_pools.is_empty() {
+        if ret.dbpool.lock().await.is_empty() {
             panic!("No database access config available");
         }
         ret
+    }
+
+    pub fn get_restart_code(&self) -> Option<&str> {
+        self.config["restart-code"].as_str()
+    }
+
+    fn get_mysql_opts_for_wiki(&self,wiki:&String,user:&String,pass:&String) -> Result<my::OptsBuilder,String> {
+        let ( host , schema ) = self.db_host_and_schema_for_wiki(&wiki).unwrap();
+        let opts = my::OptsBuilder::default()
+            .ip_or_hostname(host)
+            .db_name(Some(schema))
+            .user(Some(user))
+            .pass(Some(pass))
+            .tcp_port(self.config["db_port"].as_u64().unwrap_or(3306) as u16);
+        Ok(opts)
     }
 
     pub fn get_main_page(&self, interface_language: String) -> String {
@@ -184,42 +176,24 @@ impl AppState {
         Ok(())
     }
 
-    async fn connect_to_db(&self, wiki: &String, conn: &mut my::Conn) -> Result<(), String> {
-        let (_host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
-        let sql = "USE ".to_string()+&schema ;
-        println!("get_wiki_db_connection: 3 \"{}\"",&sql);
-        conn.exec_drop(sql.as_str(),()).await.map_err(|e|format!("{:?}",e))?;
-        Ok(())
-    }
-
     pub async fn get_wiki_db_connection(
         &self,
         wiki: &String,
     ) -> Result<my::Conn, String> {
-        loop {
-            let pool_id = rand::random::<usize>() % self.db_pools.len() ;
-            match self.db_pools.get(pool_id) {
-                Some(pool) => {
-                    println!("get_wiki_db_connection: 1 [{}/{}]",&wiki,pool_id);
-                    match pool.get_conn().await {
-                        Ok(mut conn) => {
-                            println!("get_wiki_db_connection: 2");
-                            self.connect_to_db(wiki,&mut conn).await?;
-                            println!("get_wiki_db_connection: 4");
-                            self.set_group_concat_max_len(wiki,&mut conn).await?;
-                            println!("get_wiki_db_connection: 5");
-                            return Ok(conn) ;
-                        }
-                        Err(_e) => { println!("AGAIN A"); }
-                    }
-                }
-                None => {
-                    println!("AGAIN B");
-                }
-            }
-        }
+        let mut pool = self.dbpool.lock().await;
+        println!("get_wiki_db_connection: 1");
+        let db_user_pass = pool.remove(0) ;
+        println!("get_wiki_db_connection: 2 {:?}",&db_user_pass);
+        let opts_builder = self.get_mysql_opts_for_wiki(wiki,&db_user_pass.0,&db_user_pass.1)?;
+        println!("get_wiki_db_connection: 3 {:?}",&opts_builder);
+        let conn = my::Conn::new(opts_builder).await;
+        println!("get_wiki_db_connection: 4 {:?}",&conn);
+        let mut conn = conn.map_err(|e|format!("{:?}",e))? ;
+        self.set_group_concat_max_len(wiki,&mut conn).await?;
+        println!("get_wiki_db_connection: 5");
+        pool.push(db_user_pass);
+        Ok(conn)
     }
-
 
     pub fn render_error(&self, error: String, form_parameters: &FormParameters) -> MyResponse {
         match form_parameters.params.get("format").map(|s| s.as_str()) {

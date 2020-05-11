@@ -337,14 +337,16 @@ impl SourceDatabase {
         Platform::append_sql(&mut sql, Platform::prep_quote(&categories_batch));
         sql.0 += ")";
 
-        let result = state
+        let mut conn = state
             .get_wiki_db_connection(&wiki)
-            .await?
+            .await? ;
+        let result = conn
             .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
             .map_and_drop(|row| from_row::<Vec<u8>>(row))
             .await
             .map_err(|e|format!("{:?}",e))?;
+        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
 
         result
             .iter()
@@ -707,7 +709,7 @@ impl SourceDatabase {
 
         let mut conn = state.get_wiki_db_connection(&wiki).await?;
         self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn).await?;
-        drop(conn);
+        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
@@ -964,7 +966,7 @@ impl SourceDatabase {
             &mut params.is_before_after_done,
             state.get_api_for_wiki(params.wiki.clone()).await?,
         ).await?;
-        drop(conn);
+        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
         Ok(ret)
     }
 
@@ -993,6 +995,7 @@ impl SourceDatabase {
             is_before_after_done,
             api,
         ).await;
+        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
         ret
     }
 

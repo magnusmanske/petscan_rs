@@ -37,15 +37,17 @@ impl DataSource for SourceLabels {
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let sql = platform.get_label_sql();
-        let rows = platform
+        let mut conn = platform
             .state()
             .get_wiki_db_connection( &"wikidatawiki".to_string())
-            .await?
+            .await? ;
+        let rows = conn
             .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
             .map_and_drop(|row| from_row::<(Vec<u8>,)>(row))
             .await
             .map_err(|e|format!("{:?}",e))?;
+        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
         let ret = PageList::new_from_wiki_with_capacity("wikidatawiki",rows.len());
         rows
             .iter()
@@ -101,16 +103,17 @@ impl DataSource for SourceWikidata {
         }
 
         // Perform DB query
-        let rows = platform
+        let mut conn = platform
             .state()
             .get_wiki_db_connection(&"wikidatawiki".to_string())
-            .await?
+            .await? ;
+        let rows = conn
             .exec_iter(sql.as_str(),()).await
             .map_err(|e|format!("{:?}",e))?
             .map_and_drop(|row| from_row::<usize>(row))
             .await
             .map_err(|e|format!("{:?}",e))?;
-
+        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
         let ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
         for ips_item_id in rows {
             let term_full_entity_id = format!("Q{}", ips_item_id);

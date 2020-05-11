@@ -474,7 +474,7 @@ impl Platform {
                 self.existing_labels.write().unwrap().insert(label.to_string());
             }
         }
-        drop(conn);
+        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
         Ok(())
     }
 
@@ -522,7 +522,7 @@ impl Platform {
         for sql in batches {
             self.process_redlinks_batch(&mut conn,sql,&mut redlink_counter).await?;
         }
-        drop(conn);
+        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
@@ -610,6 +610,7 @@ impl Platform {
                     result.add_entry(PageListEntry::new(Title::new(&page_title,page_namespace))).unwrap_or(());
                 }
             }
+            conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
             // TODO if new pages were added, they should get some of the post_process_result treatment as well
         }
 
@@ -889,16 +890,17 @@ impl Platform {
 
         for sql in batches {
             // Run query
-            let mut result = self.state
+            let mut conn = self.state
                 .get_wiki_db_connection(&"wikidatawiki".to_string())
                 .await
-                .map_err(|e| format!("{:?}", e))?
+                .map_err(|e| format!("{:?}", e))?;
+            let mut result = conn
                 .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
                 .map_err(|e|format!("{:?}",e))?
                 .collect_and_drop()
                 .await
                 .map_err(|e|format!("{:?}",e))?;
-
+            conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
             rows.lock().await.append(&mut result);
         }
 

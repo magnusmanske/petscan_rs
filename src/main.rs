@@ -42,7 +42,7 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
     match form_parameters.params.get("restart") {
         Some(code) => {
             let given_code = code.to_string();
-            match state.config["restart-code"].as_str() {
+            match state.get_restart_code() {
                 Some(config_code) => {
                     if given_code == config_code {
                         state.shut_down();
