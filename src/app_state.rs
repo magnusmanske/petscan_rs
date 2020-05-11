@@ -16,18 +16,11 @@ use std::fs;
 use std::sync::{Arc, RwLock};
 use wikibase::mediawiki::api::Api;
 
-/*
-static MAX_CONCURRENT_DB_CONNECTIONS: u64 = 10;
-static MYSQL_MAX_CONNECTION_ATTEMPTS: u64 = 15;
-static MYSQL_CONNECTION_INITIAL_DELAY_MS: u64 = 100;
-static MYSQL_CONNECTION_MAX_DELAY_MS: u64 = 5000;
-*/
-
 pub type DbUserPass = (String, String);
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    dbpool:Arc<Mutex<Vec<DbUserPass>>>,
+    db_pool:Arc<Mutex<Vec<DbUserPass>>>,
     config: Value,
     tool_db_mutex: Arc<Mutex<DbUserPass>>,
     threads_running: Arc<RwLock<i64>>,
@@ -50,7 +43,7 @@ impl AppState {
                 .to_string(),
         );
         let ret = Self {
-            dbpool : Arc::new(Mutex::new(vec![])),
+            db_pool : Arc::new(Mutex::new(vec![])),
             config: config.to_owned(),
             threads_running: Arc::new(RwLock::new(0)),
             shutting_down: Arc::new(RwLock::new(false)),
@@ -66,7 +59,7 @@ impl AppState {
 
         match config["mysql"].as_array() {
             Some(up_list) => {
-                let mut pool = ret.dbpool.lock().await ;
+                let mut pool = ret.db_pool.lock().await ;
                 for up in up_list {
                     let user = up[0]
                         .as_str()
@@ -87,7 +80,7 @@ impl AppState {
             }
             None => {}
         }
-        if ret.dbpool.lock().await.is_empty() {
+        if ret.db_pool.lock().await.is_empty() {
             panic!("No database access config available");
         }
         ret
@@ -180,7 +173,7 @@ impl AppState {
         &self,
         wiki: &String,
     ) -> Result<my::Conn, String> {
-        let mut pool = self.dbpool.lock().await;
+        let mut pool = self.db_pool.lock().await;
         println!("get_wiki_db_connection: 1");
         let db_user_pass = pool.remove(0) ;
         println!("get_wiki_db_connection: 2 {:?}",&db_user_pass);

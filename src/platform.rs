@@ -1,4 +1,3 @@
-use futures::executor::block_on;
 use tokio::sync::Mutex as TokioMutex;
 use futures::future::join_all;
 use crate::app_state::AppState;
@@ -78,6 +77,14 @@ impl Combination {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CombinationSequential {
+    Source(String),
+    Intersection,
+    Union,
+    Not,
 }
 
 #[derive(Debug)]
@@ -269,8 +276,11 @@ impl Platform {
         Platform::profile("end futures 1", None);
 
         self.combination = self.get_combination(&available_sources);
+
         Platform::profile("before combine_results", None);
-        let result = self.combine_results(&mut results, &self.combination)?;
+        let serialized_combination = self.serialize_combine_results(&self.combination)? ;
+        println!("{:?}",&serialized_combination);
+        let result = self.combine_results(&mut results, serialized_combination).await?;
         drop(results);
 
         self.result = Some(result);
@@ -304,7 +314,7 @@ impl Platform {
     }
 
     pub fn profile(label: &str, num: Option<usize>) {
-        if false {
+        if true {
             println!(
                 "{} [{}]: {}",
                 Local::now().format("%Y-%m-%d %H:%M:%S"),
@@ -1765,6 +1775,108 @@ impl Platform {
         }
     }
 
+    fn serialize_combine_results(
+        &self,
+        combination: &Combination,
+    ) -> Result<Vec<CombinationSequential>,String> {
+        match combination {
+            Combination::Source(s) => {
+                Ok(vec![CombinationSequential::Source(s.to_string())])
+            },
+            Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
+                (Combination::None, c) => self.serialize_combine_results(c),
+                (c, Combination::None) => self.serialize_combine_results(c),
+                (c, d) => {
+                    let mut ret = vec![] ;
+                    ret.append(&mut self.serialize_combine_results(c)?);
+                    ret.append(&mut self.serialize_combine_results(d)?);
+                    ret.push(CombinationSequential::Union);
+                    Ok(ret)
+                }
+            },
+            Combination::Intersection((a, b)) => match (a.as_ref(), b.as_ref()) {
+                (Combination::None, _c) => {
+                    Err(format!("Intersection with Combination::None found"))
+                }
+                (_c, Combination::None) => {
+                    Err(format!("Intersection with Combination::None found"))
+                }
+                (c, d) => {
+                    let mut ret = vec![] ;
+                    ret.append(&mut self.serialize_combine_results(c)?);
+                    ret.append(&mut self.serialize_combine_results(d)?);
+                    ret.push(CombinationSequential::Intersection);
+                    Ok(ret)
+                }
+            },
+            Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
+                (Combination::None, _c) => Err(format!("Not with Combination::None found")),
+                (c, Combination::None) => self.serialize_combine_results(c),
+                (c, d) => {
+                    let mut ret = vec![] ;
+                    ret.append(&mut self.serialize_combine_results(c)?);
+                    ret.append(&mut self.serialize_combine_results(d)?);
+                    ret.push(CombinationSequential::Not);
+                    Ok(ret)
+                }
+            },
+            Combination::None => Err(format!("Combination::None found")),
+        }
+    }
+
+    async fn combine_results(
+        &self,
+        results: &mut HashMap<String, PageList>,
+        combination: Vec<CombinationSequential>,
+    ) -> Result<PageList, String> {
+        let mut registers : Vec<PageList> = vec![] ;
+        for command in combination {
+            match command {
+                CombinationSequential::Source(source_key) => {
+                    match results.remove(&source_key) {
+                        Some(source) => {
+                            registers.push ( source ) ;
+                        },
+                        None => return Err(format!("No result for source {}", &source_key)),
+                    }
+                }
+                CombinationSequential::Union => {
+                    if registers.len() < 2 {
+                        return Err(format!("combine_results: Not enough registers for Union"));
+                    }
+                    let r2 = registers.pop().unwrap() ;
+                    let r1 = registers.pop().unwrap() ;
+                    r1.union(&r2, Some(&self)).await?;
+                    registers.push(r1)
+                }
+                CombinationSequential::Intersection => {
+                    if registers.len() < 2 {
+                        return Err(format!("combine_results: Not enough registers for Union"));
+                    }
+                    let r2 = registers.pop().unwrap() ;
+                    let r1 = registers.pop().unwrap() ;
+                    r1.intersection(&r2, Some(&self)).await?;
+                    registers.push(r1)
+                }
+                CombinationSequential::Not => {
+                    if registers.len() < 2 {
+                        return Err(format!("combine_results: Not enough registers for Union"));
+                    }
+                    let r2 = registers.pop().unwrap() ;
+                    let r1 = registers.pop().unwrap() ;
+                    r1.difference(&r2, Some(&self)).await?;
+                    registers.push(r1)
+                }
+            }
+        }
+        if registers.len() == 1 {
+            return Ok(registers.pop().unwrap()) ;
+        }
+        Err(format!("combine_results:{} registers set", registers.len()))
+    }
+    
+
+    /*
     fn combine_results(
         &self,
         results: &mut HashMap<String, PageList>,
@@ -1825,6 +1937,7 @@ impl Platform {
             Combination::None => Err(format!("Combination::None found")),
         }
     }
+    */
 
     pub fn result(&self) -> &Option<PageList> {
         &self.result

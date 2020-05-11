@@ -1117,12 +1117,10 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
     }
 
     async fn convert_to_wikidata(&self, platform: &Platform) -> Result<(), String> {
-        println!("convert_to_wikidata: 1");
         if self.wiki()? == None || self.is_wikidata() {
             return Ok(());
         }
 
-        println!("convert_to_wikidata: 2");
         let batches: Vec<SQLtuple> = self.to_sql_batches(PAGE_BATCH_SIZE)?
             .par_iter_mut()
             .map(|sql|{
@@ -1130,9 +1128,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                 sql.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
-        println!("convert_to_wikidata: 3");
         self.clear_entries()?;
-        println!("convert_to_wikidata: 4");
         let state = platform.state();
         let the_f = |row: my::Row| {
             match my::from_row_opt::<Vec<u8>>(row) {
