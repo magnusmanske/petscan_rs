@@ -827,7 +827,7 @@ mod tests {
             .item2files
             .get(&"Q1481".to_string())
             .unwrap()
-            .contains_key(&"Felsburg.jpg".to_string()));
+            .contains_key(&"Felsberg_bl_von_turm_zwei_wv_ds_09_2006.JPG".to_string()));
 
         // Page images
         let params: Vec<(&str, &str)> = vec![("wdf_only_page_images", "1")];

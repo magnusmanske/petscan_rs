@@ -77,8 +77,9 @@ impl AppState {
                     // Ignore toolname up[3]
 
                     let ( host , schema ) = ret.db_host_and_schema_for_wiki(&"wikidatawiki".to_string()).unwrap();
+                    let pool_constraints = my::PoolConstraints::new(0, connections as usize).unwrap() ;
                     let pool_opts = my::PoolOpts::default()
-                        .with_constraints(my::PoolConstraints::new(1, connections as usize).unwrap())
+                        .with_constraints(pool_constraints)
                         . with_inactive_connection_ttl( core::time::Duration::new(120, 0));
                     let opts = my::OptsBuilder::default()
                         .ip_or_hostname(host.to_owned())
