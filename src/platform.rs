@@ -279,7 +279,6 @@ impl Platform {
 
         Platform::profile("before combine_results", None);
         let serialized_combination = self.serialize_combine_results(&self.combination)? ;
-        println!("{:?}",&serialized_combination);
         let result = self.combine_results(&mut results, serialized_combination).await?;
         drop(results);
 
@@ -314,7 +313,7 @@ impl Platform {
     }
 
     pub fn profile(label: &str, num: Option<usize>) {
-        if true {
+        if false {
             println!(
                 "{} [{}]: {}",
                 Local::now().format("%Y-%m-%d %H:%M:%S"),
@@ -563,14 +562,7 @@ impl Platform {
         for (page_title,namespace_id,_count) in rows {
             let page_title = String::from_utf8_lossy(&page_title).to_string() ;
             let title = Title::new(&page_title, namespace_id);
-
-            // TODO get_mut()?
-            let new_value =
-                match &redlink_counter.get(&title) {
-                    Some(x) => *x + 1,
-                    None => 1,
-                };
-            redlink_counter.insert(title, new_value);
+            *redlink_counter.entry(title).or_insert(0) += 1 ;
         }
         Ok(())
     }
@@ -1663,7 +1655,6 @@ impl Platform {
             }
             ret.0 += ")";
         });
-        println!("{:?}", &ret);
         ret
     }
 
@@ -1874,70 +1865,6 @@ impl Platform {
         }
         Err(format!("combine_results:{} registers set", registers.len()))
     }
-    
-
-    /*
-    fn combine_results(
-        &self,
-        results: &mut HashMap<String, PageList>,
-        combination: &Combination,
-    ) -> Result<PageList, String> {
-        println!("Combination: {:?}",&combination);
-        match combination {
-            Combination::Source(s) => {
-                //println!("Size: {}",results.get(s).map_err(|e|format!("combine_results: {:?}",e))?.len()?);
-                    match results.remove(s) {
-                    Some(r) => Ok(r),
-                    None => Err(format!("No result for source {}", &s)),
-                }
-            },
-            Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, c) => self.combine_results(results, c),
-                (c, Combination::None) => self.combine_results(results, c),
-                (c, d) => {
-                    let r1 = self.combine_results(results, c)?;
-                    let r2 = self.combine_results(results, d)?;
-                    let fut = r1.union(&r2, Some(&self)) ;
-                    block_on(fut)?;
-                    Ok(r1)
-                }
-            },
-            Combination::Intersection((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => {
-                    Err(format!("Intersection with Combination::None found"))
-                }
-                (_c, Combination::None) => {
-                    Err(format!("Intersection with Combination::None found"))
-                }
-                (c, d) => {
-                    let r1 = self.combine_results(results, c)?;
-                    let r2 = self.combine_results(results, d)?;
-                    println!("ASYNC BEFORE: {}",r1.len()?);
-                    let fut = r1.intersection(&r2, Some(&self)) ;
-                    println!("0");
-                    block_on(fut)?;
-                    println!("ASYNC AFTER: {}",r1.len()?);
-                    Ok(r1)
-                }
-            },
-            Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => Err(format!("Not with Combination::None found")),
-                (c, Combination::None) => self.combine_results(results, c),
-                (c, d) => {
-                    let r1 = self.combine_results(results, c)?;
-                    let r2 = self.combine_results(results, d)?;
-                    let x = async {
-                        let x = r1.difference(&r2, Some(&self)).await;
-                        x.unwrap_or(());
-                    };
-                    drop(x);
-                    Ok(r1)
-                }
-            },
-            Combination::None => Err(format!("Combination::None found")),
-        }
-    }
-    */
 
     pub fn result(&self) -> &Option<PageList> {
         &self.result

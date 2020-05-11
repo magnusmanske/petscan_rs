@@ -174,16 +174,11 @@ impl AppState {
         wiki: &String,
     ) -> Result<my::Conn, String> {
         let mut pool = self.db_pool.lock().await;
-        println!("get_wiki_db_connection: 1");
         let db_user_pass = pool.remove(0) ;
-        println!("get_wiki_db_connection: 2 {:?}",&db_user_pass);
         let opts_builder = self.get_mysql_opts_for_wiki(wiki,&db_user_pass.0,&db_user_pass.1)?;
-        println!("get_wiki_db_connection: 3 {:?}",&opts_builder);
         let conn = my::Conn::new(opts_builder).await;
-        println!("get_wiki_db_connection: 4 {:?}",&conn);
         let mut conn = conn.map_err(|e|format!("{:?}",e))? ;
         self.set_group_concat_max_len(wiki,&mut conn).await?;
-        println!("get_wiki_db_connection: 5");
         pool.push(db_user_pass);
         Ok(conn)
     }

@@ -320,7 +320,7 @@ impl SourceDatabase {
         &self,
         state: &AppState,
         wiki: &String,
-        categories_batch: &Vec<String>,
+        categories_batch: Vec<String>,
         categories_done: &RwLock<HashSet<String>>,
         new_categories: &RwLock<Vec<String>>,
     ) -> Result<(), String> {
@@ -381,22 +381,23 @@ impl SourceDatabase {
         let new_categories: Vec<String> = vec![];
         let new_categories = RwLock::new(new_categories);
 
-        // TODO parallel
         let category_batches = categories_to_check
             .par_iter()
+            .map(|s|s.to_string())
             .chunks(PAGE_BATCH_SIZE)
-            .collect::<Vec<Vec<&String>>>();
+            .collect::<Vec<Vec<String>>>();
+        let mut futures = vec![] ;
         for categories_batch in category_batches {
-            let categories_batch: Vec<String> =
-                categories_batch.par_iter().map(|s| s.to_string()).collect();
-            self.go_depth_batch(
+            let future = self.go_depth_batch(
                 &state,
                 wiki,
-                &categories_batch,
+                categories_batch,
                 &categories_done,
                 &new_categories,
-            ).await?;
+            ) ;
+            futures.push(future);
         }
+        join_all(futures).await;
 
         let new_categories = new_categories
             .into_inner()
@@ -444,15 +445,18 @@ impl SourceDatabase {
         wiki: &String,
         input: &Vec<SourceDatabaseCatDepth>,
     ) -> Result<Vec<Vec<String>>, String> {
-        // TODO parallel
-        let mut ret = vec![] ;
+        let mut futures = vec![] ;
         for i in input {
-            let i = self.get_categories_in_tree(&state, wiki, &i.name, i.depth).await?;
-            if !i.is_empty() {
-                ret.push ( i ) ;
-            }
+            let future = self.get_categories_in_tree(&state, wiki, &i.name, i.depth) ;
+            futures.push(future) ;
         }
-        Ok(ret)
+
+        Ok(join_all(futures)
+            .await
+            .into_par_iter()
+            .filter_map(|i|i.ok())
+            .filter(|i|!i.is_empty())
+            .collect())
     }
 
     async fn get_talk_namespace_ids(&self, conn: &mut my::Conn) -> Result<String, String> {

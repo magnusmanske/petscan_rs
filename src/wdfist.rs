@@ -857,14 +857,6 @@ mod tests {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec!["Q66711783"]).await;
         wdfist.follow_search_commons().await.unwrap();
-        println!(
-            "{} results",
-            wdfist
-                .item2files
-                .get(&"Q66711783".to_string())
-                .unwrap()
-                .len()
-        );
         assert!(
             wdfist
                 .item2files

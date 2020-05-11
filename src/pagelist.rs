@@ -1,3 +1,4 @@
+use futures::future::join_all;
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
@@ -644,20 +645,16 @@ impl PageList {
         pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
-        println!("check_before_merging:1");
         let my_wiki = match self.wiki()? {
             Some(wiki) => wiki,
             None => return Err("PageList::check_before_merging self.wiki is not set".to_string()),
         };
-        println!("check_before_merging:2");
         if pagelist.wiki()?.is_none() {
             return Err("PageList::check_before_merging pagelist.wiki is not set".to_string());
         }
-        println!("check_before_merging:3");
         if self.wiki()? != pagelist.wiki()? {
             match platform {
                 Some(platform) => {
-        println!("check_before_merging:4");
                     Platform::profile(
                         format!(
                             "PageList::check_before_merging Converting {} entries from {} to {}",
@@ -668,12 +665,9 @@ impl PageList {
                         .as_str(),
                         None,
                     );
-        println!("check_before_merging:5");
                     pagelist.convert_to_wiki(&my_wiki, platform).await?;
-        println!("check_before_merging:6");
                 }
                 None => {
-        println!("check_before_merging:7");
                     return Err(format!(
                         "PageList::check_before_merging wikis are not identical: {}/{}",
                         self.wiki()?
@@ -685,7 +679,6 @@ impl PageList {
                 }
             }
         }
-        println!("check_before_merging:8");
         Ok(())
     }
 
@@ -719,18 +712,13 @@ impl PageList {
         pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<(), String> {
-        println!("AA");
         self.check_before_merging(&pagelist, platform).await?;
-        println!("A");
         let other_entries = pagelist.entries();
-        println!("B");
         let other_entries = other_entries.read().map_err(|e| format!("{:?}", e))?;
-        println!("C");
         self.entries
             .write()
             .map_err(|e| format!("{:?}", e))?
             .retain(|x| other_entries.contains(&x));
-        println!("D");
         Ok(())
     }
 
@@ -813,22 +801,19 @@ impl PageList {
     async fn run_batch_query(
         &self,
         state: &AppState,
-        sql: &SQLtuple,
+        sql: SQLtuple,
         wiki: &String,
     ) -> Result<Vec<my::Row>, String> {
-println!("run_batch_query: 1");
         let mut conn = state
             .get_wiki_db_connection(&wiki)
             .await
             .map_err(|e| format!("PageList::run_batch_query: get_wiki_db_connection: {:?}", e))?;
-println!("run_batch_query: 3");
-        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1.to_owned())).await // TODO fix to_owned
+        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await // TODO fix to_owned
             .map_err(|e|format!("PageList::run_batch_query: SQL query error[1]: {:?}",e))?
             .collect_and_drop()
             //.map_and_drop(|row| from_row::<(Vec<u8>,i64,usize)>(row))
             .await
             .map_err(|e|format!("PageList::run_batch_query: SQL query error[2]: {:?}",e))?;
-println!("run_batch_query: 4");
         conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
 
         Ok(rows)
@@ -862,7 +847,7 @@ println!("run_batch_query: 4");
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
         let mut rows: Vec<my::Row> = vec![];
         for sql in batches {
-            let mut data = self.run_batch_query(state, &sql, &wiki).await?;
+            let mut data = self.run_batch_query(state, sql, &wiki).await?;
             rows.append(&mut data);
         }
         Ok(rows)
@@ -879,15 +864,16 @@ println!("run_batch_query: 4");
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
 
         // TODO parallel
-        let mut ret = vec![] ;
+        let mut futures = vec![] ;
         for sql in batches {
-            ret.push(self.run_batch_query(state, &sql, &wiki).await?);
+            futures.push(self.run_batch_query(state, sql, &wiki));
         }
-
-        Ok(ret
-            .into_iter()
-            .flatten()
-            .collect())
+        let results = join_all(futures).await ;
+        let mut ret = vec![] ;
+        for x in results {
+            ret.append(&mut x?);
+        }
+        Ok(ret)
     }
 
     pub fn string_from_row(row: &my::Row, col_num: usize) -> Option<String> {
@@ -1100,19 +1086,14 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
     }
 
     pub async fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
-        println!("convert_to_wiki: 1");
         // Already that wiki?
         if self.wiki()? == None || self.wiki()? == Some(wiki.to_string()) {
             return Ok(());
         }
-        println!("convert_to_wiki: 2");
         self.convert_to_wikidata(platform).await?;
-        println!("convert_to_wiki: 3");
         if wiki != "wikidatawiki" {
-            println!("convert_to_wiki: 4");
             self.convert_from_wikidata(wiki, platform).await?;
         }
-        println!("convert_to_wiki: 5");
         Ok(())
     }
 
@@ -1139,20 +1120,15 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                 Err(_e) => None,
             }
         };
-        println!("convert_to_wikidata: 5");
 
         let results = self.run_batch_queries(&state, batches) ;
-        println!("convert_to_wikidata: 5a");
         let results = results.await?;
-        println!("convert_to_wikidata: 5b");
         results
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
             .for_each(|entry| self.add_entry(entry).unwrap_or(()));
 
-        println!("convert_to_wikidata: 6");
         self.set_wiki(Some("wikidatawiki".to_string()))?;
-        println!("convert_to_wikidata: 7");
         Ok(())
     }
 
@@ -1179,26 +1155,31 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         Platform::profile("PageList::convert_from_wikidata STARTING BATCHES", None);
 
-        // TODO parallel
         let batches = batches.chunks(5).collect::<Vec<_>>();
+        let state = platform.state() ;
+        let mut futures = vec![] ;
         for batch_chunk in batches {
-            Platform::profile("PageList::convert_from_wikidata STARTING BATCH CHUNK", None);
-            let state = platform.state() ;
-            let the_fn = |row: my::Row| {
-                    let ips_site_page = my::from_row_opt::<Vec<u8>>(row).ok()?;
-                    let ips_site_page = String::from_utf8_lossy(&ips_site_page).into_owned();
-                    Some(PageListEntry::new(Title::new_from_full(
-                        &ips_site_page,
-                        &api,
-                    )))
-                };
-            self.run_batch_queries(&state, batch_chunk.to_vec())
-                .await?
-                .iter()
-                .filter_map(|row| the_fn(row.to_owned()))
-                .for_each(|entry| self.add_entry(entry).unwrap_or(()));
-            Platform::profile("PageList::convert_from_wikidata ENDING BATCH CHUNK", None)
+            let future = self.run_batch_queries(&state, batch_chunk.to_vec()) ;
+            futures.push ( future ) ;
         }
+            
+        let the_fn = |row: my::Row| {
+                let ips_site_page = my::from_row_opt::<Vec<u8>>(row).ok()?;
+                let ips_site_page = String::from_utf8_lossy(&ips_site_page).into_owned();
+                Some(PageListEntry::new(Title::new_from_full(
+                    &ips_site_page,
+                    &api,
+                )))
+            };
+
+        join_all(futures)
+            .await
+            .into_par_iter()
+            .filter_map(|r|r.ok())
+            .flatten()
+            .filter_map(|row| the_fn(row.to_owned()))
+            .for_each(|entry| self.add_entry(entry).unwrap_or(()));
+        
         Platform::profile("PageList::convert_from_wikidata ALL BATCHES COMPLETE", None);
         self.set_wiki(Some(wiki.to_string()))?;
         Platform::profile("PageList::convert_from_wikidata END", None);

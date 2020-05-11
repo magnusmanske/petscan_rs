@@ -1306,7 +1306,6 @@ impl RenderJSON {
                 "fileusage" => self.get_file_usage_as_string(entry),
                 other => self.get_file_info_value(entry, other),
             };
-            //println!("{}:{:?}", &head, &value);
             match value {
                 Some(v) => o["metadata"][head] = v,
                 None => {}
