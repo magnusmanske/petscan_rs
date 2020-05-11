@@ -863,26 +863,13 @@ impl SourceDatabase {
         let wiki = primary_pagelist.wiki()?.ok_or(format!("No wiki 12345"))?;
 
         let mut futures : Vec<_> = vec![] ;
-        if true {
-            futures = batches
-            .iter_mut()
-            .map( |sql|{
-                self.get_pages_pagelist_batch(wiki.clone(),sql.clone(),&state,&params) // TODO FIXME sql clone
-            })
-            .collect();
+        for sql in batches {
+            let future = self.get_pages_pagelist_batch(wiki.clone(),sql,&state,&params) ;
+            futures.push ( future ) ;
         }
-
         let results = join_all(futures).await;
 
-
-        //let mut results = results.drain(..).collect::<Result<Vec<PageList>,String>>()?;
-
-        /*
-        let partial_ret : Vec<PageList> = partial_ret
-            .iter()
-            .cloned()
-            .collect::<Vec<PageList>>()?;
-        */
+        // TODO futures? tricky
         for pl2 in results {
             ret.union(&pl2?, None).await?;
         }
