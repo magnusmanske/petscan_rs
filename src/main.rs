@@ -127,7 +127,10 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
 
     let started_query_id = match state.log_query_start(&form_parameters.to_string()).await {
         Ok(id) => id,
-        Err(e) => return state.render_error(e, &form_parameters),
+        Err(e) => {
+            println!("Could not log query start: {}\n{}",e,form_parameters.to_string());
+            0
+        }
     };
 
     // Actually do something useful!
@@ -136,7 +139,10 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
     Platform::profile("platform initialized", None);
     let platform_result = platform.run().await;
     match state.log_query_end(started_query_id).await {
-        _ => {} // Ignore error
+        Ok(_) => {}
+        Err(e) => {
+            println!("Could not log query {} end:{}\n{}",started_query_id,e,form_parameters.to_string());
+        }
     }
     state.modify_threads_running(-1);
     Platform::profile("platform run complete", None);

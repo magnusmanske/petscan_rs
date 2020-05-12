@@ -407,8 +407,6 @@ impl AppState {
     }
 
     pub async fn log_query_start(&self, query_string: &String) -> Result<u64, String> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
         let sql = (
@@ -422,12 +420,10 @@ impl AppState {
         );
 
 
+        let tool_db_user_pass = self.tool_db_mutex.lock().await;
+        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
         conn.exec_drop(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await.map_err(|e|format!("{:?}",e))?;
-
-        match conn.last_insert_id() {
-            Some(id) => Ok(id),
-            None => Err(format!("AppState::log_query_start: Could not insert"))
-        }
+        conn.last_insert_id().ok_or(format!("AppState::log_query_start: Could not insert"))
     }
 
     pub async fn log_query_end(&self, query_id: u64) -> Result<(),String> {
