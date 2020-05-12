@@ -91,7 +91,7 @@ impl AppState {
     }
 
     fn get_mysql_opts_for_wiki(&self,wiki:&String,user:&String,pass:&String) -> Result<my::OptsBuilder,String> {
-        let ( host , schema ) = self.db_host_and_schema_for_wiki(&wiki).unwrap();
+        let ( host , schema ) = self.db_host_and_schema_for_wiki(&wiki)?;
         let opts = my::OptsBuilder::default()
             .ip_or_hostname(host)
             .db_name(Some(schema))
@@ -488,22 +488,39 @@ impl AppState {
     }
 
     pub fn try_shutdown(&self) {
-        if self.is_shutting_down() && *self.threads_running.read().unwrap() == 0 {
-            ::std::process::exit(0);
+        if !self.is_shutting_down() {
+            return ;
+        }
+        match self.threads_running.read() {
+            Ok(tr) => {
+                if *tr == 0 {
+                    ::std::process::exit(0);
+                }
+            }
+            _ => {}
         }
     }
 
     pub fn modify_threads_running(&self, diff: i64) {
-        *self.threads_running.write().unwrap() += diff;
+        match self.threads_running.write() {
+            Ok(mut tr) => { *tr += diff }
+            _ => {}
+        }
         self.try_shutdown()
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        *self.shutting_down.read().unwrap()
+        match self.shutting_down.read() {
+            Ok(x) => *x,
+            _ => true
+        }
     }
 
     pub fn shut_down(&self) {
-        *self.shutting_down.write().unwrap() = true;
+        match self.shutting_down.write() {
+            Ok(mut sd) => { *sd = true ; }
+            _ => {}
+        }
     }
 }
 

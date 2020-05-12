@@ -478,9 +478,13 @@ impl Platform {
                 .await
                 .map_err(|e|format!("{:?}",e))?;
 
+            let mut el = match self.existing_labels.write() {
+                Ok(el) => el,
+                Err(e) => return Err(format!("{:?}",e))
+            };
             for wbx_text in rows {
                 let label = String::from_utf8_lossy(&wbx_text) ;
-                self.existing_labels.write().unwrap().insert(label.to_string());
+                el.insert(label.to_string());
             }
         }
         conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
@@ -929,10 +933,15 @@ impl Platform {
                 };
                 let title = Title::new_from_full(&full_page_title, &api);
                 let tmp_entry = PageListEntry::new(title);
-                let mut entry = match result.entries().read().unwrap().get(&tmp_entry) {
+                let ru = match result.entries().read() {
+                    Ok(ru) => ru,
+                    Err(_e) => return // TODO error log?
+                };
+                let mut entry = match ru.get(&tmp_entry) {
                     Some(e) => (*e).clone(),
                     None => return,
                 };
+                drop(ru);
 
                 let q = "Q".to_string() + &ips_item_id.to_string();
                 entry.set_wikidata_item(Some(q));
@@ -1835,8 +1844,8 @@ impl Platform {
                     if registers.len() < 2 {
                         return Err(format!("combine_results: Not enough registers for Union"));
                     }
-                    let r2 = registers.pop().unwrap() ;
-                    let r1 = registers.pop().unwrap() ;
+                    let r2 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Union r1"))? ;
+                    let r1 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Union r2"))? ;
                     r1.union(&r2, Some(&self)).await?;
                     registers.push(r1)
                 }
@@ -1844,8 +1853,8 @@ impl Platform {
                     if registers.len() < 2 {
                         return Err(format!("combine_results: Not enough registers for Union"));
                     }
-                    let r2 = registers.pop().unwrap() ;
-                    let r1 = registers.pop().unwrap() ;
+                    let r2 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Intersection r1"))? ;
+                    let r1 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Intersection r2"))? ;
                     r1.intersection(&r2, Some(&self)).await?;
                     registers.push(r1)
                 }
@@ -1853,15 +1862,15 @@ impl Platform {
                     if registers.len() < 2 {
                         return Err(format!("combine_results: Not enough registers for Union"));
                     }
-                    let r2 = registers.pop().unwrap() ;
-                    let r1 = registers.pop().unwrap() ;
+                    let r2 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Not r1"))? ;
+                    let r1 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Not r2"))? ;
                     r1.difference(&r2, Some(&self)).await?;
                     registers.push(r1)
                 }
             }
         }
         if registers.len() == 1 {
-            return Ok(registers.pop().unwrap()) ;
+            return registers.pop().ok_or(format!("combine_results registers.len()")) ;
         }
         Err(format!("combine_results:{} registers set", registers.len()))
     }

@@ -362,7 +362,7 @@ impl DataSource for SourceSparql {
         };
 
         let ret = PageList::new_from_wiki("wikidatawiki");
-        let response = response.text().await.unwrap();
+        let response = response.text().await.map_err(|e|format!("{:?}",e))?;
         //let reader = BufReader::new(response); // TODO read line by line from stream, somehow
         let mut mode: u8 = 0;
         let mut header = String::new();
