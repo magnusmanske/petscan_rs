@@ -491,7 +491,7 @@ impl SourceDatabase {
             } else {
                 " AND p.page_id IN "
             };
-            sql.0 += "(SELECT pt2.page_id FROM page pt,page pt2,templatelinks WHERE pt2.page_namespace=pt.page_namespace-1 AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_namespace=10 AND tl_title";
+            sql.0 += "(SELECT pt2.page_id FROM page pt,page pt2,templatelinks WHERE pt2.page_namespace+1=pt.page_namespace AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_namespace=10 AND tl_title";
         } else {
             sql.0 += if find_not {
                 " AND p.page_id NOT IN "
