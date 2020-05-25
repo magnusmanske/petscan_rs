@@ -348,6 +348,7 @@ impl SourceDatabase {
             .map_err(|e|format!("{:?}",e))?;
         conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
 
+        let mut err : Option<String> = None ;
         result
             .iter()
             .map(|row| String::from_utf8_lossy(&row).into_owned())
@@ -357,11 +358,20 @@ impl SourceDatabase {
                     _ => false,
                 };
                 if do_add {
-                    new_categories.write().unwrap().push(page_title.to_owned());
-                    categories_done.write().unwrap().insert(page_title);
+                    match new_categories.write() {
+                        Ok(mut nc) => { nc.push(page_title.to_owned()); }
+                        Err(e) => { err = Some(e.to_string()); }
+                    }
+                    match categories_done.write() {
+                        Ok(mut cd) => { cd.insert(page_title); }
+                        Err(e) => { err = Some(e.to_string()); }
+                    }
                 }
             });
-        Ok(())
+        match err {
+            Some(e) => Err(e),
+            None => Ok(())
+        }
     }
 
     #[async_recursion]
@@ -645,7 +655,7 @@ impl SourceDatabase {
                 sql.0 += ")) cl0";
             }
             other => {
-                panic!("self.params.combine is '{}'", &other);
+                return Err(format!("self.params.combine is '{}'", &other));
             }
         }
         sql.0 += " INNER JOIN (page p";

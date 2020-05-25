@@ -208,13 +208,16 @@ impl WDfist {
                     }
                     None => None
                 }).collect();
-            add_item_file.lock().unwrap().append(&mut page_file);
+            add_item_file
+                .lock()
+                .map_err(|e|format!("{:?}",e))?
+                .append(&mut page_file);
         }
 
         // Add files
         add_item_file
             .lock()
-            .unwrap()
+            .map_err(|e|format!("{:?}",e))?
             .iter()
             .for_each(|(q, file)| self.add_file_to_item(q, file));
 
