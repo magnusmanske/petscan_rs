@@ -105,7 +105,7 @@ function setPermalink ( q ) {
 		var psid_note = (_t("psid_note")).split('$1').join(psid) ;// ( /\$1/ , psid ) ;
 		h += ' ' ;
 		h += psid_note ;
-		h += " <span><a target='_blank' href='https://tools.wmflabs.org/fist/wdfist/index.html?psid="+psid+"&no_images_only=1&remove_used=1&remove_multiple=1&prefilled=1'>" ;
+		h += " <span><a target='_blank' href='https://fist.toolforge.org/wdfist/index.html?psid="+psid+"&no_images_only=1&remove_used=1&remove_multiple=1&prefilled=1'>" ;
 		h += _t("psid_image_link") ;
 		h += "</a>.</span>" ;
 	}
