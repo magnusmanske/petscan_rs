@@ -797,9 +797,7 @@ impl SourceDatabase {
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList, String> {
         let ret = PageList::new_from_wiki(&params.wiki);
-        let primary_pagelist = primary_pagelist.ok_or(format!(
-            "SourceDatabase::get_pages: pagelist: No primary_pagelist"
-        ))?;
+        let primary_pagelist = primary_pagelist.ok_or("SourceDatabase::get_pages: pagelist: No primary_pagelist".to_string())?;
         ret.set_wiki(primary_pagelist.wiki()?)?;
         if primary_pagelist.is_empty()? {
             // Nothing to do, but that's OK
@@ -1099,19 +1097,13 @@ impl SourceDatabase {
                 "no" => sql.0 += " AND oresc_is_predicted=0",
                 _ => {}
             }
-            match self.params.ores_prob_from {
-                Some(x) => {
-                    sql.0 += " AND oresc_probability>=";
-                    sql.0 += x.to_string().as_str();
-                }
-                None => {}
+            if let Some(x) = self.params.ores_prob_from {
+                sql.0 += " AND oresc_probability>=";
+                sql.0 += x.to_string().as_str();
             }
-            match self.params.ores_prob_to {
-                Some(x) => {
-                    sql.0 += " AND oresc_probability<=";
-                    sql.0 += x.to_string().as_str();
-                }
-                None => {}
+            if let Some(x) = self.params.ores_prob_to {
+                sql.0 += " AND oresc_probability<=";
+                sql.0 += x.to_string().as_str();
             }
             sql.0 += ")";
         }
@@ -1143,19 +1135,13 @@ impl SourceDatabase {
             "no" => sql.0 += " AND p.page_is_redirect=0",
             _ => {}
         }
-        match self.params.larger {
-            Some(i) => {
-                sql.0 += " AND p.page_len>=";
-                sql.0 += i.to_string().as_str();
-            }
-            None => {}
+        if let Some(i) = self.params.larger {
+            sql.0 += " AND p.page_len>=";
+            sql.0 += i.to_string().as_str();
         }
-        match self.params.smaller {
-            Some(i) => {
-                sql.0 += " AND p.page_len<=";
-                sql.0 += i.to_string().as_str();
-            }
-            None => {}
+        if let Some(i) = self.params.smaller {
+            sql.0 += " AND p.page_len<=";
+            sql.0 += i.to_string().as_str();
         }
 
         // Speed up "Only pages without Wikidata items"
@@ -1171,14 +1157,8 @@ impl SourceDatabase {
 
         // Link count
         let mut having: Vec<SQLtuple> = vec![];
-        match self.params.minlinks {
-            Some(l) => having.push(("link_count>=".to_owned() + l.to_string().as_str(), vec![])),
-            None => {}
-        }
-        match self.params.maxlinks {
-            Some(l) => having.push(("link_count<=".to_owned() + l.to_string().as_str(), vec![])),
-            None => {}
-        }
+        if let Some(l) = self.params.minlinks { having.push(("link_count>=".to_owned() + l.to_string().as_str(), vec![])) }
+        if let Some(l) = self.params.maxlinks { having.push(("link_count<=".to_owned() + l.to_string().as_str(), vec![])) }
 
         // HAVING
         if !having.is_empty() {
@@ -1191,9 +1171,7 @@ impl SourceDatabase {
         let wiki = match &self.params.wiki {
             Some(wiki) => wiki,
             None => {
-                return Err(format!(
-                    "SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params"
-                ))
+                return Err("SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params".to_string())
             }
         };
 
@@ -1205,7 +1183,7 @@ impl SourceDatabase {
         let sql_1_len = sql.1.len() ;
         let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(|row| from_row::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>(row))
+            .map_and_drop(from_row::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>)
             .await
             .map_err(|e|format!("{:?}",e))?;
 
@@ -1235,10 +1213,7 @@ impl SourceDatabase {
                     if self.params.gather_link_count {
                         entry.link_count = Some(*link_count);
                     }
-                    match pages_sublist.add_entry(entry) {
-                        Ok(_) => {}
-                        _ => {}
-                    }
+                    if pages_sublist.add_entry(entry).is_ok() {}
                 },
             );
 

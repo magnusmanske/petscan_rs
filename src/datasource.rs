@@ -363,18 +363,17 @@ impl DataSource for SourceSparql {
 
         let ret = PageList::new_from_wiki("wikidatawiki");
         let response = response.text().await.map_err(|e|format!("{:?}",e))?;
-        //let reader = BufReader::new(response); // TODO read line by line from stream, somehow
         let mut mode: u8 = 0;
         let mut header = String::new();
         let mut binding = String::new();
         let mut first_var = String::new();
-        for line in response.split("\n") { // reader.lines() {
+        for line in response.split('\n') {
             match line {
                 "{" => continue,
                 "}" => continue,
                 "  \"results\" : {" => {}
                 "    \"bindings\" : [ {" => {
-                    mode = mode + 1;
+                    mode += 1;
                     header = "{".to_string() + &header + "\"dummy\": {}}";
                     let j: Value = serde_json::from_str(&header).unwrap_or(json!({}));
                     first_var = j["head"]["vars"][0]

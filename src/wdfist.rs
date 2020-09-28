@@ -531,14 +531,11 @@ impl WDfist {
 
             for (item, filename) in rows {
                 let filename = self.normalize_filename(&filename.to_string());
-                match self.item2files.get_mut(&item) {
-                    Some(ref mut files) => {
-                        files.remove(&filename);
-                        if files.is_empty() {
-                            self.item2files.remove(&item);
-                        }
+                if let Some(ref mut files) = self.item2files.get_mut(&item) {
+                    files.remove(&filename);
+                    if files.is_empty() {
+                        self.item2files.remove(&item);
                     }
-                    None => {}, // Odd
                 }
             }
         }
@@ -664,7 +661,7 @@ impl WDfist {
         }
     }
 
-    fn add_file_to_item(&mut self, item: &String, filename: &String) {
+    fn add_file_to_item(&mut self, item: &str, filename: &String) {
         if !self.is_valid_filename(filename) {
             return;
         }
