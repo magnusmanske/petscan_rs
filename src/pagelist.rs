@@ -28,6 +28,7 @@ pub enum PageListSort {
     IncomingLinks(bool),
     FileSize(bool),
     UploadDate(bool),
+    Sitelinks(bool),
     Random(bool),
 }
 
@@ -42,6 +43,7 @@ impl PageListSort {
             "incoming_links" => Self::IncomingLinks(descending),
             "filesize" => Self::FileSize(descending),
             "uploaddate" => Self::UploadDate(descending),
+            "sitelinks" => Self::Sitelinks(descending),
             "random" => Self::Random(descending),
             _ => Self::Default(descending),
         }
@@ -173,6 +175,7 @@ pub struct PageListEntry {
     pub incoming_links: Option<LinkCount>,
     pub link_count: Option<LinkCount>,
     pub redlink_count: Option<LinkCount>,
+    pub sitelink_count: Option<LinkCount>,
     page_timestamp: Option<Box<String>>,
     page_image: Option<Box<String>>,
     wikidata_item: Option<Box<String>>,
@@ -201,7 +204,7 @@ impl Eq for PageListEntry {}
 impl PageListEntry {
     pub fn new(title: Title) -> Self {
         Self {
-            title: title,
+            title,
             wikidata_item: None,
             page_id: None,
             page_bytes: None,
@@ -212,6 +215,7 @@ impl PageListEntry {
             page_image: None,
             coordinates: None,
             link_count: None,
+            sitelink_count: None,
             file_info: None,
             wikidata_label: None,
             wikidata_description: None,
@@ -352,6 +356,7 @@ impl PageListEntry {
             PageListSort::UploadDate(d) => self.compare_by_upload_date(other, *d),
             PageListSort::FileSize(d) => self.compare_by_file_size(other, *d),
             PageListSort::RedlinksCount(d) => self.compare_by_redlinks(other, *d),
+            PageListSort::Sitelinks(d) => self.compare_by_sitelinks(other, *d),
             PageListSort::Random(d) => self.compare_by_random(other, *d),
         }
     }
@@ -394,6 +399,14 @@ impl PageListEntry {
         descending: bool,
     ) -> Ordering {
         self.compare_by_opt(&self.incoming_links, &other.incoming_links, descending)
+    }
+
+    fn compare_by_sitelinks(
+        self: &PageListEntry,
+        other: &PageListEntry,
+        descending: bool,
+    ) -> Ordering {
+        self.compare_by_opt(&self.sitelink_count, &other.sitelink_count, descending)
     }
 
     fn compare_by_date(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {

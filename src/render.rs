@@ -32,6 +32,7 @@ pub struct RenderParams {
     add_defaultsort: bool,
     add_disambiguation: bool,
     add_incoming_links: bool,
+    add_sitelinks: bool,
     do_output_redlinks: bool,
     use_autolist: bool,
     autolist_creator_mode: bool,
@@ -60,6 +61,7 @@ impl RenderParams {
             add_defaultsort: platform.has_param("add_defaultsort"),
             add_disambiguation: platform.has_param("add_disambiguation"),
             add_incoming_links: platform.get_param_blank("sortby") == "incoming_links",
+            add_sitelinks: platform.get_param_blank("sortby") == "sitelinks",
             show_wikidata_item: false,
             is_wikidata: wiki == "wikidatawiki",
             do_output_redlinks: platform.do_output_redlinks(),
@@ -139,6 +141,9 @@ pub trait Render {
         }
         if params.add_incoming_links {
             columns.push("incoming_links");
+        }
+        if params.add_sitelinks {
+            columns.push("sitelinks");
         }
         if params.file_data {
             self.file_data_keys().iter().for_each(|k| columns.push(*k));
@@ -233,6 +238,7 @@ pub trait Render {
                 "defaultsort" => self.opt_string(&entry.get_defaultsort()),
                 "disambiguation" => self.opt_bool(&entry.disambiguation.as_option_bool()),
                 "incoming_links" => self.opt_linkcount(&entry.incoming_links),
+                "sitelinks" => self.opt_linkcount(&entry.sitelink_count),
 
                 "img_size" => match &entry.get_file_info() {
                     Some(fi) => self.opt_usize(&fi.img_size),
@@ -948,6 +954,7 @@ impl RenderHTML {
                 "defaultsort" => "<th tt='h_defaultsort'></th>".to_string(),
                 "disambiguation" => "<th tt='h_disambiguation'></th>".to_string(),
                 "incoming_links" => "<th tt='h_incoming_links'></th>".to_string(),
+                "sitelinks" => "<th tt='h_sitelinks'></th>".to_string(),
                 "fileusage" => "<th tt='file_usage_data'></th>".to_string(),
                 other => {
                     // File data etc.
@@ -1265,6 +1272,7 @@ impl RenderJSON {
                 "defaultsort" => entry.get_defaultsort().map(|s| json!(s)),
                 "disambiguation" => Some(entry.disambiguation.as_json()),
                 "incoming_links" => entry.incoming_links.as_ref().map(|s| json!(s)),
+                "sitelinks" => entry.sitelink_count.as_ref().map(|s| json!(s)),
                 "coordinates" => match &entry.get_coordinates() {
                     Some(coord) => Some(json!(format!("{}/{}", coord.lat, coord.lon))),
                     None => None,

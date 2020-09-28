@@ -623,15 +623,19 @@ impl Platform {
     }
 
     async fn process_pages(&self, result: &PageList) -> Result<(), String> {
+        let is_wikidata = result.wiki()==Ok(Some("wikidatawiki".to_string())) ;
         let add_coordinates = self.has_param("add_coordinates");
         let add_image = self.has_param("add_image");
         let add_defaultsort = self.has_param("add_defaultsort");
         let add_disambiguation = self.has_param("add_disambiguation");
         let add_incoming_links = self.get_param_blank("sortby") == "incoming_links";
+        let add_sitelinks = self.get_param_blank("sortby") == "sitelinks";
         if !add_coordinates
             && !add_image
             && !add_defaultsort
-            && !add_disambiguation & !add_incoming_links
+            && !add_disambiguation
+            && !add_incoming_links
+            && !add_sitelinks
         {
             return Ok(());
         }
@@ -646,6 +650,13 @@ impl Platform {
                     if add_defaultsort {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname='defaultsort' LIMIT 1) AS defaultsort" ;}
                     if add_disambiguation {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname='disambiguation' LIMIT 1) AS disambiguation" ;}
                     if add_incoming_links {sql += ",(SELECT count(*) FROM pagelinks WHERE pl_namespace=page_namespace AND pl_title=page_title AND pl_from_namespace=0) AS incoming_links" ;}
+                    if add_sitelinks {
+                        if is_wikidata {
+                            sql += ",(SELECT count(*) FROM wb_items_per_site WHERE page_namespace IN (0,120) AND ips_item_id=substr(page_title,2)) AS sitelinks" ;
+                        } else {
+                            sql += ",(SELECT count(*) FROM langlinks WHERE ll_from=page_id) AS sitelinks" ;
+                        }
+                    }
                     sql += " FROM page WHERE " ;
                     sql_batch.0 = sql + &sql_batch.0 ;
                     sql_batch.to_owned()
@@ -686,6 +697,12 @@ impl Platform {
             }
             if add_incoming_links {
                 entry.incoming_links = match parts.remove(0) {
+                    my::Value::Int(i) => Some(i as LinkCount),
+                    _ => None,
+                };
+            }
+            if add_sitelinks {
+                entry.sitelink_count = match parts.remove(0) {
                     my::Value::Int(i) => Some(i as LinkCount),
                     _ => None,
                 };
