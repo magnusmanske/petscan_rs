@@ -1,4 +1,4 @@
-#![type_length_limit="1635774"]
+#![type_length_limit="2621487"]
 
 extern crate chrono;
 extern crate reqwest;
