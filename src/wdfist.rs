@@ -51,7 +51,7 @@ impl WDfist {
         items.dedup();
         Some(Self {
             item2files: HashMap::new(),
-            items: items,
+            items,
             files2ignore: HashSet::new(),
             form_parameters: platform.form_parameters().clone(),
             state: platform.state(),
@@ -128,11 +128,8 @@ impl WDfist {
                 if !wiki2title_q.contains_key(&wiki) {
                     wiki2title_q.insert(wiki.to_owned(), vec![]);
                 }
-                match wiki2title_q.get_mut(&wiki) {
-                    Some(ref mut title_q) => {
-                        title_q.push((page, q));
-                    }
-                    None => {}
+                if let Some(ref mut title_q) = wiki2title_q.get_mut(&wiki) {
+                    title_q.push((page, q));
                 }
             });
         Ok(wiki2title_q)
@@ -647,25 +644,24 @@ impl WDfist {
         }
 
         // Only one result, but...
-        for cap in RE_FILETYPE.captures_iter(filename) {
-            let filetype = cap[2].to_lowercase();
-            if self.wdf_only_jpeg && filetype != "jpg" && filetype != "jpeg" {
-                return false;
+        match RE_FILETYPE.captures_iter(filename).next() {
+            Some(cap) => {
+                let filetype = cap[2].to_lowercase();
+                if self.wdf_only_jpeg && filetype != "jpg" && filetype != "jpeg" {
+                    return false;
+                }
+                match filetype.as_str() {
+                    "svg" => return self.wdf_allow_svg,
+                    "pdf" | "gif" => return false,
+                    _ => {}
+                };
+                if RE_KEY_PHRASES.is_match(filename) {
+                    return false;
+                }
+                !(filetype == "png" && RE_KEY_PHRASES_PNG.is_match(filename))
             }
-            match filetype.as_str() {
-                "svg" => return self.wdf_allow_svg,
-                "pdf" | "gif" => return false,
-                _ => {}
-            };
-            if RE_KEY_PHRASES.is_match(filename) {
-                return false;
-            }
-            if filetype == "png" && RE_KEY_PHRASES_PNG.is_match(filename) {
-                return false;
-            }
-            return true;
+            None => false
         }
-        false
     }
 
     fn add_file_to_item(&mut self, item: &String, filename: &String) {
@@ -724,7 +720,7 @@ mod tests {
             item2files: HashMap::new(),
             items: items.par_iter().map(|s| s.to_string()).collect(),
             files2ignore: HashSet::new(),
-            form_parameters: form_parameters,
+            form_parameters,
             state: get_state().await,
             wdf_allow_svg: false,
             wdf_only_jpeg: false,

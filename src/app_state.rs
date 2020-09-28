@@ -9,7 +9,6 @@ use mysql_async::from_row;
 use mysql_async as my;
 use mysql_async::Value as MyValue;
 use rayon::prelude::*;
-use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -57,28 +56,25 @@ impl AppState {
 
         };
 
-        match config["mysql"].as_array() {
-            Some(up_list) => {
-                let mut pool = ret.db_pool.lock().await ;
-                for up in up_list {
-                    let user = up[0]
-                        .as_str()
-                        .expect("Parsing user from mysql array in config failed")
-                        .to_string();
-                    let pass = up[1]
-                        .as_str()
-                        .expect("Parsing pass from mysql array in config failed")
-                        .to_string();
-                    let connections = up[2].as_u64().unwrap_or(5);
-                    // Ignore toolname up[3]
+        if let Some(up_list) = config["mysql"].as_array() {
+            let mut pool = ret.db_pool.lock().await ;
+            for up in up_list {
+                let user = up[0]
+                    .as_str()
+                    .expect("Parsing user from mysql array in config failed")
+                    .to_string();
+                let pass = up[1]
+                    .as_str()
+                    .expect("Parsing pass from mysql array in config failed")
+                    .to_string();
+                let connections = up[2].as_u64().unwrap_or(5);
+                // Ignore toolname up[3]
 
-                    for _num in 1 .. connections {
-                        pool.push ( (user.to_string(),pass.to_string()) );
-                    }
+                for _num in 1 .. connections {
+                    pool.push ( (user.to_string(),pass.to_string()) );
                 }
-                pool.shuffle(&mut thread_rng());
             }
-            None => {}
+            pool.shuffle(&mut thread_rng());
         }
         if ret.db_pool.lock().await.is_empty() {
             panic!("No database access config available");
@@ -90,7 +86,7 @@ impl AppState {
         self.config["restart-code"].as_str()
     }
 
-    fn get_mysql_opts_for_wiki(&self,wiki:&String,user:&String,pass:&String) -> Result<my::OptsBuilder,String> {
+    fn get_mysql_opts_for_wiki(&self,wiki:&str,user:&str,pass:&str) -> Result<my::OptsBuilder,String> {
         let ( host , schema ) = self.db_host_and_schema_for_wiki(&wiki)?;
         let opts = my::OptsBuilder::default()
             .ip_or_hostname(host)
@@ -112,7 +108,7 @@ impl AppState {
             direction,
             interface_language.replace("'", "")
         );
-        self.main_page.replace("<html>", &h).to_string()
+        self.main_page.replace("<html>", &h)
     }
 
     fn get_db_server_group(&self) -> &str {
@@ -123,26 +119,20 @@ impl AppState {
     }
 
     /// Returns the server and database name for the wiki, as a tuple
-    pub fn db_host_and_schema_for_wiki(&self, wiki: &String) -> Result<(String, String), String> {
+    pub fn db_host_and_schema_for_wiki(&self, wiki: &str) -> Result<(String, String), String> {
         // TESTING
         // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N
-        lazy_static! {
-            static ref REMOVE_WIKI: Regex = Regex::new(r"wiki$")
-                .expect("AppState::get_url_for_wiki_from_site: Regex is invalid");
-        }
-
-        let wiki = match wiki.as_str() {
+        let wiki = match wiki {
             "be-taraskwiki" | "be-x-oldwiki" | "be_taraskwiki" | "be_x_oldwiki" => "be_x_oldwiki",
             other => other,
-        }
-        .to_string();
+        };
 
         let host = match self.config["host"].as_str() {
             Some("127.0.0.1") => "127.0.0.1".to_string(),
             Some(_host) => wiki.to_owned() + self.get_db_server_group(),
             None => panic!("No host in config file"),
         };
-        let schema = wiki.to_string() + "_p";
+        let schema = format!("{}_p",wiki);
         Ok((host, schema))
     }
 
@@ -161,17 +151,16 @@ impl AppState {
         (host, schema)
     }
 
-    async fn set_group_concat_max_len(&self, wiki: &String, conn: &mut my::Conn) -> Result<(), String> {
-        if wiki != "commonswiki" {
-            return Ok(()); // Only needed for commonswiki, in platform::process_files
+    async fn set_group_concat_max_len(&self, wiki: &str, conn: &mut my::Conn) -> Result<(), String> {
+        if wiki == "commonswiki" {
+            conn.exec_drop("SET SESSION group_concat_max_len = 1000000000",()).await.map_err(|e|format!("{:?}",e))?;
         }
-        conn.exec_drop("SET SESSION group_concat_max_len = 1000000000",()).await.map_err(|e|format!("{:?}",e))?;
         Ok(())
     }
 
     pub async fn get_wiki_db_connection(
         &self,
-        wiki: &String,
+        wiki: &str,
     ) -> Result<my::Conn, String> {
         let mut pool = self.db_pool.lock().await;
         let db_user_pass = pool.remove(0) ;
@@ -194,10 +183,8 @@ impl AppState {
                     .params
                     .get("interface_language")
                     .map(|s| s.to_string())
-                    .unwrap_or("en".to_string());
-                let html = self
-                    .get_main_page(interface_language.to_string())
-                    .to_owned();
+                    .unwrap_or_else(|| "en".to_string());
+                let html = self.get_main_page(interface_language);
                 let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
                 let html = &html.replace("<!--output-->", &output);
                 MyResponse {
@@ -210,7 +197,7 @@ impl AppState {
                 self.output_json(&value, form_parameters.params.get("callback"))
             }
             _ => MyResponse {
-                s: error.to_string(),
+                s: error,
                 content_type: ContentType::Plain,
             },
         }
@@ -248,7 +235,7 @@ impl AppState {
 
     fn get_value_from_site_matrix_entry(
         &self,
-        value: &String,
+        value: &str,
         site: &Value,
         key_match: &str,
         key_return: &str,
@@ -274,11 +261,11 @@ impl AppState {
         }
     }
 
-    fn get_wiki_for_server_url_from_site(&self, url: &String, site: &Value) -> Option<String> {
+    fn get_wiki_for_server_url_from_site(&self, url: &str, site: &Value) -> Option<String> {
         self.get_value_from_site_matrix_entry(url, site, "url", "dbname")
     }
 
-    fn get_url_for_wiki_from_site(&self, wiki: &String, site: &Value) -> Option<String> {
+    fn get_url_for_wiki_from_site(&self, wiki: &str, site: &Value) -> Option<String> {
         self.get_value_from_site_matrix_entry(wiki, site, "dbname", "url")
     }
 
@@ -295,7 +282,7 @@ impl AppState {
             )
     }
 
-    pub fn get_wiki_for_server_url(&self, url: &String) -> Option<String> {
+    pub fn get_wiki_for_server_url(&self, url: &str) -> Option<String> {
         self.site_matrix["sitematrix"]
             .as_object()
             .expect("AppState::get_wiki_for_server_url: sitematrix not an object")
@@ -319,7 +306,7 @@ impl AppState {
             .next()
     }
 
-    pub fn get_server_url_for_wiki(&self, wiki: &String) -> Result<String, String> {
+    pub fn get_server_url_for_wiki(&self, wiki: &str) -> Result<String, String> {
         match wiki.replace("_", "-").as_str() {
             "be-taraskwiki" | "be-x-oldwiki" => {
                 return Ok("https://be-tarask.wikipedia.org".to_string())
@@ -384,9 +371,8 @@ impl AppState {
         &self.tool_db_mutex
     }
 
-    pub async fn get_query_from_psid(&self, psid: &String) -> Result<String, String> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
+    pub async fn get_query_from_psid(&self, psid: &str) -> Result<String, String> {
+        let mut conn = self.get_tool_db_connection(self.tool_db_mutex.lock().await.clone()).await?;
 
         let psid = match psid.parse::<usize>() {
             Ok(psid) => psid,
@@ -396,7 +382,7 @@ impl AppState {
 
         let rows = conn.exec_iter(sql.as_str(),()).await
             .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(|row| from_row::<Vec<u8>>(row))
+            .map_and_drop(from_row::<Vec<u8>>)
             .await
             .map_err(|e|format!("{:?}",e))?;
 
@@ -406,7 +392,7 @@ impl AppState {
         }
     }
 
-    pub async fn log_query_start(&self, query_string: &String) -> Result<u64, String> {
+    pub async fn log_query_start(&self, query_string: &str) -> Result<u64, String> {
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
         let sql = (
@@ -423,7 +409,7 @@ impl AppState {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
         conn.exec_drop(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await.map_err(|e|format!("{:?}",e))?;
-        conn.last_insert_id().ok_or(format!("AppState::log_query_start: Could not insert"))
+        conn.last_insert_id().ok_or_else(|| "AppState::log_query_start: Could not insert".to_string())
     }
 
     pub async fn log_query_end(&self, query_id: u64) -> Result<(),String> {
@@ -441,7 +427,7 @@ impl AppState {
             .map_err(|e|format!("{:?}",e))
     }
 
-    pub async fn get_or_create_psid_for_query(&self, query_string: &String) -> Result<u64, String> {
+    pub async fn get_or_create_psid_for_query(&self, query_string: &str) -> Result<u64, String> {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
 
@@ -453,13 +439,11 @@ impl AppState {
 
         let rows = conn.exec_iter(sql.0,mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(|row| from_row::<u64>(row))
+            .map_and_drop(from_row::<u64>)
             .await
             .map_err(|e|format!("{:?}",e))?;
 
-        for id in rows {
-            return Ok(id);
-        }
+        if let Some(id) = rows.get(0) { return Ok(*id) }
 
         // Create new entry
         let utc: DateTime<Utc> = Utc::now();
@@ -472,7 +456,7 @@ impl AppState {
         conn.exec_drop(sql.0,mysql_async::Params::Positional(sql.1)).await.map_err(|e|format!("{:?}",e))?;
         match conn.last_insert_id() {
             Some(id) => Ok(id),
-            None => Err(format!("get_or_create_psid_for_query: Could not insert new PSID"))
+            None => Err("get_or_create_psid_for_query: Could not insert new PSID".to_string())
         }
     }
 
@@ -491,21 +475,15 @@ impl AppState {
         if !self.is_shutting_down() {
             return ;
         }
-        match self.threads_running.read() {
-            Ok(tr) => {
-                if *tr == 0 {
-                    ::std::process::exit(0);
-                }
+        if let Ok(tr) = self.threads_running.read() {
+            if *tr == 0 {
+                ::std::process::exit(0);
             }
-            _ => {}
         }
     }
 
     pub fn modify_threads_running(&self, diff: i64) {
-        match self.threads_running.write() {
-            Ok(mut tr) => { *tr += diff }
-            _ => {}
-        }
+        if let Ok(mut tr) = self.threads_running.write() { *tr += diff }
         self.try_shutdown()
     }
 
@@ -517,10 +495,7 @@ impl AppState {
     }
 
     pub fn shut_down(&self) {
-        match self.shutting_down.write() {
-            Ok(mut sd) => { *sd = true ; }
-            _ => {}
-        }
+        if let Ok(mut sd) = self.shutting_down.write() { *sd = true ; }
     }
 }
 

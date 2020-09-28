@@ -89,7 +89,7 @@ impl FileUsage {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct FileInfo {
     pub file_usage: Vec<FileUsage>,
     pub img_size: Option<usize>,
@@ -104,28 +104,17 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
-    pub fn new_from_gil_group(gil_group: &String) -> Self {
+    pub fn new_from_gil_group(gil_group: &str) -> Self {
         let mut ret = Self::new();
         ret.file_usage = gil_group
-            .split("|")
+            .split('|')
             .filter_map(|part| FileUsage::new_from_part(&part.to_string()))
             .collect();
         ret
     }
 
     pub fn new() -> Self {
-        Self {
-            file_usage: vec![],
-            img_size: None,
-            img_width: None,
-            img_height: None,
-            img_media_type: None,
-            img_major_mime: None,
-            img_minor_mime: None,
-            img_user_text: None,
-            img_timestamp: None,
-            img_sha1: None,
-        }
+        Self { ..Default::default() }
     }
 }
 
@@ -138,11 +127,11 @@ pub struct PageCoordinates {
 }
 
 impl PageCoordinates {
-    pub fn new_from_lat_lon(s: &String) -> Option<Self> {
+    pub fn new_from_lat_lon(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split(',').collect();
         let lat = parts.get(0)?.parse::<f64>().ok()?;
         let lon = parts.get(1)?.parse::<f64>().ok()?;
-        Some(Self { lat: lat, lon: lon })
+        Some(Self { lat, lon })
     }
 }
 
@@ -482,12 +471,12 @@ impl PageListEntry {
         let l1 = self
             .get_wikidata_label()
             .or_else(|| Some(self.title.pretty().to_owned()))
-            .unwrap_or("".to_string())
+            .unwrap_or_default()
             .to_lowercase();
         let l2 = other
             .get_wikidata_label()
             .or_else(|| Some(self.title.pretty().to_owned()))
-            .unwrap_or("".to_string())
+            .unwrap_or_default()
             .to_lowercase();
         self.compare_order(l1.partial_cmp(&l2).unwrap_or(Ordering::Less), descending)
     }
@@ -615,7 +604,7 @@ impl PageList {
             .for_each(|entry| {
                 ret.entry(entry.title.namespace_id())
                     .or_insert(vec![])
-                    .push(entry.title.with_underscores().to_string());
+                    .push(entry.title.with_underscores());
             });
         Ok(ret)
     }
@@ -659,7 +648,7 @@ impl PageList {
                         format!(
                             "PageList::check_before_merging Converting {} entries from {} to {}",
                             pagelist.len()?,
-                            pagelist.wiki()?.unwrap_or("NO WIKI SET".to_string()),
+                            pagelist.wiki()?.unwrap_or_else(|| "NO WIKI SET".to_string()),
                             &my_wiki
                         )
                         .as_str(),
@@ -671,10 +660,10 @@ impl PageList {
                     return Err(format!(
                         "PageList::check_before_merging wikis are not identical: {}/{}",
                         self.wiki()?
-                            .unwrap_or("PageList::check_before_merging:1".to_string()),
+                            .unwrap_or_else(|| "PageList::check_before_merging:1".to_string()),
                         pagelist
                             .wiki()?
-                            .unwrap_or("PageList::check_before_merging:2".to_string())
+                            .unwrap_or_else(|| "PageList::check_before_merging:2".to_string())
                     ))
                 }
             }
@@ -789,11 +778,8 @@ impl PageList {
             .read()
             .map_err(|e| format!("{:?}", e))?
             .iter()
-            .for_each(|entry| match self.entries.write() {
-                Ok(mut entries) => {
-                    entries.replace(entry.to_owned());
-                }
-                _ => {}
+            .for_each(|entry| if let Ok(mut entries) = self.entries.write() {
+                entries.replace(entry.to_owned());
             });
         Ok(())
     }
@@ -802,7 +788,7 @@ impl PageList {
         &self,
         state: &AppState,
         sql: SQLtuple,
-        wiki: &String,
+        wiki: &str,
     ) -> Result<Vec<my::Row>, String> {
         let mut conn = state
             .get_wiki_db_connection(&wiki)
@@ -811,7 +797,6 @@ impl PageList {
         let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await // TODO fix to_owned
             .map_err(|e|format!("PageList::run_batch_query: SQL query error[1]: {:?}",e))?
             .collect_and_drop()
-            //.map_and_drop(|row| from_row::<(Vec<u8>,i64,usize)>(row))
             .await
             .map_err(|e|format!("PageList::run_batch_query: SQL query error[2]: {:?}",e))?;
         conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
@@ -827,7 +812,7 @@ impl PageList {
     ) -> Result<Vec<my::Row>, String> {
         let wiki = self
             .wiki()?
-            .ok_or(format!("PageList::run_batch_queries: No wiki"))?;
+            .ok_or_else(|| "PageList::run_batch_queries: No wiki".to_string())?;
 
         if true {
             self.run_batch_queries_mutex(&state, batches, wiki).await
@@ -879,7 +864,7 @@ impl PageList {
     pub fn string_from_row(row: &my::Row, col_num: usize) -> Option<String> {
         match row.get(col_num)? {
             my::Value::Bytes(uv) => String::from_utf8(uv).ok(),
-            _ => return None,
+            _ => None,
         }
     }
 
@@ -982,17 +967,14 @@ impl PageList {
             return Ok(());
         }
 
-        match wikidata_language {
-            Some(wikidata_language) => {
-                self.add_wikidata_labels_for_namespace(0, "item", &wikidata_language, platform).await?;
-                self.add_wikidata_labels_for_namespace(
-                    120,
-                    "property",
-                    &wikidata_language,
-                    platform,
-                ).await?;
-            }
-            None => {}
+        if let Some(wikidata_language) = wikidata_language {
+            self.add_wikidata_labels_for_namespace(0, "item", &wikidata_language, platform).await?;
+            self.add_wikidata_labels_for_namespace(
+                120,
+                "property",
+                &wikidata_language,
+                platform,
+            ).await?;
         }
         Ok(())
     }
@@ -1001,7 +983,7 @@ impl PageList {
         &self,
         namespace_id: NamespaceID,
         entity_type: &str,
-        wikidata_language: &String,
+        wikidata_language: &str,
         platform: &Platform,
     ) -> Result<(), String> {
         let batches: Vec<SQLtuple> = self
@@ -1032,7 +1014,7 @@ impl PageList {
                 let item_ids = sql_batch.1.iter().map(|s|{
                     match s {
                         MyValue::Bytes(s) => String::from_utf8_lossy(s)[1..].to_string(),
-                        _ => "".to_string()
+                        _ => String::new()
                     }
                 }).collect::<Vec<String>>().join(",");
                 sql_batch.1 = vec![MyValue::Bytes(wikidata_language.to_owned().into())];
@@ -1047,23 +1029,19 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             })
             .collect::<Vec<SQLtuple>>();
 
-        let the_f = |row: my::Row, entry: &mut PageListEntry| match my::from_row_opt::<(
+        let the_f = |row: my::Row, entry: &mut PageListEntry| if let Ok((_page_title, _page_namespace, term_text, term_type)) = my::from_row_opt::<(
                 Vec<u8>,
                 NamespaceID,
                 Vec<u8>,
                 Vec<u8>,
-            )>(row)
-            {
-                Ok((_page_title, _page_namespace, term_text, term_type)) => {
-                    let term_text = String::from_utf8_lossy(&term_text).into_owned();
-                    match String::from_utf8_lossy(&term_type).into_owned().as_str() {
-                        "label" => entry.set_wikidata_label(Some(term_text)),
-                        "description" => entry.set_wikidata_description(Some(term_text)),
-                        _ => {}
-                    }
-                }
+            )>(row) {
+            let term_text = String::from_utf8_lossy(&term_text).into_owned();
+            match String::from_utf8_lossy(&term_type).into_owned().as_str() {
+                "label" => entry.set_wikidata_label(Some(term_text)),
+                "description" => entry.set_wikidata_description(Some(term_text)),
                 _ => {}
-            } ;
+            }
+        } ;
         let col_title = 0 ;
         let col_ns = 1 ;
         self.run_batch_queries(&platform.state(), batches).await?
@@ -1177,7 +1155,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             .into_par_iter()
             .filter_map(|r|r.ok())
             .flatten()
-            .filter_map(|row| the_fn(row.to_owned()))
+            .filter_map(|row| the_fn(row))
             .for_each(|entry| self.add_entry(entry).unwrap_or(()));
         
         Platform::profile("PageList::convert_from_wikidata ALL BATCHES COMPLETE", None);
@@ -1186,19 +1164,16 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         Ok(())
     }
 
-    pub fn regexp_filter(&self, regexp: &String) -> Result<(), String> {
+    pub fn regexp_filter(&self, regexp: &str) -> Result<(), String> {
         let regexp_all = "^".to_string() + regexp + "$";
         let is_wikidata = self.is_wikidata();
-        match Regex::new(&regexp_all) {
-            Ok(re) => self.retain_entries(&|entry: &PageListEntry| match is_wikidata {
-                true => match &entry.wikidata_label {
-                    Some(s) => re.is_match(s.as_str()),
-                    None => false,
-                },
-                false => re.is_match(entry.title().pretty()),
-            })?,
-            _ => {}
-        }
+        if let Ok(re) = Regex::new(&regexp_all) { self.retain_entries(&|entry: &PageListEntry| match is_wikidata {
+            true => match &entry.wikidata_label {
+                Some(s) => re.is_match(s.as_str()),
+                None => false,
+            },
+            false => re.is_match(entry.title().pretty()),
+        })? }
         Ok(())
     }
 

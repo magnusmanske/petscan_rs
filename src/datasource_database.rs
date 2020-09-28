@@ -36,7 +36,7 @@ pub struct SourceDatabaseCatDepth {
     depth: u16,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceDatabaseParameters {
     combine: String,
     namespace_ids: Vec<usize>,
@@ -84,52 +84,23 @@ impl SourceDatabaseParameters {
     pub fn new() -> Self {
         Self {
             combine: "subset".to_string(),
-            namespace_ids: vec![],
-            linked_from_all: vec![],
-            linked_from_any: vec![],
-            linked_from_none: vec![],
-            links_to_all: vec![],
-            links_to_any: vec![],
-            links_to_none: vec![],
-            templates_yes: vec![],
-            templates_any: vec![],
-            templates_no: vec![],
-            templates_yes_talk_page: false,
-            templates_any_talk_page: false,
-            templates_no_talk_page: false,
             page_wikidata_item: "any".to_string(),
             page_image: "any".to_string(),
             ores_prediction: "any".to_string(),
-            ores_type: "".to_string(),
-            ores_prob_from: None,
-            ores_prob_to: None,
             last_edit_bot: "both".to_string(),
             last_edit_anon: "both".to_string(),
             last_edit_flagged: "both".to_string(),
-            redirects: "".to_string(),
-            larger: None,
-            smaller: None,
-            minlinks: None,
-            maxlinks: None,
-            wiki: None,
-            gather_link_count: false,
-            cat_pos: vec![],
-            cat_neg: vec![],
-            depth: 0,
-            max_age: None,
-            only_new_since: false,
-            before: "".to_string(),
-            after: "".to_string(),
             use_new_category_mode: true,
             category_namespace_is_case_insensitive: true,
             template_namespace_is_case_insensitive: true,
+            ..Default::default()
         }
     }
 
     pub async fn db_params(platform: &Platform) -> SourceDatabaseParameters {
         let depth_signed: i32 = platform
             .get_param("depth")
-            .unwrap_or("0".to_string())
+            .unwrap_or_else(|| "0".to_string())
             .parse::<i32>()
             .unwrap_or(0);
         let depth: u16 = if depth_signed < 0 {
@@ -152,7 +123,7 @@ impl SourceDatabaseParameters {
             combine = "union".to_string(); // Easier to construct
         }
         let mut ret = SourceDatabaseParameters {
-            combine: combine,
+            combine,
             only_new_since: platform.has_param("only_new"),
             max_age: platform
                 .get_param("max_age")
@@ -179,8 +150,8 @@ impl SourceDatabaseParameters {
             page_wikidata_item: platform.get_param_default("wikidata_item", "any"),
             ores_type: platform.get_param_blank("ores_type"),
             ores_prediction: platform.get_param_default("ores_prediction", "any"),
-            depth: depth,
-            cat_pos: cat_pos,
+            depth,
+            cat_pos,
             cat_neg: platform.get_param_as_vec("negcats", "\n"),
             ores_prob_from: platform
                 .get_param("ores_prob_from")
@@ -201,8 +172,8 @@ impl SourceDatabaseParameters {
                 .cloned()
                 .collect::<Vec<usize>>(),
             use_new_category_mode: true,
-            category_namespace_is_case_insensitive: !platform.get_namespace_case_sensitivity(14).await,
-            template_namespace_is_case_insensitive: !platform.get_namespace_case_sensitivity(10).await,
+            category_namespace_is_case_insensitive: !(platform.get_namespace_case_sensitivity(14).await),
+            template_namespace_is_case_insensitive: !(platform.get_namespace_case_sensitivity(10).await),
         };
         ret.templates_yes = Self::vec_to_ucfirst(
             platform.get_param_as_vec("templates_yes", "\n"),
@@ -219,7 +190,7 @@ impl SourceDatabaseParameters {
         ret
     }
 
-    pub fn s2u_ucfirst(s: &String, is_case_insensitive: bool) -> String {
+    pub fn s2u_ucfirst(s: &str, is_case_insensitive: bool) -> String {
         match is_case_insensitive {
             true => Title::spaces_to_underscores(&Title::first_letter_uppercase(s)),
             false => Title::spaces_to_underscores(s),
@@ -267,7 +238,7 @@ impl DataSource for SourceDatabase {
     async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let ret = self.get_pages(&platform.state(), None).await?;
         if ret.is_empty()? {
-            platform.warn(format!("<span tt='warn_categories'></span>"))?;
+            platform.warn("<span tt=\'warn_categories\'></span>".to_string())?;
         }
         Ok(ret)
     }
@@ -281,18 +252,18 @@ impl SourceDatabase {
             has_pos_templates: false,
             has_pos_linked_from: false,
             params,
-            talk_namespace_ids: "".to_string(),
+            talk_namespace_ids: String::new(),
         }
     }
 
     fn parse_category_depth(
         &self,
-        cats: &Vec<String>,
+        cats: &[String],
         default_depth: u16,
     ) -> Vec<SourceDatabaseCatDepth> {
         cats.iter()
             .filter_map(|c| {
-                let mut parts = c.split("|");
+                let mut parts = c.split('|');
                 let name = match parts.next() {
                     Some(n) => n.to_string(),
                     None => return None,
@@ -308,10 +279,7 @@ impl SourceDatabase {
                     }
                     None => default_depth,
                 };
-                Some(SourceDatabaseCatDepth {
-                    name: name,
-                    depth: depth,
-                })
+                Some(SourceDatabaseCatDepth { name , depth })
             })
             .collect()
     }
@@ -319,7 +287,7 @@ impl SourceDatabase {
     async fn go_depth_batch(
         &self,
         state: &AppState,
-        wiki: &String,
+        wiki: &str,
         categories_batch: Vec<String>,
         categories_done: &RwLock<HashSet<String>>,
         new_categories: &RwLock<Vec<String>>,
@@ -327,11 +295,8 @@ impl SourceDatabase {
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         categories_batch.iter().for_each(|c| {
             // Don't par_iter, already in pool!
-            match categories_done.write() {
-                Ok(mut cd) => {
-                    cd.insert(c.to_string());
-                }
-                _ => {} // TODO error?
+            if let Ok(mut cd) = categories_done.write() {
+                cd.insert(c.to_string());
             }
         });
         Platform::append_sql(&mut sql, Platform::prep_quote(&categories_batch));
@@ -343,7 +308,7 @@ impl SourceDatabase {
         let result = conn
             .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(|row| from_row::<Vec<u8>>(row))
+            .map_and_drop(from_row::<Vec<u8>>)
             .await
             .map_err(|e|format!("{:?}",e))?;
         conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
@@ -380,7 +345,7 @@ impl SourceDatabase {
         state: &AppState,
         wiki: &String,
         categories_done: &RwLock<HashSet<String>>,
-        categories_to_check: &Vec<String>,
+        categories_to_check: &[String],
         depth: u16,
     ) -> Result<(), String> {
         if depth == 0 || categories_to_check.is_empty() {
@@ -453,7 +418,7 @@ impl SourceDatabase {
         &self,
         state: &AppState,
         wiki: &String,
-        input: &Vec<SourceDatabaseCatDepth>,
+        input: &[SourceDatabaseCatDepth],
     ) -> Result<Vec<Vec<String>>, String> {
         let mut futures = vec![] ;
         for i in input {
@@ -472,7 +437,7 @@ impl SourceDatabase {
     async fn get_talk_namespace_ids(&self, conn: &mut my::Conn) -> Result<String, String> {
         let rows = conn.exec_iter("SELECT DISTINCT page_namespace FROM page WHERE MOD(page_namespace,2)=1",()).await
             .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(|row| from_row::<NamespaceID>(row))
+            .map_and_drop(from_row::<NamespaceID>)
             .await
             .map_err(|e|format!("{:?}",e))?;
         Ok(rows.iter().map(|ns|ns.to_string()).collect::<Vec<String>>().join(","))
@@ -619,7 +584,7 @@ impl SourceDatabase {
     async fn get_pages_for_category_batch(
         &self,
         params: &DsdbParams,
-        category_batch: &Vec<Vec<String>>,
+        category_batch: &[Vec<String>],
         state: &AppState,
         ret: &PageList,
     ) -> Result<(), String> {
@@ -631,9 +596,9 @@ impl SourceDatabase {
                 sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
                 Platform::append_sql(&mut sql, Platform::prep_quote(&category_batch[0]));
                 sql.0 += ")) cl0";
-                for a in 1..category_batch.len() {
+                for (a, item) in category_batch.iter().enumerate().skip(1) {
                     sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
-                    Platform::append_sql(&mut sql, Platform::prep_quote(&category_batch[a]));
+                    Platform::append_sql(&mut sql, Platform::prep_quote(&item));
                     sql.0 += ")";
                 }
             }
@@ -688,13 +653,10 @@ impl SourceDatabase {
         primary_pagelist: Option<&PageList>,
     ) -> Result<DsdbParams, String> {
         // Take wiki from given pagelist
-        match primary_pagelist {
-            Some(pl) => {
-                if self.params.wiki.is_none() && pl.wiki()?.is_some() {
-                    self.params.wiki = pl.wiki()?;
-                }
+        if let Some(pl) = primary_pagelist {
+            if self.params.wiki.is_none() && pl.wiki()?.is_some() {
+                self.params.wiki = pl.wiki()?;
             }
-            None => {}
         }
 
         // Paranoia
@@ -704,7 +666,7 @@ impl SourceDatabase {
 
         let wiki = match &self.params.wiki {
             Some(wiki) => wiki.to_owned(),
-            None => return Err(format!("SourceDatabase::get_pages: No wiki in params")),
+            None => return Err("SourceDatabase::get_pages: No wiki in params".to_string()),
         };
 
         // Get positive categories serial list
@@ -743,7 +705,7 @@ impl SourceDatabase {
         } else if self.params.page_wikidata_item == "without" {
             "no_wikidata"
         } else {
-            return Err(format!("SourceDatabase: Missing primary"));
+            return Err("SourceDatabase: Missing primary".to_string());
         };
 
         let link_count_sql = if self.params.gather_link_count {
@@ -756,14 +718,11 @@ impl SourceDatabase {
         let mut before: String = self.params.before.clone();
         let mut after: String = self.params.after.clone();
         let mut is_before_after_done: bool = false;
-        match self.params.max_age {
-            Some(max_age) => {
-                let utc: DateTime<Utc> = Utc::now();
-                let utc = utc.sub(Duration::hours(max_age));
-                before = "".to_string();
-                after = utc.format("%Y%m%d%H%M%S").to_string();
-            }
-            None => {}
+        if let Some(max_age) = self.params.max_age {
+            let utc: DateTime<Utc> = Utc::now();
+            let utc = utc.sub(Duration::hours(max_age));
+            before = String::new();
+            after = utc.format("%Y%m%d%H%M%S").to_string();
         }
 
         if before.is_empty() && after.is_empty() {
@@ -788,10 +747,10 @@ impl SourceDatabase {
 
         Ok(DsdbParams {
             link_count_sql: link_count_sql.to_string(),
-            wiki: wiki,
+            wiki,
             primary: primary.to_string(),
-            sql_before_after: sql_before_after,
-            is_before_after_done: is_before_after_done,
+            sql_before_after,
+            is_before_after_done,
         })
     }
 

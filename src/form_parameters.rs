@@ -133,7 +133,7 @@ impl FormParameters {
         if !self.has_param(key_fallback) {
             return;
         }
-        if !self.has_param(key_primary) || self.params.get(key_primary) == Some(&"".to_string()) {
+        if !self.has_param(key_primary) || self.params.get(key_primary) == Some(&String::new()) {
             let value = self
                 .params
                 .get(key_fallback)
@@ -156,7 +156,7 @@ impl FormParameters {
                 Some(wiki) => {
                     let wiki = wiki.to_owned();
                     self.set_param(&"common_wiki_other".to_string(), &wiki);
-                    self.set_param(&"manual_list_wiki".to_string(), &"".to_string());
+                    self.set_param(&"manual_list_wiki".to_string(), &String::new());
                 }
                 None => {}
             }
@@ -164,7 +164,7 @@ impl FormParameters {
 
         // query originally from QuickIntersection
         if self.has_param("max") {
-            if self.params.get("format").unwrap_or(&"".to_string()) == "jsonfm" {
+            if self.params.get("format").unwrap_or(&String::new()) == "jsonfm" {
                 self.set_param("json-pretty", "1");
             }
             self.set_param("output_compatability", "quick-intersection");

@@ -1,3 +1,4 @@
+use std::fmt;
 use tokio::sync::Mutex as TokioMutex;
 use futures::future::join_all;
 use crate::app_state::AppState;
@@ -61,20 +62,14 @@ pub enum Combination {
     Not((Box<Combination>, Box<Combination>)),
 }
 
-impl Combination {
-    pub fn to_string(&self) -> String {
+impl fmt::Display for Combination {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Combination::None => "nothing".to_string(),
-            Combination::Source(s) => s.to_string(),
-            Combination::Intersection((a, b)) => {
-                "(".to_string() + &a.to_string() + " AND " + &b.to_string() + ")"
-            }
-            Combination::Union((a, b)) => {
-                "(".to_string() + &a.to_string() + " OR " + &b.to_string() + ")"
-            }
-            Combination::Not((a, b)) => {
-                "(".to_string() + &a.to_string() + " NOT " + &b.to_string() + ")"
-            }
+            Combination::None => write!(f,"nothing"),
+            Combination::Source(s) => write!(f,"{}",s),
+            Combination::Intersection((a, b)) => write!(f,"({} AND {})",a,b),
+            Combination::Union((a, b)) => write!(f,"({} OR {})",a,b),
+            Combination::Not((a, b)) => write!(f,"({} NOT {})",a,b),
         }
     }
 }
@@ -107,7 +102,7 @@ impl Platform {
     pub fn new_from_parameters(form_parameters: &FormParameters, state: Arc<AppState>) -> Self {
         Self {
             form_parameters: (*form_parameters).clone(),
-            state: state,
+            state,
             result: None,
             psid: None,
             existing_labels: RwLock::new(HashSet::new()),
@@ -137,7 +132,7 @@ impl Platform {
         Ok(())
     }
 
-    pub fn label_exists(&self, label: &String) -> bool {
+    pub fn label_exists(&self, label: &str) -> bool {
         // TODO normalization?
         match self.existing_labels.read() {
             Ok(el) => el.contains(label),
@@ -165,10 +160,7 @@ impl Platform {
         };
 
         match self.namespace_case_sensitivity_cache.read() {
-            Ok(ncsc) => match ncsc.get(&(wiki.to_owned(), namespace_id)) {
-                Some(ret) => return *ret,
-                None => {}
-            },
+            Ok(ncsc) => if let Some(ret) = ncsc.get(&(wiki.to_owned(), namespace_id)) { return *ret },
             _ => return false,
         }
         let api = match self.state().get_api_for_wiki(wiki.to_owned()).await {
@@ -245,7 +237,7 @@ impl Platform {
             futures.push ( s_labels.run(&self) ) ;   
         }
         if futures.is_empty() {
-            return Err(format!("No possible data source found in parameters"));
+            return Err("No possible data source found in parameters".to_string());
         }
 
         Platform::profile("begin futures 1", None);
@@ -257,11 +249,8 @@ impl Platform {
         while !tmp_results.is_empty() {
             let result = tmp_results.remove(0);
             let name = names.remove(0);
-            match result {
-                Ok(r) => {
-                    results.insert(name,r);
-                }
-                _ => {}
+            if let Ok(r) = result {
+                results.insert(name,r);
             }
         }
         drop(tmp_results);
@@ -269,7 +258,7 @@ impl Platform {
         self.wiki_by_source = results
             .iter()
             .filter_map(|(name, data)| match data.wiki().unwrap_or(None) {
-                Some(wiki) => Some((name.to_string(), wiki.to_string())),
+                Some(wiki) => Some((name.to_string(), wiki)),
                 None => None,
             })
             .collect();
@@ -297,11 +286,11 @@ impl Platform {
                             format!("Failed to convert result to Wikidata for WDfist: {}", e)
                         })?;
                 }
-                None => return Err(format!("No result set for WDfist")),
+                None => return Err("No result set for WDfist".to_string()),
             }
             //self.result = Some(pagelist);
             let mut wdfist =
-                WDfist::new(&self, &self.result).ok_or(format!("Cannot create WDfist"))?;
+                WDfist::new(&self, &self.result).ok_or_else(|| "Cannot create WDfist".to_string())?;
             self.result = None; // Safe space
             self.wdfist_result = Some(wdfist.run().await?);
         }
@@ -323,7 +312,7 @@ impl Platform {
         }
     }
 
-    async fn post_process_result(&self, available_sources: &Vec<String>) -> Result<(), String> {
+    async fn post_process_result(&self, available_sources: &[String]) -> Result<(), String> {
         Platform::profile("post_process_result begin", None);
         let result = match self.result.as_ref() {
             Some(res) => res,
@@ -336,7 +325,7 @@ impl Platform {
         Platform::profile("after filter_wikidata", Some(result.len()?));
         self.process_sitelinks(&result).await?;
         Platform::profile("after process_sitelinks", None);
-        if *available_sources != vec!["labels".to_string()] {
+        if available_sources.to_vec() != vec!["labels".to_string()] {
             self.process_labels(&result).await?;
             Platform::profile("after process_labels", Some(result.len()?));
         }
@@ -368,10 +357,7 @@ impl Platform {
         );
         result.load_missing_metadata(Some(wikidata_label_language), &self).await?;
         Platform::profile("after load_missing_metadata", Some(result.len()?));
-        match self.get_param("regexp_filter") {
-            Some(regexp) => result.regexp_filter(&regexp)?,
-            None => {}
-        }
+        if let Some(regexp) = self.get_param("regexp_filter") { result.regexp_filter(&regexp)? }
         self.process_redlinks(&result).await?;
         Platform::profile("after process_redlinks", Some(result.len()?));
         self.process_creator(&result).await?;
@@ -392,14 +378,14 @@ impl Platform {
                 &self
                     .wiki_by_source
                     .get("categories")
-                    .ok_or(format!("categories wiki requested as output, but not set"))?,
+                    .ok_or_else(|| "categories wiki requested as output, but not set".to_string())?,
                 &self,
             ).await?,
             "pagepile" => result.convert_to_wiki(
                 &self
                     .wiki_by_source
                     .get("pagepile")
-                    .ok_or(format!("pagepile wiki requested as output, but not set"))?,
+                    .ok_or_else(|| "pagepile wiki requested as output, but not set".to_string())?,
                 &self,
             ).await?,
             "manual" => result.convert_to_wiki(
@@ -408,14 +394,12 @@ impl Platform {
                     .get("manual")
                     .map(|s| s.to_string())
                     .or_else(|| self.get_param("common_wiki_other"))
-                    .ok_or(format!("manual wiki requested as output, but not set"))?,
+                    .ok_or_else(|| "manual wiki requested as output, but not set".to_string())?,
                 &self,
             ).await?,
             "wikidata" => result.convert_to_wiki("wikidatawiki", &self).await?,
             "other" => result.convert_to_wiki(
-                &self.get_param("common_wiki_other").ok_or(format!(
-                    "Other wiki for output expected, but not given in text field"
-                ))?,
+                &self.get_param("common_wiki_other").ok_or_else(|| "Other wiki for output expected, but not given in text field".to_string())?,
                 &self,
             ).await?,
             unknown => return Err(format!("Unknown output wiki type '{}'", &unknown)),
@@ -440,7 +424,7 @@ impl Platform {
             return Ok(());
         }
         if !self.has_param("show_redlinks")
-            && self.get_param_blank("wikidata_item") != "without".to_string()
+            && self.get_param_blank("wikidata_item") != "without"
         {
             return Ok(());
         }
@@ -474,7 +458,7 @@ impl Platform {
         for sql in batches {
             let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
                 .map_err(|e|format!("{:?}",e))?
-                .map_and_drop(|row| from_row::<Vec<u8>>(row))
+                .map_and_drop(from_row::<Vec<u8>>)
                 .await
                 .map_err(|e|format!("{:?}",e))?;
 
@@ -522,7 +506,7 @@ impl Platform {
 
         let wiki = match result.wiki()? {
             Some(wiki) => wiki.to_owned(),
-            None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
+            None => return Err("Platform::process_redlinks: no wiki set in result".to_string()),
         };
 
 
@@ -559,7 +543,7 @@ impl Platform {
     async fn process_redlinks_batch(&self,conn:&mut mysql_async::Conn,sql:SQLtuple,redlink_counter: &mut HashMap<Title, LinkCount>) -> Result<(), String> {
         let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(|row| from_row::<(Vec<u8>,i64,usize)>(row))
+            .map_and_drop(from_row::<(Vec<u8>,i64,usize)>)
             .await
             .map_err(|e|format!("{:?}",e))?;
 
@@ -586,7 +570,7 @@ impl Platform {
                 .par_iter()
                 .map(|entry| {
                     (
-                        entry.title().with_underscores().to_owned(),
+                        entry.title().with_underscores(),
                         entry.title().namespace_id(),
                     )
                 })
@@ -594,7 +578,7 @@ impl Platform {
 
             let wiki = match result.wiki()? {
                 Some(wiki) => wiki.to_owned(),
-                None => return Err(format!("Platform::process_redlinks: no wiki set in result")),
+                None => return Err("Platform::process_redlinks: no wiki set in result".to_string()),
             };
             let mut conn = self.state.get_wiki_db_connection(&wiki).await?;
 
@@ -607,7 +591,7 @@ impl Platform {
 
                 let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
                     .map_err(|e|format!("{:?}",e))?
-                    .map_and_drop(|row| from_row::<(Vec<u8>,i64)>(row))
+                    .map_and_drop(from_row::<(Vec<u8>,i64)>)
                     .await
                     .map_err(|e|format!("{:?}",e))?;
 
@@ -751,14 +735,10 @@ impl Platform {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-            let the_f = |row: my::Row, entry: &mut PageListEntry| match PageList::string_from_row(&row, 2)
-                    {
-                        Some(gil_group) => {
-                            let fi = FileInfo::new_from_gil_group(&gil_group);
-                            entry.set_file_info(Some(fi));
-                        }
-                        None => {}
-                    } ;
+            let the_f = |row: my::Row, entry: &mut PageListEntry| if let Some(gil_group) = PageList::string_from_row(&row, 2) {
+                let fi = FileInfo::new_from_gil_group(&gil_group);
+                entry.set_file_info(Some(fi));
+            } ;
             let col_title : usize = 0 ;
             let col_ns : usize = 1 ;
             result.run_batch_queries(&self.state(), batches).await?
@@ -997,9 +977,7 @@ impl Platform {
     /// Adds page properties that might be missing if none of the original sources was "categories"
     async fn process_missing_database_filters(&self, result: &PageList) -> Result<(), String> {
         let mut params = SourceDatabaseParameters::db_params(self).await;
-        params.set_wiki(Some(result.wiki()?.ok_or(format!(
-            "Platform::process_missing_database_filters: result has no wiki"
-        ))?));
+        params.set_wiki(Some(result.wiki()?.ok_or_else(|| "Platform::process_missing_database_filters: result has no wiki".to_string())?));
         let mut db = SourceDatabase::new(params);
         let new_result = db.get_pages(&self.state, Some(result)).await?;
         result.set_from(new_result)?;
@@ -1068,8 +1046,8 @@ impl Platform {
         &self,
         ret: &mut SQLtuple,
         key: &str,
-        languages: &Vec<String>,
-        s: &String,
+        languages: &[String],
+        s: &str,
     ) {
         let has_pattern = !s.is_empty() && s != "%";
         let has_languages = !languages.is_empty();
@@ -1105,7 +1083,7 @@ impl Platform {
             static ref RE1: Regex =
                 Regex::new(r#"[^a-z,]"#).expect("Platform::get_label_sql Regex is invalid");
         }
-        let mut ret: SQLtuple = ("".to_string(), vec![]);
+        let mut ret: SQLtuple = (String::new(), vec![]);
         let yes = self.get_param_as_vec("labels_yes", "\n");
         let any = self.get_param_as_vec("labels_any", "\n");
         let no = self.get_param_as_vec("labels_no", "\n");
@@ -1232,7 +1210,7 @@ impl Platform {
 
         let use_min_max = !sitelinks_min.is_empty() || !sitelinks_max.is_empty();
 
-        let mut sql: SQLtuple = ("".to_string(), vec![]);
+        let mut sql: SQLtuple = (String::new(), vec![]);
         sql.0 += "SELECT ";
         if use_min_max {
             sql.0 += "page_title,(SELECT count(*) FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1) AS sitelink_count" ;
@@ -1258,16 +1236,10 @@ impl Platform {
         sql.0 += " AND ";
 
         let mut having: Vec<String> = vec![];
-        match sitelinks_min.parse::<usize>() {
-            Ok(s) => having.push(format!("sitelink_count>={}", s)),
-            _ => {}
-        }
-        match sitelinks_max.parse::<usize>() {
-            Ok(s) => having.push(format!("sitelink_count<={}", s)),
-            _ => {}
-        }
+        if let Ok(s) = sitelinks_min.parse::<usize>() { having.push(format!("sitelink_count>={}", s)) }
+        if let Ok(s) = sitelinks_max.parse::<usize>() { having.push(format!("sitelink_count<={}", s)) }
 
-        let mut sql_post = "".to_string();
+        let mut sql_post = String::new();
         if use_min_max {
             sql_post += " GROUP BY page_title";
         }
@@ -1300,10 +1272,7 @@ impl Platform {
             .filter_map(|row| the_f(row.to_owned()))
             .for_each(|entry| result.add_entry(entry).unwrap_or(()));
 
-        match old_wiki {
-            Some(wiki) => result.convert_to_wiki(&wiki, &self).await?,
-            None => {}
-        }
+        if let Some(wiki) = old_wiki { result.convert_to_wiki(&wiki, &self).await? }
         Ok(())
     }
 
@@ -1349,7 +1318,7 @@ impl Platform {
             })
             .collect::<Vec<SQLtuple>>();
 
-        let mut sql_post: SQLtuple = ("".to_string(), vec![]);
+        let mut sql_post: SQLtuple = (String::new(), vec![]);
         if no_statements {
             sql_post.0 += " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0)" ;
         }
@@ -1482,7 +1451,6 @@ impl Platform {
         }
         let mut pages =
             result.drain_into_sorted_vec(PageListSort::new_from_params(&sortby, sort_order))?;
-        drop(result);
         self.apply_results_limit(&mut pages);
 
         match self.get_param_blank("format").as_str() {
@@ -1508,11 +1476,11 @@ impl Platform {
     }
 
     pub fn get_param_blank(&self, param: &str) -> String {
-        self.get_param(param).unwrap_or("".to_string())
+        self.get_param(param).unwrap_or_default()
     }
 
     pub fn get_param_default(&self, param: &str, default: &str) -> String {
-        let ret = self.get_param(param).unwrap_or(default.to_string());
+        let ret = self.get_param(param).unwrap_or_else(|| default.to_string());
         if ret.is_empty() {
             default.to_string()
         } else {
@@ -1555,7 +1523,7 @@ impl Platform {
     }
 
     pub fn sql_tuple() -> SQLtuple {
-        ("".to_string(), vec![])
+        (String::new(), vec![])
     }
 
     fn get_label_sql_helper(&self, ret: &mut SQLtuple, part1: &str, part2: &str) {
@@ -1581,7 +1549,7 @@ impl Platform {
             static ref RE1: Regex =
                 Regex::new(r#"[^a-z,]"#).expect("Platform::get_label_sql Regex is invalid");
         }
-        let mut ret: SQLtuple = ("".to_string(), vec![]);
+        let mut ret: SQLtuple = (String::new(), vec![]);
         let yes = self.get_param_as_vec("labels_yes", "\n");
         let any = self.get_param_as_vec("labels_any", "\n");
         let no = self.get_param_as_vec("labels_no", "\n");
@@ -1692,7 +1660,7 @@ impl Platform {
 
         let first_part = match parts.get(0) {
             Some(part) => part.to_owned(),
-            None => "".to_string(),
+            None => String::new(),
         };
         let left = if first_part == "(" {
             let mut cnt = 0;

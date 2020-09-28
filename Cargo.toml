@@ -16,7 +16,7 @@ url = "*"
 rayon = "*"
 htmlescape = "*"
 rand = "*"
-mysql_async = "0.24.0-alpha"
+mysql_async = "0.24.2"
 reqwest = { version = "*", features = ["json"] }
 time = "^0.2.9"
 percent-encoding = "*"
