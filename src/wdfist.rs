@@ -866,7 +866,7 @@ mod tests {
                 .get(&"Q66711783".to_string())
                 .unwrap()
                 .len()
-                > 5
+                > 3
         );
         assert!(wdfist
             .item2files

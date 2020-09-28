@@ -1,3 +1,5 @@
+#![type_length_limit="1635754"]
+
 extern crate chrono;
 extern crate reqwest;
 #[macro_use]
@@ -14,7 +16,6 @@ pub mod pagelist;
 pub mod platform;
 pub mod render;
 pub mod wdfist;
-
 
 use tokio::fs::File as TokioFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
