@@ -40,19 +40,13 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
     let mut form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
 
     // Restart command?
-    match form_parameters.params.get("restart") {
-        Some(code) => {
-            let given_code = code.to_string();
-            match state.get_restart_code() {
-                Some(config_code) => {
-                    if given_code == config_code {
-                        state.shut_down();
-                    }
-                }
-                None => {}
+    if let Some(code) = form_parameters.params.get("restart") {
+        let given_code = code.to_string();
+        if let Some(config_code) = state.get_restart_code() {
+            if given_code == config_code {
+                state.shut_down();
             }
         }
-        None => {}
     }
 
     // In the process of shutting down?
@@ -70,36 +64,32 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
             .params
             .get("interface_language")
             .map(|s| s.to_string())
-            .unwrap_or("en".to_string());
+            .unwrap_or_else(|| "en".to_string());
         return MyResponse {
             s: state
-                .get_main_page(interface_language.to_string())
-                .to_owned(),
+                .get_main_page(interface_language),
             content_type: ContentType::HTML,
         };
     }
 
     // "psid" parameter? Load, and patch in, existing query
     let mut single_psid: Option<u64> = None;
-    match form_parameters.params.get("psid") {
-        Some(psid) => {
-            if !psid.trim().is_empty() {
-                if form_parameters.params.len() == 1 {
-                    single_psid = psid.parse::<u64>().ok()
+    if let Some(psid) = form_parameters.params.get("psid") {
+        if !psid.trim().is_empty() {
+            if form_parameters.params.len() == 1 {
+                single_psid = psid.parse::<u64>().ok()
+            }
+            match state.get_query_from_psid(&psid.to_string()).await {
+                Ok(psid_query) => {
+                    let psid_params = match FormParameters::outcome_from_query(&psid_query) {
+                        Ok(pp) => pp,
+                        Err(e) => return state.render_error(e, &form_parameters),
+                    };
+                    form_parameters.rebase(&psid_params);
                 }
-                match state.get_query_from_psid(&psid.to_string()).await {
-                    Ok(psid_query) => {
-                        let psid_params = match FormParameters::outcome_from_query(&psid_query) {
-                            Ok(pp) => pp,
-                            Err(e) => return state.render_error(e, &form_parameters),
-                        };
-                        form_parameters.rebase(&psid_params);
-                    }
-                    Err(e) => return state.render_error(e, &form_parameters),
-                }
+                Err(e) => return state.render_error(e, &form_parameters),
             }
         }
-        None => {}
     }
 
     // No "doit" parameter, just display the HTML form with the current query
@@ -107,23 +97,19 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
         .params
         .get("psid")
         .unwrap_or(&"html".to_string())
-        == "html"
-    {
-        if !form_parameters.params.contains_key("doit")
-            || form_parameters.params.contains_key("norun")
-        {
-            let interface_language = form_parameters
-                .params
-                .get("interface_language")
-                .map(|s| s.to_string())
-                .unwrap_or("en".to_string());
-            let html = state.get_main_page(interface_language.to_string());
-            let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
-            return MyResponse {
-                s: html,
-                content_type: ContentType::HTML,
-            };
-        }
+        == "html" && (!form_parameters.params.contains_key("doit")
+            || form_parameters.params.contains_key("norun")) {
+        let interface_language = form_parameters
+            .params
+            .get("interface_language")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "en".to_string());
+        let html = state.get_main_page(interface_language);
+        let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
+        return MyResponse {
+            s: html,
+            content_type: ContentType::HTML,
+        };
     }
 
     let started_query_id = match state.log_query_start(&form_parameters.to_string()).await {
@@ -164,8 +150,8 @@ async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
         None => match state.get_or_create_psid_for_query(&form_parameters.to_string()).await {
             Ok(psid) => Some(psid),
             Err(e) => {
-                match state.log_query_end(started_query_id).await {
-                    _ => {} // Ignore error
+                if state.log_query_end(started_query_id).await.is_err() {
+                    // Ignore error
                 }
                 return state.render_error(e, &form_parameters);
             }
@@ -223,21 +209,18 @@ async fn serve_file_path(filename:&str) -> Result<Response<Body>,Error> {
 async fn process_from_query(query:&str,app_state:Arc<AppState>) -> Result<Response<Body>,Error> {
     let ret = process_form(query,app_state).await;
     let response = Response::builder()
-    .header(header::CONTENT_TYPE, ret.content_type.as_str())
-    .body(Body::from(ret.s))
-    .unwrap();
-    return Ok(response);
+        .header(header::CONTENT_TYPE, ret.content_type.as_str())
+        .body(Body::from(ret.s))
+        .unwrap();
+    Ok(response)
 }
 
 async fn process_request(mut req: Request<Body>,app_state:Arc<AppState>) -> Result<Response<Body>,Error> {
     // URL GET query
-    match req.uri().query() {
-        Some(query) => {
-            if !query.is_empty() {
-                return process_from_query(query,app_state).await;
-            }
-        },
-        None => {}
+    if let Some(query) = req.uri().query() {
+        if !query.is_empty() {
+            return process_from_query(query,app_state).await;
+        }
     } ;
 
     // POST
@@ -262,7 +245,7 @@ async fn main() -> Result<(),Error> {
         .expect("Can't convert CWD to_str")
         .to_string();
     let path = basedir.to_owned() + "/config.json";
-    let file = File::open(&path).expect(format!("Can not open config file at {}", &path).as_str());
+    let file = File::open(&path).unwrap_or_else(|_| panic!("Can not open config file at {}", &path));
     let petscan_config: Value =
         serde_json::from_reader(file).expect("Can not parse JSON from config file");
 

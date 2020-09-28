@@ -137,7 +137,7 @@ impl WDfist {
 
     async fn filter_page_images(
         &self,
-        wiki: &String,
+        wiki: &str,
         page_file: Vec<(String, String)>,
     ) -> Result<Vec<(String, String)>, String> {
         if !self.bool_param("wdf_only_page_images") {
@@ -248,8 +248,7 @@ impl WDfist {
         let params : Vec<_> = page_coords
             .iter()
             .map(|(_q, lat, lon)| {
-                api.params_into(&vec![
-                    ("action", "query"),
+                api.params_into(&[("action", "query"),
                     ("list", "geosearch"),
                     ("gscoord", format!("{}|{}", lat, lon).as_str()),
                     (
@@ -257,8 +256,7 @@ impl WDfist {
                         format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
                     ),
                     ("gslimit", "50"),
-                    ("gsnamespace", "6"),
-                ])
+                    ("gsnamespace", "6")])
             })
             .collect();
 
@@ -332,12 +330,10 @@ impl WDfist {
         let params : Vec<_> = item2label
             .iter()
             .map(|(_q, label)|
-                api.params_into(&vec![
-                    ("action", "query"),
+                api.params_into(&[("action", "query"),
                     ("list", "search"),
                     ("srnamespace", "6"),
-                    ("srsearch", label.as_str()),
-                ]))
+                    ("srsearch", label.as_str())]))
             .collect();
 
         /*
@@ -414,7 +410,7 @@ impl WDfist {
             "http://www.wikidata.org/w/index.php?title=User:Magnus_Manske/FIST_icons&action=raw";
         let api = match Api::new("https://www.wikidata.org/w/api.php").await {
             Ok(api) => api,
-            Err(_e) => return Err(format!("Can't open Wikidata API")),
+            Err(_e) => return Err("Can\'t open Wikidata API".to_string()),
         };
         let wikitext = match api.query_raw(url_with_ignore_list, &HashMap::new(), "GET").await {
             Ok(t) => t,
@@ -426,7 +422,7 @@ impl WDfist {
             }
         };
         // TODO only rows starting with '*'?
-        wikitext.split("\n").for_each(|filename| {
+        wikitext.split('\n').for_each(|filename| {
             let filename = filename.trim_start_matches(|c| c == ' ' || c == '*');
             let filename = self.normalize_filename(&filename.to_string());
             if self.is_valid_filename(&filename) {
@@ -447,7 +443,7 @@ impl WDfist {
 
         let rows = conn.exec_iter(sql.as_str(),()).await
             .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(|row| from_row::<Vec<u8>>(row))
+            .map_and_drop(from_row::<Vec<u8>>)
             .await
             .map_err(|e|format!("{:?}",e))?;
 
@@ -525,7 +521,7 @@ impl WDfist {
         for sql in batches {
             let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
                 .map_err(|e|format!("{:?}",e))?
-                .map_and_drop(|row| from_row::<(String, String)>(row))
+                .map_and_drop(from_row::<(String, String)>)
                 .await
                 .map_err(|e|format!("{:?}",e))?;
 
@@ -617,12 +613,12 @@ impl WDfist {
         Ok(())
     }
 
-    fn normalize_filename(&self, filename: &String) -> String {
+    fn normalize_filename(&self, filename: &str) -> String {
         filename.trim().replace(" ", "_")
     }
 
     // Requires normalized filename
-    fn is_valid_filename(&self, filename: &String) -> bool {
+    fn is_valid_filename(&self, filename: &str) -> bool {
         lazy_static! {
             static ref RE_FILETYPE: Regex = Regex::new(r#"^(.+)\.([^.]+)$"#)
                 .expect("WDfist::is_valid_filename RE_FILETYPE is invalid");
@@ -661,7 +657,7 @@ impl WDfist {
         }
     }
 
-    fn add_file_to_item(&mut self, item: &str, filename: &String) {
+    fn add_file_to_item(&mut self, item: &str, filename: &str) {
         if !self.is_valid_filename(filename) {
             return;
         }

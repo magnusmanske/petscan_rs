@@ -542,7 +542,7 @@ impl RenderTSV {
         })
     }
 
-    fn escape_cell(&self, s: &String) -> String {
+    fn escape_cell(&self, s: &str) -> String {
         if self.separator == "," {
             format!("\"{}\"",s.replace("\"", "\\\""))
         } else {
@@ -854,7 +854,7 @@ impl RenderHTML {
     fn render_wikilink(
         &self,
         title: &Title,
-        wiki: &String,
+        wiki: &str,
         alt_label: &Option<String>,
         params: &RenderParams,
         is_page_link: bool,
@@ -1137,7 +1137,7 @@ impl RenderJSON {
         platform: &Platform,
         entries: Vec<PageListEntry>,
         params: &RenderParams,
-        header: &Vec<(String, String)>,
+        header: &[(String, String)],
     ) -> Value {
         let mut ret = json!({
             "namespaces":{},

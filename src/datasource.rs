@@ -83,10 +83,10 @@ impl DataSource for SourceWikidata {
         let no_statements = platform.has_param("wpiu_no_statements");
         let sites = platform
             .get_param("wikidata_source_sites")
-            .ok_or(format!("Missing parameter 'wikidata_source_sites'"))?;
-        let sites: Vec<String> = sites.split(",").map(|s| s.to_string()).collect();
+            .ok_or_else(|| "Missing parameter \'wikidata_source_sites\'".to_string())?;
+        let sites: Vec<String> = sites.split(',').map(|s| s.to_string()).collect();
         if sites.is_empty() {
-            return Err(format!("SourceWikidata: No wikidata source sites given"));
+            return Err("SourceWikidata: No wikidata source sites given".to_string());
         }
 
         let sites = Platform::prep_quote(&sites);
@@ -110,17 +110,14 @@ impl DataSource for SourceWikidata {
         let rows = conn
             .exec_iter(sql.as_str(),()).await
             .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(|row| from_row::<usize>(row))
+            .map_and_drop(from_row::<usize>)
             .await
             .map_err(|e|format!("{:?}",e))?;
         conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
         let ret = PageList::new_from_wiki(&"wikidatawiki".to_string());
         for ips_item_id in rows {
             let term_full_entity_id = format!("Q{}", ips_item_id);
-            match Platform::entry_from_entity(&term_full_entity_id) {
-                Some(entry) => {ret.add_entry(entry).unwrap_or(());}
-                None => {}
-            }
+            if let Some(entry) = Platform::entry_from_entity(&term_full_entity_id) {ret.add_entry(entry).unwrap_or(());}
         }
         Ok(ret)
     }
@@ -150,7 +147,7 @@ impl DataSource for SourcePagePile {
     async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let pagepile = platform
             .get_param("pagepile")
-            .ok_or(format!("Missing parameter 'pagepile'"))?;
+            .ok_or_else(|| "Missing parameter \'pagepile\'".to_string())?;
         let timeout = time::Duration::from_secs(240);
         let builder = reqwest::ClientBuilder::new().timeout(timeout);
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder).await
@@ -298,7 +295,7 @@ impl DataSource for SourceManual {
         platform
             .get_param("manual_list")
             .ok_or(format!("Missing parameter 'manual_list'"))?
-            .split("\n")
+            .split('\n')
             .filter_map(|line| {
                 let line = line.trim().to_string();
                 if !line.is_empty() {

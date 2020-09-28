@@ -122,6 +122,8 @@ impl SourceDatabaseParameters {
         if cat_pos.len() == 1 && combine == "subset" {
             combine = "union".to_string(); // Easier to construct
         }
+        let ns10_case_sensitive = platform.get_namespace_case_sensitivity(10).await ;
+        let ns14_case_sensitive = platform.get_namespace_case_sensitivity(14).await ;
         let mut ret = SourceDatabaseParameters {
             combine,
             only_new_since: platform.has_param("only_new"),
@@ -172,8 +174,8 @@ impl SourceDatabaseParameters {
                 .cloned()
                 .collect::<Vec<usize>>(),
             use_new_category_mode: true,
-            category_namespace_is_case_insensitive: !(platform.get_namespace_case_sensitivity(14).await),
-            template_namespace_is_case_insensitive: !(platform.get_namespace_case_sensitivity(10).await),
+            category_namespace_is_case_insensitive: !ns14_case_sensitive,
+            template_namespace_is_case_insensitive: !ns10_case_sensitive,
         };
         ret.templates_yes = Self::vec_to_ucfirst(
             platform.get_param_as_vec("templates_yes", "\n"),
@@ -470,17 +472,15 @@ impl SourceDatabase {
         self.sql_in(&input, &mut sql);
 
         if !self.params.namespace_ids.is_empty() {
+            let v : Vec<String> = self
+                .params
+                .namespace_ids
+                .iter()
+                .map(|ns| if use_talk_page { ns + 1 } else { *ns })
+                .map(|s| s.to_string())
+                .collect() ;
             sql.0 += " AND tl_from_namespace";
-            self.sql_in(
-                &self
-                    .params
-                    .namespace_ids
-                    .iter()
-                    .map(|ns| if use_talk_page { ns + 1 } else { *ns })
-                    .map(|s| s.to_string())
-                    .collect(),
-                &mut sql,
-            );
+            self.sql_in(&v,&mut sql);
         }
 
         sql.0 += ")";
@@ -488,7 +488,7 @@ impl SourceDatabase {
         sql
     }
 
-    fn sql_in(&self, input: &Vec<String>, sql: &mut SQLtuple) {
+    fn sql_in(&self, input: &[String], sql: &mut SQLtuple) {
         if input.len() == 1 {
             sql.0 += "=";
             Platform::append_sql(sql, Platform::prep_quote(input));
@@ -501,7 +501,7 @@ impl SourceDatabase {
 
     fn group_link_list_by_namespace(
         &self,
-        input: &Vec<String>,
+        input: &[String],
         api: &Api,
     ) -> HashMap<NamespaceID, Vec<String>> {
         let mut ret: HashMap<NamespaceID, Vec<String>> = HashMap::new();
@@ -523,7 +523,7 @@ impl SourceDatabase {
         ret
     }
 
-    fn links_from_subquery(&self, input: &Vec<String>, api: &Api) -> SQLtuple {
+    fn links_from_subquery(&self, input: &[String], api: &Api) -> SQLtuple {
         let mut sql: SQLtuple = ("(".to_string(), vec![]);
         let nslist = self.group_link_list_by_namespace(input, api);
         nslist.iter().for_each(|nsgroup| {
@@ -540,7 +540,7 @@ impl SourceDatabase {
         sql
     }
 
-    fn links_to_subquery(&self, input: &Vec<String>, api: &Api) -> SQLtuple {
+    fn links_to_subquery(&self, input: &[String], api: &Api) -> SQLtuple {
         let mut sql: SQLtuple = ("(".to_string(), vec![]);
         let nslist = self.group_link_list_by_namespace(input, api);
         nslist.iter().for_each(|nsgroup| {
@@ -559,7 +559,7 @@ impl SourceDatabase {
 
     fn iterate_category_batches(
         &self,
-        categories: &Vec<Vec<String>>,
+        categories: &[Vec<String>],
         start: usize,
     ) -> Vec<Vec<Vec<String>>> {
         let mut ret: Vec<Vec<Vec<String>>> = vec![];
@@ -827,7 +827,7 @@ impl SourceDatabase {
         // Either way, it's done
         params.is_before_after_done = true;
 
-        let wiki = primary_pagelist.wiki()?.ok_or(format!("No wiki 12345"))?;
+        let wiki = primary_pagelist.wiki()?.ok_or("No wiki 12345".to_string())?;
 
         let mut futures : Vec<_> = vec![] ;
         for sql in batches {
@@ -841,7 +841,7 @@ impl SourceDatabase {
             ret.union(&pl2?, None).await?;
         }
         
-        return Ok(ret);
+        Ok(ret)
     }
 
     async fn get_pages_pagelist_batch(&self,

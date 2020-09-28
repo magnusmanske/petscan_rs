@@ -1296,16 +1296,13 @@ impl Platform {
         result.convert_to_wiki("wikidatawiki", &self).await?;
         Platform::profile("after filter_wikidata:convert_to_wiki", Some(result.len()?));
         if result.is_empty()? {
-            match original_wiki {
-                Some(wiki) => result.convert_to_wiki(&wiki, &self).await?,
-                None => {}
-            }
+            if let Some(wiki) = original_wiki { result.convert_to_wiki(&wiki, &self).await? }
             return Ok(());
         }
         // For all/any/none
         let parts = list
             .split_terminator(',')
-            .filter_map(|s| match s.chars().nth(0) {
+            .filter_map(|s| match s.chars().next() {
                 Some('Q') => Some((
                     "(SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=0 AND pl_title=?)".to_string(),
                     vec![s.into()],
@@ -1376,10 +1373,7 @@ impl Platform {
             .filter_map(|row| the_f(row.to_owned()))
             .for_each(|entry| result.add_entry(entry).unwrap_or(()));
 
-        match original_wiki {
-            Some(wiki) => result.convert_to_wiki(&wiki, &self).await?,
-            None => {}
-        }
+        if let Some(wiki) = original_wiki { result.convert_to_wiki(&wiki, &self).await? }
         Ok(())
     }
 
@@ -1408,16 +1402,16 @@ impl Platform {
 
     pub fn get_wiki_for_language_project(
         &self,
-        language: &String,
-        project: &String,
+        language: &str,
+        project: &str,
     ) -> Option<String> {
-        match (language.as_str(), project.as_str()) {
+        match (language, project) {
             (language, "wikipedia") => Some(language.to_owned() + "wiki"),
             ("commons", _) => Some("commonswiki".to_string()),
             ("wikidata", _) => Some("wikidatawiki".to_string()),
             (_, "wikidata") => Some("wikidatawiki".to_string()),
             (l, p) => {
-                let url = "https://".to_string() + &l + "." + &p + ".org";
+                let url = format!("https://{}.{}.org",&l,&p);
                 self.state.get_wiki_for_server_url(&url)
             }
         }
@@ -1436,15 +1430,15 @@ impl Platform {
 
         let result = match &self.result {
             Some(result) => result,
-            None => return Err(format!("Platform::get_response: No result")),
+            None => return Err("Platform::get_response: No result".to_string()),
         };
         let wiki = match result.wiki()? {
             Some(wiki) => wiki,
-            None => return Err(format!("Platform::get_response: No wiki in result")),
+            None => return Err("Platform::get_response: No wiki in result".to_string()),
         };
 
         let mut sortby = self.get_param_blank("sortby");
-        let mut sort_order = self.get_param_blank("sortorder") == "descending".to_string();
+        let mut sort_order = self.get_param_blank("sortorder") == "descending";
         if self.do_output_redlinks() && (sortby.is_empty() || sortby == "none") {
             sortby = "redlinks".to_string();
             sort_order = true;
@@ -1635,7 +1629,7 @@ impl Platform {
         ret
     }
 
-    fn parse_combination_string(s: &String) -> Combination {
+    fn parse_combination_string(s: &str) -> Combination {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"\w+(?:'\w+)?|[^\w\s]")
                 .expect("Platform::parse_combination_string: Regex is invalid");
@@ -1723,7 +1717,7 @@ impl Platform {
         }
     }
 
-    fn get_combination(&self, available_sources: &Vec<String>) -> Combination {
+    fn get_combination(&self, available_sources: &[String]) -> Combination {
         match self.get_param("source_combination") {
             Some(combination_string) => Self::parse_combination_string(&combination_string),
             None => {
@@ -1764,10 +1758,10 @@ impl Platform {
             },
             Combination::Intersection((a, b)) => match (a.as_ref(), b.as_ref()) {
                 (Combination::None, _c) => {
-                    Err(format!("Intersection with Combination::None found"))
+                    Err("Intersection with Combination::None found".to_string())
                 }
                 (_c, Combination::None) => {
-                    Err(format!("Intersection with Combination::None found"))
+                    Err("Intersection with Combination::None found".to_string())
                 }
                 (c, d) => {
                     let mut ret = vec![] ;
@@ -1778,7 +1772,7 @@ impl Platform {
                 }
             },
             Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => Err(format!("Not with Combination::None found")),
+                (Combination::None, _c) => Err("Not with Combination::None found".to_string()),
                 (c, Combination::None) => self.serialize_combine_results(c),
                 (c, d) => {
                     let mut ret = vec![] ;
@@ -1788,7 +1782,7 @@ impl Platform {
                     Ok(ret)
                 }
             },
-            Combination::None => Err(format!("Combination::None found")),
+            Combination::None => Err("Combination::None found".to_string()),
         }
     }
 
@@ -1810,35 +1804,35 @@ impl Platform {
                 }
                 CombinationSequential::Union => {
                     if registers.len() < 2 {
-                        return Err(format!("combine_results: Not enough registers for Union"));
+                        return Err("combine_results: Not enough registers for Union".to_string());
                     }
-                    let r2 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Union r1"))? ;
-                    let r1 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Union r2"))? ;
+                    let r2 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Union r1".to_string())? ;
+                    let r1 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Union r2".to_string())? ;
                     r1.union(&r2, Some(&self)).await?;
                     registers.push(r1)
                 }
                 CombinationSequential::Intersection => {
                     if registers.len() < 2 {
-                        return Err(format!("combine_results: Not enough registers for Union"));
+                        return Err("combine_results: Not enough registers for Union".to_string());
                     }
-                    let r2 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Intersection r1"))? ;
-                    let r1 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Intersection r2"))? ;
+                    let r2 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Intersection r1".to_string())? ;
+                    let r1 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Intersection r2".to_string())? ;
                     r1.intersection(&r2, Some(&self)).await?;
                     registers.push(r1)
                 }
                 CombinationSequential::Not => {
                     if registers.len() < 2 {
-                        return Err(format!("combine_results: Not enough registers for Union"));
+                        return Err("combine_results: Not enough registers for Union".to_string());
                     }
-                    let r2 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Not r1"))? ;
-                    let r1 = registers.pop().ok_or(format!("combine_results: CombinationSequential::Not r2"))? ;
+                    let r2 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Not r1".to_string())? ;
+                    let r1 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Not r2".to_string())? ;
                     r1.difference(&r2, Some(&self)).await?;
                     registers.push(r1)
                 }
             }
         }
         if registers.len() == 1 {
-            return registers.pop().ok_or(format!("combine_results registers.len()")) ;
+            return registers.pop().ok_or_else(|| "combine_results registers.len()".to_string()) ;
         }
         Err(format!("combine_results:{} registers set", registers.len()))
     }
@@ -1914,7 +1908,7 @@ mod tests {
         let mut entries = result
             .drain_into_sorted_vec(PageListSort::new_from_params(
                 &s1,
-                s2 == "descending".to_string(),
+                s2 == "descending",
             ))
             .unwrap();
         platform.result = Some(result);
@@ -2158,7 +2152,7 @@ mod tests {
             .iter()
             .cloned()
             .collect::<Vec<PageListEntry>>();
-        assert!(entries.len() > 0);
+        assert!(!entries.is_empty());
         for entry in entries {
             assert_eq!(entry.title().namespace_id(), 0);
         }
