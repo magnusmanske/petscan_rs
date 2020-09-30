@@ -519,6 +519,7 @@ impl PageListEntry {
 pub struct PageList {
     wiki: RwLock<Option<String>>,
     entries: RwLock<HashSet<PageListEntry>>,
+    has_sitelink_counts: RwLock<bool>,
 }
 
 impl PartialEq for PageList {
@@ -538,6 +539,7 @@ impl PageList {
         Self {
             wiki: RwLock::new(Some(wiki.to_string())),
             entries: RwLock::new(HashSet::new()),
+            has_sitelink_counts: RwLock::new(false),
         }
     }
 
@@ -545,6 +547,7 @@ impl PageList {
         Self {
             wiki: RwLock::new(Some(wiki.to_string())),
             entries: RwLock::new(HashSet::with_capacity(capacity)),
+            has_sitelink_counts: RwLock::new(false),
         }
     }
 
@@ -565,7 +568,18 @@ impl PageList {
             .read()
             .map_err(|e| format!("{:?}", e))?
             .clone();
+        self.set_has_sitelink_counts(other.has_sitelink_counts()?)?;
         Ok(())
+    }
+
+    pub fn set_has_sitelink_counts(&self, new_state:bool) -> Result<(), String> {
+        *self.has_sitelink_counts.write().map_err(|e| format!("{:?}", e))? = new_state ;
+        Ok(())
+    }
+
+    pub fn has_sitelink_counts(&self) -> Result<bool,String> {
+        let ret : bool = *self.has_sitelink_counts.read().map_err(|e| format!("{:?}", e))?;
+        Ok(ret)
     }
 
     pub fn entries(&self) -> &RwLock<HashSet<PageListEntry>> {

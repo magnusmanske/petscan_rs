@@ -204,6 +204,7 @@ impl Platform {
         let mut s_search = SourceSearch::new();
         let mut s_wikidata = SourceWikidata::new();
         let mut s_labels = SourceLabels::new();
+        let mut s_sitelinks = SourceSitelinks::new();
 
         let mut futures = vec![] ;
         let mut available_sources = vec![] ;
@@ -231,6 +232,10 @@ impl Platform {
         if s_wikidata.can_run(&self) {
             available_sources.push(s_wikidata.name());
             futures.push ( s_wikidata.run(&self) ) ;
+        }
+        if futures.is_empty() && s_sitelinks.can_run(&self){
+            available_sources.push(s_sitelinks.name());
+            futures.push ( s_sitelinks.run(&self) ) ;   
         }
         if futures.is_empty() && s_labels.can_run(&self){
             available_sources.push(s_labels.name());
@@ -323,8 +328,10 @@ impl Platform {
         Platform::profile("before filter_wikidata", Some(result.len()?));
         self.filter_wikidata(&result).await?;
         Platform::profile("after filter_wikidata", Some(result.len()?));
-        self.process_sitelinks(&result).await?;
-        Platform::profile("after process_sitelinks", None);
+        if available_sources.to_vec() != vec!["sitelinks".to_string()] {
+            self.process_sitelinks(&result).await?;
+            Platform::profile("after process_sitelinks", None);
+        }
         if available_sources.to_vec() != vec!["labels".to_string()] {
             self.process_labels(&result).await?;
             Platform::profile("after process_labels", Some(result.len()?));
@@ -629,7 +636,7 @@ impl Platform {
         let add_defaultsort = self.has_param("add_defaultsort");
         let add_disambiguation = self.has_param("add_disambiguation");
         let add_incoming_links = self.get_param_blank("sortby") == "incoming_links";
-        let add_sitelinks = self.get_param_blank("sortby") == "sitelinks";
+        let add_sitelinks = self.get_param_blank("sortby") == "sitelinks" && !result.has_sitelink_counts()?;
         if !add_coordinates
             && !add_image
             && !add_defaultsort
