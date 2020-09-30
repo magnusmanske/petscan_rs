@@ -557,7 +557,7 @@ impl Platform {
         for (page_title,namespace_id,_count) in rows {
             let page_title = String::from_utf8_lossy(&page_title).to_string() ;
             let title = Title::new(&page_title, namespace_id);
-            *redlink_counter.entry(title).or_insert(0) += 1 ;
+            *redlink_counter.entry(title).or_insert_with(||0) += 1 ;
         }
         Ok(())
     }

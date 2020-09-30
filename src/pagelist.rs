@@ -33,8 +33,8 @@ pub enum PageListSort {
 }
 
 impl PageListSort {
-    pub fn new_from_params(s: &String, descending: bool) -> Self {
-        match s.as_str() {
+    pub fn new_from_params(s: &str, descending: bool) -> Self {
+        match s {
             "title" => Self::Title(descending),
             "ns_title" => Self::NsTitle(descending),
             "size" => Self::Size(descending),
@@ -60,8 +60,8 @@ pub struct FileUsage {
 }
 
 impl FileUsage {
-    pub fn new_from_part(part: &String) -> Option<Self> {
-        let mut parts = part.split(":");
+    pub fn new_from_part(part: &str) -> Option<Self> {
+        let mut parts = part.split(':');
         let wiki = parts.next()?;
         let namespace_id = parts.next()?.parse::<NamespaceID>().ok()?;
         let namespace_name = parts.next()?;
@@ -630,7 +630,7 @@ impl PageList {
             .iter()
             .for_each(|entry| {
                 ret.entry(entry.title.namespace_id())
-                    .or_insert(vec![])
+                    .or_insert_with(Vec::new)
                     .push(entry.title.with_underscores());
             });
         Ok(ret)
@@ -1182,7 +1182,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             .into_par_iter()
             .filter_map(|r|r.ok())
             .flatten()
-            .filter_map(|row| the_fn(row))
+            .filter_map(the_fn)
             .for_each(|entry| self.add_entry(entry).unwrap_or(()));
         
         Platform::profile("PageList::convert_from_wikidata ALL BATCHES COMPLETE", None);

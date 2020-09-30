@@ -190,7 +190,7 @@ impl SourceSitelinks {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceWikidata {}
 
 #[async_trait]
@@ -255,7 +255,7 @@ impl SourceWikidata {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourcePagePile {}
 
 #[async_trait]
@@ -303,7 +303,7 @@ impl DataSource for SourcePagePile {
             .map(|title| PageListEntry::new(Title::new_from_full(&title.to_string(), &api)))
             .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
         if ret.is_empty()? {
-            platform.warn(format!("<span tt='warn_pagepile'></span>"))?;
+            platform.warn("<span tt=\'warn_pagepile\'></span>".to_string())?;
         }
         Ok(ret)
     }
@@ -317,7 +317,7 @@ impl SourcePagePile {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceSearch {}
 
 #[async_trait]
@@ -335,13 +335,13 @@ impl DataSource for SourceSearch {
     async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let wiki = platform
             .get_param("search_wiki")
-            .ok_or(format!("Missing parameter 'search_wiki'"))?;
+            .ok_or_else(|| "Missing parameter \'search_wiki\'".to_string())?;
         let query = platform
             .get_param("search_query")
-            .ok_or(format!("Missing parameter 'search_query'"))?;
+            .ok_or_else(|| "Missing parameter \'search_query\'".to_string())?;
         let max = match platform
             .get_param("search_max_results")
-            .ok_or(format!("Missing parameter 'search_max_results'"))?
+            .ok_or_else(|| "Missing parameter \'search_max_results\'".to_string())?
             .parse::<usize>()
         {
             Ok(max) => max,
@@ -365,13 +365,11 @@ impl DataSource for SourceSearch {
                 .collect::<Vec<String>>()
                 .join(",")
         };
-        let params = api.params_into(&vec![
-            ("action", "query"),
+        let params = api.params_into(&[("action", "query"),
             ("list", "search"),
             ("srlimit", srlimit.as_str()),
             ("srsearch", query.as_str()),
-            ("srnamespace", namespace_ids.as_str()),
-        ]);
+            ("srnamespace", namespace_ids.as_str())]);
         let result = match api.get_query_api_json_limit(&params, Some(max)).await {
             Ok(result) => result,
             Err(e) => return Err(format!("{:?}", e)),
@@ -383,7 +381,7 @@ impl DataSource for SourceSearch {
             .map(|title| PageListEntry::new(title.to_owned()))
             .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
         if ret.is_empty()? {
-            platform.warn(format!("<span tt='warn_search'></span>"))?;
+            platform.warn("<span tt=\'warn_search\'></span>".to_string())?;
         }
         Ok(ret)
     }
@@ -397,7 +395,7 @@ impl SourceSearch {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceManual {}
 
 #[async_trait]
@@ -413,12 +411,12 @@ impl DataSource for SourceManual {
     async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let wiki = platform
             .get_param("manual_list_wiki")
-            .ok_or(format!("Missing parameter 'manual_list_wiki'"))?;
+            .ok_or_else(|| "Missing parameter \'manual_list_wiki\'".to_string())?;
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let ret = PageList::new_from_wiki(&wiki);
         platform
             .get_param("manual_list")
-            .ok_or(format!("Missing parameter 'manual_list'"))?
+            .ok_or_else(|| "Missing parameter \'manual_list\'".to_string())?
             .split('\n')
             .filter_map(|line| {
                 let line = line.trim().to_string();
@@ -443,7 +441,7 @@ impl SourceManual {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceSparql {}
 
 #[async_trait]
@@ -459,7 +457,7 @@ impl DataSource for SourceSparql {
     async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
         let sparql = platform
             .get_param("sparql")
-            .ok_or(format!("Missing parameter 'sparql'"))?;
+            .ok_or_else(|| "Missing parameter \'sparql\'".to_string())?;
 
         let timeout = time::Duration::from_secs(120);
         let builder = reqwest::ClientBuilder::new().timeout(timeout);
@@ -496,27 +494,22 @@ impl DataSource for SourceSparql {
                 "    \"bindings\" : [ {" => {
                     mode += 1;
                     header = "{".to_string() + &header + "\"dummy\": {}}";
-                    let j: Value = serde_json::from_str(&header).unwrap_or(json!({}));
+                    let j: Value = serde_json::from_str(&header).unwrap_or_else(|_| json!({}));
                     first_var = j["head"]["vars"][0]
                         .as_str()
-                        .ok_or(format!("No variables found in SPARQL result"))?
+                        .ok_or_else(|| "No variables found in SPARQL result".to_string())?
                         .to_string();
                 }
                 "    }, {" | "    } ]" => match mode {
                     0 => header += &line,
                     1 => {
                         binding = "{".to_string() + &binding + "}";
-                        let j: Value = serde_json::from_str(&binding).unwrap_or(json!({}));
+                        let j: Value = serde_json::from_str(&binding).unwrap_or_else(|_| json!({}));
                         binding.clear();
-                        match j[&first_var]["value"].as_str() {
-                            Some(entity_url) => match api.extract_entity_from_uri(entity_url) {
-                                Ok(entity) => match Platform::entry_from_entity(&entity) {
-                                    Some(entry) => ret.add_entry(entry).unwrap_or(()),
-                                    None => {}
-                                },
-                                _ => {}
-                            },
-                            None => {}
+                        if let Some(entity_url) = j[&first_var]["value"].as_str() {
+                            if let Ok(entity) = api.extract_entity_from_uri(entity_url) {
+                                if let Some(entry) = Platform::entry_from_entity(&entity) { ret.add_entry(entry).unwrap_or(()) }
+                            }
                         }
                     }
                     _ => {}

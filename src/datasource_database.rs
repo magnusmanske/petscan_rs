@@ -345,7 +345,7 @@ impl SourceDatabase {
     async fn go_depth(
         &self,
         state: &AppState,
-        wiki: &String,
+        wiki: &str,
         categories_done: &RwLock<HashSet<String>>,
         categories_to_check: &[String],
         depth: u16,
@@ -399,8 +399,8 @@ impl SourceDatabase {
     async fn get_categories_in_tree(
         &self,
         state: &AppState,
-        wiki: &String,
-        title: &String,
+        wiki: &str,
+        title: &str,
         depth: u16,
     ) -> Result<Vec<String>, String> {
         let categories_done = RwLock::new(HashSet::new());
@@ -409,7 +409,7 @@ impl SourceDatabase {
             self.params.category_namespace_is_case_insensitive,
         );
         (*categories_done.write().map_err(|e| format!("{:?}", e))?).insert(title.to_owned());
-        self.go_depth(&state, wiki, &categories_done, &vec![title], depth).await?;
+        self.go_depth(&state, wiki, &categories_done, &[title.to_string()], depth).await?;
         let mut tmp = categories_done
             .into_inner()
             .map_err(|e| format!("{:?}", e))?;
@@ -419,7 +419,7 @@ impl SourceDatabase {
     pub async fn parse_category_list(
         &self,
         state: &AppState,
-        wiki: &String,
+        wiki: &str,
         input: &[SourceDatabaseCatDepth],
     ) -> Result<Vec<Vec<String>>, String> {
         let mut futures = vec![] ;
@@ -447,7 +447,7 @@ impl SourceDatabase {
 
     fn template_subquery(
         &self,
-        input: &Vec<String>,
+        input: &[String],
         use_talk_page: bool,
         find_not: bool,
     ) -> SQLtuple {
@@ -507,18 +507,7 @@ impl SourceDatabase {
         let mut ret: HashMap<NamespaceID, Vec<String>> = HashMap::new();
         input.iter().for_each(|title| {
             let title = Title::new_from_full(title, &api);
-            if !ret.contains_key(&title.namespace_id()) {
-                ret.insert(title.namespace_id(), vec![]);
-            }
-            match ret.get_mut(&title.namespace_id()) {
-                Some(x) => x.push(title.with_underscores().to_string()),
-                None => {
-                    println!(
-                        "SourceDatabase::group_link_list_by_namespace: No namespace id in {:?}",
-                        &title
-                    );
-                }
-            }
+            ret.entry(title.namespace_id()).or_insert_with(Vec::new).push(title.with_underscores());
         });
         ret
     }
@@ -797,7 +786,7 @@ impl SourceDatabase {
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList, String> {
         let ret = PageList::new_from_wiki(&params.wiki);
-        let primary_pagelist = primary_pagelist.ok_or("SourceDatabase::get_pages: pagelist: No primary_pagelist".to_string())?;
+        let primary_pagelist = primary_pagelist.ok_or_else(|| "SourceDatabase::get_pages: pagelist: No primary_pagelist".to_string())?;
         ret.set_wiki(primary_pagelist.wiki()?)?;
         if primary_pagelist.is_empty()? {
             // Nothing to do, but that's OK
@@ -827,7 +816,7 @@ impl SourceDatabase {
         // Either way, it's done
         params.is_before_after_done = true;
 
-        let wiki = primary_pagelist.wiki()?.ok_or("No wiki 12345".to_string())?;
+        let wiki = primary_pagelist.wiki()?.ok_or_else(|| "No wiki 12345".to_string())?;
 
         let mut futures : Vec<_> = vec![] ;
         for sql in batches {
@@ -852,7 +841,7 @@ impl SourceDatabase {
     ) -> Result<PageList,String> {
         let mut conn = state.get_wiki_db_connection(&wiki).await?;
         let sql_before_after = params.sql_before_after.clone();
-        let mut is_before_after_done = params.is_before_after_done.clone();
+        let mut is_before_after_done = params.is_before_after_done;
         let mut pl2 = PageList::new_from_wiki(&wiki.clone());
         let api = state.get_api_for_wiki(wiki.clone()).await?;
         self.get_pages_for_primary(
@@ -996,7 +985,7 @@ impl SourceDatabase {
             // All
             self.params.templates_yes.iter().for_each(|t| {
                 let tmp = self.template_subquery(
-                    &vec![t.to_string()],
+                    &[t.to_string()],
                     self.params.templates_yes_talk_page,
                     false,
                 );
@@ -1029,7 +1018,7 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id IN ";
             Platform::append_sql(
                 &mut sql,
-                self.links_from_subquery(&vec![l.to_owned()], &api),
+                self.links_from_subquery(&[l.to_owned()], &api),
             );
         });
 
@@ -1054,7 +1043,7 @@ impl SourceDatabase {
         // Links to all
         self.params.links_to_all.iter().for_each(|l| {
             sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(&mut sql, self.links_to_subquery(&vec![l.to_owned()], &api));
+            Platform::append_sql(&mut sql, self.links_to_subquery(&[l.to_owned()], &api));
         });
 
         // Links to any

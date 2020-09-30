@@ -48,10 +48,10 @@ pub struct RenderParams {
 }
 
 impl RenderParams {
-    pub async fn new(platform: &Platform, wiki: &String) -> Result<Self, String> {
+    pub async fn new(platform: &Platform, wiki: &str) -> Result<Self, String> {
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let mut ret = Self {
-            wiki: wiki.to_owned(),
+            wiki: wiki.to_string(),
             file_data: platform.has_param("ext_image_data"),
             file_usage: platform.has_param("file_usage_data"),
             thumbnails_in_wiki_output: platform.has_param("thumbnails_in_wiki_output"),
@@ -90,7 +90,7 @@ pub trait Render {
     async fn response(
         &self,
         _platform: &Platform,
-        _wiki: &String,
+        _wiki: &str,
         _pages: Vec<PageListEntry>,
     ) -> Result<MyResponse, String>;
 
@@ -220,7 +220,7 @@ pub trait Render {
     fn row_from_entry(
         &self,
         entry: &PageListEntry,
-        header: &Vec<(String, String)>,
+        header: &[(String, String)],
         params: &RenderParams,
         platform: &Platform,
     ) -> Vec<String> {
@@ -307,7 +307,7 @@ impl Render for RenderWiki {
     async fn response(
         &self,
         platform: &Platform,
-        wiki: &String,
+        wiki: &str,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let mut params = RenderParams::new(platform, wiki).await?;
@@ -454,7 +454,7 @@ impl Render for RenderTSV {
     async fn response(
         &self,
         platform: &Platform,
-        wiki: &String,
+        wiki: &str,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let mut params = RenderParams::new(platform, wiki).await?;
@@ -567,14 +567,14 @@ impl Render for RenderHTML {
     async fn response(
         &self,
         platform: &Platform,
-        wiki: &String,
+        wiki: &str,
         mut entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let mut params = RenderParams::new(platform, wiki).await?;
         let mut rows = vec![];
 
         rows.push("<hr/>".to_string());
-        rows.push("<script>var output_wiki='".to_string() + &wiki + "';</script>");
+        rows.push("<script>var output_wiki='".to_string() + wiki + "';</script>");
 
         /*
         // TODO
@@ -974,7 +974,7 @@ impl RenderHTML {
 
 //________________________________________________________________________________________________________________________
 
-/// Renders HTML
+/// Renders JSON
 pub struct RenderJSON {}
 
 #[async_trait]
@@ -982,7 +982,7 @@ impl Render for RenderJSON {
     async fn response(
         &self,
         platform: &Platform,
-        wiki: &String,
+        wiki: &str,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let mut params = RenderParams::new(platform, wiki).await?;
@@ -1295,11 +1295,11 @@ impl Render for RenderPagePile {
     async fn response(
         &self,
         platform: &Platform,
-        wiki: &String,
+        wiki: &str,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
-        let url = "https://tools.wmflabs.org/pagepile/api.php";
+        let url = "https://pagepile.toolforge.org/api.php";
         let data: String = entries
             .iter()
             .map(|e| format!("{}\t{}", e.title().pretty(), e.title().namespace_id()))
