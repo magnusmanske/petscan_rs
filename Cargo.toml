@@ -16,21 +16,22 @@ url = "*"
 rayon = "*"
 htmlescape = "*"
 rand = "*"
-mysql = { version="^17" }#, features = ["ssl"] }
-reqwest = { version = "^0.10", features = ["blocking", "json"] }
+mysql_async = "0.24.2"
+reqwest = { version = "*", features = ["json"] }
 time = "^0.2.9"
 percent-encoding = "*"
-wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
-#actix-web = { version = "3.0.0-alpha.1", default-features = true }
-actix-web = "^2.0.0"
-actix-files = "*"
-actix-http = "*"
-actix-rt = "^1"
+wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" , branch = "tokio" }
+async-trait = "0.1.30"
+async-recursion = "0.3.1"
+tokio = { version = "^0.2", features = ["macros","fs","sync"] }
+tokio-util = "*"
+hyper = "*"
+#warp = "0.2.2"
 qstring = "*"
 futures = "*"
 
-[profile.release]
-lto = "fat"
-codegen-units = 1
+#[profile.release]
+#lto = "fat"
+#codegen-units = 1
 #target-cpu = "native"
-panic = "abort"
+#panic = "abort"

@@ -332,42 +332,44 @@ function AutoList ( callback ) {
 		var me = this ;
 		var h = '' ;
 		var p = getUrlVars() ;
-		if ( me.widar.isLoggedIn() ) {
-			h += "<div class='autolist_subbox'>" ;
-			h += "<div>" + _t('al_welcome').replace( '$1', me.widar.getUserName() ) + "</div>" ;
-			if ( me.mode == "creator" ) {
-				h += "<div tt='al_creator_mode'></div>" ;
-			}
-			if ( me.widar.isBot() ) {
-				me.max_concurrent = 5 ;
-				me.concurrent = 5 ;
-				me.delay = 1 ;
-				h += "<div><input class='form-control'  style='width:50px;display:inline-block;font-size:8pt' type='number' id='bot_concurrent' value='"+me.concurrent+"' /> <span tt='al_concurrent'></span> (1-"+me.max_concurrent+")</div>" ;
-			}
-			h += "</div>" ;
-			h += "<div class='autolist_subbox'>" ;
-			h += "<button id='al_do_check_all' class='btn btn-outline-secondary btn-sm' tt='al_all' style='width:100%'></button><br/>" ;
-			h += "<button id='al_do_check_none' class='btn btn-outline-secondary btn-sm' tt='al_none' style='width:100%'></button><br/>" ;
-			h += "<button id='al_do_check_toggle' class='btn btn-outline-secondary btn-sm' tt='al_toggle' style='width:100%'></button><br/>" ;
-			h += "</div>" ;
-			h += "<div class='autolist_subbox'>" ;
-			h += "<textarea id='al_commands' tt_placeholder='al_commands_ph' rows=3 style='padding:2px;width:200px'>" + (p.statementlist||'') + "</textarea><br/>" ;
-			console.log(autolist_wiki_server);
-			if (this.is_wikidata()) h += "<button id='al_do_process' class='btn btn-outline-success btn-sm' tt='al_process'></button>" ;
-			h += "<button id='al_start_qs' class='btn btn-outline-success btn-sm' tt='al_start_qs'></button>" ;
-			h += "<button id='al_do_stop' class='btn btn-outline-danger btn-sm' tt='al_stop' style='display:none'></button>" ;
-			h += "<form style='display:none' id='qs_form' action='//tools.wmflabs.org/quickstatements/api.php' method='post' target='_blank'>" ;
-			h += "<input type='hidden' name='action' value='import' />" ;
-			h += "<input type='hidden' name='format' value='v1' />" ;
-			h += "<input type='hidden' name='temporary' value='1' />" ;
-			h += "<input type='hidden' name='openpage' value='1' />" ;
-			h += "<input type='hidden' name='site' value='"+(autolist_wiki_server=='commons.wikimedia.org'?'commons':'wikidata')+"' />" ;
-			h += "<textarea type='hidden' id='qs_commands' name='data'></textarea><button name='yup'></button></form>" ;
-			h += "<div id='al_status'></div>" ;
-			h += "</div>" ;
-		} else {
-			h += "<div>" + me.widar.getLoginLink("<span tt='al_login'></span>") + "</div>" ;
+		//if ( me.widar.isLoggedIn() ) {
+		h += "<div class='autolist_subbox'>" ;
+		//h += "<div>" + _t('al_welcome').replace( '$1', me.widar.getUserName() ) + "</div>" ;
+		if ( me.mode == "creator" ) {
+			h += "<div tt='al_creator_mode'></div>" ;
 		}
+		/*
+		if ( me.widar.isBot() ) {
+			me.max_concurrent = 5 ;
+			me.concurrent = 5 ;
+			me.delay = 1 ;
+			h += "<div><input class='form-control'  style='width:50px;display:inline-block;font-size:8pt' type='number' id='bot_concurrent' value='"+me.concurrent+"' /> <span tt='al_concurrent'></span> (1-"+me.max_concurrent+")</div>" ;
+		}
+		*/
+		h += "</div>" ;
+		h += "<div class='autolist_subbox'>" ;
+		h += "<button id='al_do_check_all' class='btn btn-outline-secondary btn-sm' tt='al_all' style='width:100%'></button><br/>" ;
+		h += "<button id='al_do_check_none' class='btn btn-outline-secondary btn-sm' tt='al_none' style='width:100%'></button><br/>" ;
+		h += "<button id='al_do_check_toggle' class='btn btn-outline-secondary btn-sm' tt='al_toggle' style='width:100%'></button><br/>" ;
+		h += "</div>" ;
+		h += "<div class='autolist_subbox'>" ;
+		h += "<textarea id='al_commands' tt_placeholder='al_commands_ph' rows=3 style='padding:2px;width:200px'>" + (p.statementlist||'') + "</textarea><br/>" ;
+		//console.log(autolist_wiki_server);
+		//if (this.is_wikidata()) h += "<button id='al_do_process' class='btn btn-outline-success btn-sm' tt='al_process'></button>" ;
+		h += "<button id='al_start_qs' class='btn btn-outline-success btn-sm' tt='al_start_qs'></button>" ;
+		h += "<button id='al_do_stop' class='btn btn-outline-danger btn-sm' tt='al_stop' style='display:none'></button>" ;
+		h += "<form style='display:none' id='qs_form' action='//tools.wmflabs.org/quickstatements/api.php' method='post' target='_blank'>" ;
+		h += "<input type='hidden' name='action' value='import' />" ;
+		h += "<input type='hidden' name='format' value='v1' />" ;
+		h += "<input type='hidden' name='temporary' value='1' />" ;
+		h += "<input type='hidden' name='openpage' value='1' />" ;
+		h += "<input type='hidden' name='site' value='"+(autolist_wiki_server=='commons.wikimedia.org'?'commons':'wikidata')+"' />" ;
+		h += "<textarea type='hidden' id='qs_commands' name='data'></textarea><button name='yup'></button></form>" ;
+		h += "<div id='al_status'></div>" ;
+		h += "</div>" ;
+		//} else {
+		//	h += "<div>" + me.widar.getLoginLink("<span tt='al_login'></span>") + "</div>" ;
+		//}
 		$('#autolist_box').html ( h ) ;
 		tt.updateInterface ( $('#autolist_box') ) ;
 		function updateConcurrency () {

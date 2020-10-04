@@ -3,19 +3,28 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use url::*;
+use std::fmt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FormParameters {
     pub params: HashMap<String, String>,
     pub ns: HashSet<usize>,
 }
 
+impl fmt::Display for FormParameters {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ret = self.params
+            .iter()
+            .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
+            .collect::<Vec<String>>()
+            .join("&");
+        write!(f, "{}", ret)
+    }
+}
+
 impl FormParameters {
     pub fn new() -> Self {
-        Self {
-            params: HashMap::new(),
-            ns: HashSet::new(),
-        }
+        Self { ..Default::default() }
     }
 
     pub fn new_from_pairs(parameter_pairs: Vec<(&str, &str)>) -> Self {
@@ -45,11 +54,8 @@ impl FormParameters {
                     ns.insert(0);
                 }
                 for cap in RE.captures_iter(k) {
-                    match cap[1].parse::<usize>() {
-                        Ok(ns_num) => {
-                            ns.insert(ns_num);
-                        }
-                        _ => {}
+                    if let Ok(ns_num) = cap[1].parse::<usize>() {
+                        ns.insert(ns_num);
                     }
                 }
             });
@@ -64,10 +70,7 @@ impl FormParameters {
         };
         let params: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
         let ns = Self::ns_from_params(&params);
-        let mut ret = FormParameters {
-            params: params,
-            ns: ns,
-        };
+        let mut ret = FormParameters { params , ns } ;
         ret.legacy_parameters();
         Ok(ret)
     }
@@ -92,6 +95,7 @@ impl FormParameters {
         self.ns = Self::ns_from_params(&self.params);
     }
 
+    /*
     pub fn to_string(&self) -> String {
         self.params
             .iter()
@@ -99,6 +103,7 @@ impl FormParameters {
             .collect::<Vec<String>>()
             .join("&")
     }
+    */
 
     pub fn to_string_no_doit(&self) -> String {
         self.params
@@ -133,7 +138,7 @@ impl FormParameters {
         if !self.has_param(key_fallback) {
             return;
         }
-        if !self.has_param(key_primary) || self.params.get(key_primary) == Some(&"".to_string()) {
+        if !self.has_param(key_primary) || self.params.get(key_primary) == Some(&String::new()) {
             let value = self
                 .params
                 .get(key_fallback)
@@ -152,19 +157,16 @@ impl FormParameters {
             && !self.has_param_with_value("manual_list")
             && !self.has_param_with_value("common_wiki_other")
         {
-            match self.params.get("manual_list_wiki") {
-                Some(wiki) => {
-                    let wiki = wiki.to_owned();
-                    self.set_param(&"common_wiki_other".to_string(), &wiki);
-                    self.set_param(&"manual_list_wiki".to_string(), &"".to_string());
-                }
-                None => {}
+            if let Some(wiki) = self.params.get("manual_list_wiki") {
+                let wiki = wiki.to_owned();
+                self.set_param(&"common_wiki_other".to_string(), &wiki);
+                self.set_param(&"manual_list_wiki".to_string(), &String::new());
             }
         }
 
         // query originally from QuickIntersection
         if self.has_param("max") {
-            if self.params.get("format").unwrap_or(&"".to_string()) == "jsonfm" {
+            if self.params.get("format").unwrap_or(&String::new()) == "jsonfm" {
                 self.set_param("json-pretty", "1");
             }
             self.set_param("output_compatability", "quick-intersection");
@@ -173,13 +175,8 @@ impl FormParameters {
                 Some(num) => {
                     if num == "*" {
                         self.set_param("ns[0]", "1");
-                    } else {
-                        match num.parse::<usize>() {
-                            Ok(ns_num) => {
-                                self.set_param(format!("ns[{}]", ns_num).as_str(), "1");
-                            }
-                            Err(_) => {}
-                        }
+                    } else if let Ok(ns_num) = num.parse::<usize>() {
+                        self.set_param(format!("ns[{}]", ns_num).as_str(), "1");
                     }
                 }
             }
