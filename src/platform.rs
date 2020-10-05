@@ -233,10 +233,12 @@ impl Platform {
             available_sources.push(s_wikidata.name());
             futures.push ( s_wikidata.run(&self) ) ;
         }
+        /* Sitelinks as primary source deactivated due to instability
         if futures.is_empty() && s_sitelinks.can_run(&self){
             available_sources.push(s_sitelinks.name());
             futures.push ( s_sitelinks.run(&self) ) ;   
         }
+        */
         if futures.is_empty() && s_labels.can_run(&self){
             available_sources.push(s_labels.name());
             futures.push ( s_labels.run(&self) ) ;   
