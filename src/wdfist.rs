@@ -285,9 +285,13 @@ impl WDfist {
                     .par_iter()
                     .filter_map(|j| match j["title"].as_str() {
                         Some(filename) => {
-                            let filename = filename[5..].to_string(); // Remove leading "File:"
+                            let filename = self.remove_leading_file_namespace(filename);
                             let filename = self.normalize_filename(&filename);
-                            Some((q.to_string(), filename))
+                            if filename.is_empty() {
+                                None
+                            } else {
+                                Some((q.to_string(), filename))
+                            }
                         }
                         None => None,
                     })
@@ -303,6 +307,15 @@ impl WDfist {
             .for_each(|(q, file)| self.add_file_to_item(q, file));
 
         Ok(())
+    }
+
+    // Remove leading "File:"
+    fn remove_leading_file_namespace(&self,filename:&str) -> String {
+        if filename.len() < 6 {
+            String::new()
+        } else {
+            filename[5..].to_string()
+        }
     }
 
     async fn follow_search_commons(&mut self) -> Result<(), String> {
@@ -367,9 +380,13 @@ impl WDfist {
                     .par_iter()
                     .filter_map(|j| match j["title"].as_str() {
                         Some(filename) => {
-                            let filename = filename[5..].to_string(); // Remove leading "File:"
+                            let filename = self.remove_leading_file_namespace(filename);
                             let filename = self.normalize_filename(&filename);
-                            Some((q.to_string(), filename))
+                            if filename.is_empty() {
+                                None
+                            } else {
+                                Some((q.to_string(), filename))
+                            }
                         }
                         None => None,
                     })

@@ -831,6 +831,9 @@ impl Render for RenderHTML {
                 }
             } else if params.autolist_wiki_server == AUTOLIST_WIKIDATA {
                 q = entry.title().pretty().to_string();
+                if q.is_empty() {
+                    panic!("RenderHTML::render_cell_checkbox q is blank")
+                }
                 q.remove(0);
             } else {
                 // TODO paranoia

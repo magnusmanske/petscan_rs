@@ -163,6 +163,9 @@ impl AppState {
         wiki: &str,
     ) -> Result<my::Conn, String> {
         let mut pool = self.db_pool.lock().await;
+        if pool.is_empty() {
+            panic!("pool is empty");
+        }
         let db_user_pass = pool.remove(0) ;
         let opts_builder = self.get_mysql_opts_for_wiki(wiki,&db_user_pass.0,&db_user_pass.1)?;
         let conn = my::Conn::new(opts_builder).await;
