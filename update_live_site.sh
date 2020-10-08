@@ -3,7 +3,7 @@
 git pull
 
 # Update
-cargo update
+#cargo update
 
 # Build new server binary
 cargo build --release

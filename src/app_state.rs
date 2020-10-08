@@ -166,12 +166,12 @@ impl AppState {
         if pool.is_empty() {
             panic!("pool is empty");
         }
-        let db_user_pass = pool.remove(0) ;
-        let opts_builder = self.get_mysql_opts_for_wiki(wiki,&db_user_pass.0,&db_user_pass.1)?;
+        pool.rotate_left(1);
+        let last = pool.len()-1;
+        let opts_builder = self.get_mysql_opts_for_wiki(wiki,&pool[last].0,&pool[last].1)?;
         let conn = my::Conn::new(opts_builder).await;
         let mut conn = conn.map_err(|e|format!("{:?}",e))? ;
         self.set_group_concat_max_len(wiki,&mut conn).await?;
-        pool.push(db_user_pass);
         Ok(conn)
     }
 
