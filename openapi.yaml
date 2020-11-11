@@ -1,0 +1,351 @@
+openapi: 3.0.0
+info:
+  version: '1.0'
+  title: PetScan
+  description: A powerful querying tool for Wikimedia
+servers:
+  - url: 'https://petscan.wmflabs.org/'
+  - url: 'https://cors-anywhere.herokuapp.com/https://petscan.wmflabs.org/'
+paths:
+  /:
+    get:
+      summary: Queries Wikimedia
+      parameters:
+        - name: language
+          in: query
+          schema:
+            type: string
+        - name: project
+          in: query
+          schema:
+            type: string
+        - name: depth
+          in: query
+          schema:
+            type: string
+        - name: categories
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: combination
+          in: query
+          schema:
+            type: string
+            enum:
+              - subset
+              - union
+        - name: negcats
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+        - name: 'ns[0]'
+          in: query
+          schema:
+            type: boolean
+        - name: 'ns[6]'
+          in: query
+          schema:
+            type: boolean
+        - name: larger
+          in: query
+          schema:
+            type: string
+        - name: smaller
+          in: query
+          schema:
+            type: string
+        - name: minlinks
+          in: query
+          schema:
+            type: string
+        - name: maxlinks
+          in: query
+          schema:
+            type: string
+        - name: before
+          in: query
+          schema:
+            type: string
+        - name: after
+          in: query
+          schema:
+            type: string
+        - name: max_age
+          in: query
+          schema:
+            type: string
+        - name: show_redirects
+          in: query
+          schema:
+            type: string
+        - name: 'edits[bots]'
+          in: query
+          schema:
+            type: boolean
+        - name: 'edits[anons]'
+          in: query
+          schema:
+            type: boolean
+        - name: 'edits[flagged]'
+          in: query
+          schema:
+            type: boolean
+        - name: page_image
+          in: query
+          schema:
+            type: string
+        - name: ores_type
+          in: query
+          schema:
+            type: string
+        - name: ores_prob_from
+          in: query
+          schema:
+            type: string
+        - name: ores_prob_to
+          in: query
+          schema:
+            type: string
+        - name: ores_prediction
+          in: query
+          schema:
+            type: string
+        - name: templates_yes
+          in: query
+          schema:
+            type: string
+        - name: templates_any
+          in: query
+          schema:
+            type: string
+        - name: templates_no
+          in: query
+          schema:
+            type: string
+        - name: outlinks_yes
+          in: query
+          schema:
+            type: string
+        - name: outlinks_any
+          in: query
+          schema:
+            type: string
+        - name: outlinks_no
+          in: query
+          schema:
+            type: string
+        - name: links_to_all
+          in: query
+          schema:
+            type: string
+        - name: links_to_any
+          in: query
+          schema:
+            type: string
+        - name: links_to_no
+          in: query
+          schema:
+            type: string
+        - name: sparql
+          in: query
+          schema:
+            type: string
+        - name: manual_list
+          in: query
+          schema:
+            type: string
+        - name: manual_list_wiki
+          in: query
+          schema:
+            type: string
+        - name: pagepile
+          in: query
+          schema:
+            type: string
+        - name: search_query
+          in: query
+          schema:
+            type: string
+        - name: search_wiki
+          in: query
+          schema:
+            type: string
+        - name: search_max_results
+          in: query
+          schema:
+            type: string
+        - name: wikidata_source_sites
+          in: query
+          schema:
+            type: string
+        - name: subpage_filter
+          in: query
+          schema:
+            type: string
+        - name: common_wiki
+          in: query
+          schema:
+            type: string
+        - name: common_wiki_other
+          in: query
+          schema:
+            type: string
+        - name: source_combination
+          in: query
+          schema:
+            type: string
+        - name: wikidata_item
+          in: query
+          schema:
+            type: string
+        - name: wikidata_label_language
+          in: query
+          schema:
+            type: string
+        - name: wikidata_prop_item_use
+          in: query
+          schema:
+            type: string
+        - name: wpiu
+          in: query
+          schema:
+            type: string
+        - name: sitelinks_yes
+          in: query
+          schema:
+            type: string
+        - name: sitelinks_any
+          in: query
+          schema:
+            type: string
+        - name: sitelinks_no
+          in: query
+          schema:
+            type: string
+        - name: min_sitelink_count
+          in: query
+          schema:
+            type: string
+        - name: max_sitelink_count
+          in: query
+          schema:
+            type: string
+        - name: labels_yes
+          in: query
+          schema:
+            type: string
+        - name: cb_labels_yes_l
+          in: query
+          schema:
+            type: string
+        - name: langs_labels_yes
+          in: query
+          schema:
+            type: string
+        - name: labels_any
+          in: query
+          schema:
+            type: string
+        - name: cb_labels_any_l
+          in: query
+          schema:
+            type: string
+        - name: langs_labels_any
+          in: query
+          schema:
+            type: string
+        - name: labels_no
+          in: query
+          schema:
+            type: string
+        - name: cb_labels_no_l
+          in: query
+          schema:
+            type: string
+        - name: langs_labels_no
+          in: query
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum:
+              - html
+              - csv
+              - tsv
+              - wiki
+              - json
+              - pagepile
+        - name: output_compatability
+          in: query
+          schema:
+            type: string
+            enum:
+              - catscan
+              - quick-intersection
+        - name: sortby
+          in: query
+          schema:
+            type: string
+            enum:
+              - none
+              - title
+              - ns_title
+              - size
+              - date
+              - incoming_links
+              - filesize
+              - uploaddate
+              - sitelinks
+              - random
+        - name: sortorder
+          in: query
+          schema:
+            type: string
+            enum:
+              - ascending
+              - descending
+        - name: regexp_filter
+          in: query
+          schema:
+            type: string
+        - name: min_redlink_count
+          in: query
+          schema:
+            type: string
+        - name: output_limit
+          in: query
+          schema:
+            type: integer
+        - name: referrer_url
+          in: query
+          schema:
+            type: string
+        - name: referrer_name
+          in: query
+          schema:
+            type: string
+        - name: sparse
+          in: query
+          schema:
+            type: boolean
+        - name: json-pretty
+          in: query
+          schema:
+            type: boolean
+        - name: doit
+          in: query
+          schema:
+            type: boolean
+            enum:
+              - true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json: {}
