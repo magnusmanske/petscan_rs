@@ -112,10 +112,7 @@ impl AppState {
     }
 
     fn get_db_server_group(&self) -> &str {
-        match self.config["dbservergroup"].as_str() {
-            Some(s) => s,
-            None => ".web.db.svc.eqiad.wmflabs", // ".analytics.db.svc.eqiad.wmflabs"
-        }
+        self.config["dbservergroup"].as_str().unwrap_or(".web.db.svc.eqiad.wmflabs")
     }
 
     /// Returns the server and database name for the wiki, as a tuple

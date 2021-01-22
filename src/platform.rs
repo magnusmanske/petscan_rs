@@ -1728,7 +1728,7 @@ impl Platform {
     /// Checks is the parameter is set, and non-blank
     pub fn has_param(&self, param: &str) -> bool {
         match self.form_parameters().params.get(&param.to_string()) {
-            Some(s) => s != "",
+            Some(s) => !s.is_empty(),
             None => false,
         }
     }

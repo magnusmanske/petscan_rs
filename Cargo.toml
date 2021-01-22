@@ -16,17 +16,16 @@ url = "*"
 rayon = "*"
 htmlescape = "*"
 rand = "*"
-mysql_async = "0.24.2"
+mysql_async = "^0.26"
 reqwest = { version = "*", features = ["json"] }
-time = "^0.2.9"
+time = "^0.2"
 percent-encoding = "*"
-wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" , branch = "tokio" }
-async-trait = "0.1.30"
+async-trait = "0.1.42"
 async-recursion = "0.3.1"
-tokio = { version = "^0.2", features = ["macros","fs","sync"] }
+wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
+tokio = { version = "^1", features = ["macros","fs","sync"] }
 tokio-util = "*"
-hyper = "*"
-#warp = "0.2.2"
+hyper = { version = "^0.14", features = ["full"] }
 qstring = "*"
 futures = "*"
 

@@ -318,6 +318,11 @@ impl WDfist {
         }
     }
 
+    fn get_commons_search_query(&self, label:&str) -> String {
+        let svg = if self.wdf_allow_svg { "" } else { "-filemime:svg" } ;
+        format!("{} -filemime:pdf -filemime:djvu -filemime:gif {}",&label,svg)
+    }
+
     async fn follow_search_commons(&mut self) -> Result<(), String> {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
@@ -346,7 +351,7 @@ impl WDfist {
                 api.params_into(&[("action", "query"),
                     ("list", "search"),
                     ("srnamespace", "6"),
-                    ("srsearch", label.as_str())]))
+                    ("srsearch", &self.get_commons_search_query(&label))]))
             .collect();
 
         /*
@@ -662,7 +667,7 @@ impl WDfist {
                 }
                 match filetype.as_str() {
                     "svg" => return self.wdf_allow_svg,
-                    "pdf" | "gif" => return false,
+                    "pdf" | "gif" | "djvu" => return false,
                     _ => {}
                 };
                 if RE_KEY_PHRASES.is_match(filename) {
@@ -803,6 +808,7 @@ mod tests {
         assert!(wdfist.is_valid_filename(&"foobar.jpg".to_string()));
         assert!(!wdfist.is_valid_filename(&"foobar.GIF".to_string()));
         assert!(!wdfist.is_valid_filename(&"foobar.pdf".to_string()));
+        assert!(!wdfist.is_valid_filename(&"foobar.DjVU".to_string()));
         assert!(wdfist.is_valid_filename(&"some_600px_bs.jpg".to_string()));
         assert!(!wdfist.is_valid_filename(&"some_600px_bs.png".to_string()));
         assert!(!wdfist.is_valid_filename(&"Flag_of_foobar.jpg".to_string()));
@@ -878,6 +884,6 @@ mod tests {
             .item2files
             .get(&"Q66711783".to_string())
             .unwrap()
-            .contains_key(&"Walter_Rueth.jpg".to_string()));
+            .contains_key(&"Gerst_lilly_nee_kohn_with_son_walter_samuel.png".to_string()));
     }
 }
