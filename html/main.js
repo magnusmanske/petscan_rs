@@ -384,7 +384,7 @@ function generateThumbnailView() {
 		var tr = $(this) ;
 		var td = $(tr.find('td.link_container').get(0)) ;
 		var a = $(td.find('a.pagelink').get(0)) ;
-		var url = a.attr('href').replace(/\/wiki\/File:/,'/wiki/Special:Redirect/file/') + '?width=' + thumbnail_size ;
+		var url = a.attr('href').replace(/\/wiki\/File(:|%3[aA])/,'/wiki/Special:Redirect/file/') + '?width=' + thumbnail_size ;
 		var h = '' ;
 		h += '<div class="card">' ;
 		h += '<div style="text-align:center"><a class="thumblink"><img class="card-img-top pre_thumb" src2load="'+url+'" alt="'+'??'+'" border=0 /></a></div>' ;
