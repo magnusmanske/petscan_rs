@@ -61,6 +61,8 @@ pub struct SourceDatabaseParameters {
     last_edit_anon: String,
     last_edit_flagged: String,
     redirects: String,
+    soft_redirects: String,
+    disambiguation_pages: String,
     page_wikidata_item: String,
     larger: Option<usize>,
     smaller: Option<usize>,
@@ -163,6 +165,8 @@ impl SourceDatabaseParameters {
                 .get_param("ores_prob_to")
                 .map(|x| x.parse::<f32>().unwrap_or(1.0)),
             redirects: platform.get_param_blank("show_redirects"),
+            soft_redirects: platform.get_param_blank("show_soft_redirects"),
+            disambiguation_pages: platform.get_param_blank("show_disambiguation_pages"),
             minlinks: platform.usize_option_from_param("minlinks"),
             maxlinks: platform.usize_option_from_param("maxlinks"),
             larger: platform.usize_option_from_param("larger"),
@@ -1120,12 +1124,32 @@ impl SourceDatabase {
             _ => {}
         }
 
-        // Misc
+        // Misc page types
+        // TODO FIXME get local "Soft_redirect" page title from Wikidata Q4844001
+        let soft_redirects_page = "Soft_redirect";
+        match self.params.soft_redirects.as_str() {
+            "yes" => {
+                sql.0 += " AND EXISTS (SELECT * FROM templatelinks WHERE tl_from=p.page_id AND tl_namespace=10 AND tl_title=?)";
+                sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
+            }
+            "no" => {
+                sql.0 += " AND NOT EXISTS (SELECT * FROM templatelinks WHERE tl_from=p.page_id AND tl_namespace=10 AND tl_title=?)";
+                sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
+            }
+            _ => {}
+        }
         match self.params.redirects.as_str() {
             "yes" => sql.0 += " AND p.page_is_redirect=1",
             "no" => sql.0 += " AND p.page_is_redirect=0",
             _ => {}
         }
+        match self.params.disambiguation_pages.as_str() {
+            "yes" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')",
+            "no" => sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')",
+            _ => {}
+        }
+
+        // Size
         if let Some(i) = self.params.larger {
             sql.0 += " AND p.page_len>=";
             sql.0 += i.to_string().as_str();
@@ -1135,7 +1159,7 @@ impl SourceDatabase {
             sql.0 += i.to_string().as_str();
         }
         if let Some(i) = self.params.since_rev0 {
-            sql.0 += " AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0)*";
+            sql.0 += " AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*";
             sql.0 += i.to_string().as_str();
             sql.0 += "/100";
         }

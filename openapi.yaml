@@ -86,6 +86,14 @@ paths:
           in: query
           schema:
             type: string
+        - name: show_soft_redirects
+          in: query
+          schema:
+            type: string
+        - name: show_disambiguation_pages
+          in: query
+          schema:
+            type: string
         - name: 'edits[bots]'
           in: query
           schema:
