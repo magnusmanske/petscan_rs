@@ -982,7 +982,10 @@ impl PageList {
         wikidata_language: Option<String>,
         platform: &Platform,
     ) -> Result<(), String> {
+        Platform::profile("begin load_missing_metadata", None);
+        Platform::profile("before load_missing_page_metadata", None);
         self.load_missing_page_metadata(platform).await?;
+        Platform::profile("after load_missing_page_metadata", None);
 
         // All done
         if !self.is_wikidata() || wikidata_language.is_none() {
@@ -1003,6 +1006,7 @@ impl PageList {
                 platform,
             ).await?;
         }
+        Platform::profile("end load_missing_metadata", None);
         Ok(())
     }
 

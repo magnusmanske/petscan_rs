@@ -3,6 +3,8 @@ var params = {} ;
 var ores_data = {} ;
 var default_params = {
 	'show_redirects':'both',
+	'show_soft_redirects':'both',
+	'show_disambiguation_pages':'both',
 	'edits[bots]':'both',
 	'edits[anons]':'both',
 	'edits[flagged]':'both',
