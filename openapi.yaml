@@ -58,6 +58,10 @@ paths:
           in: query
           schema:
             type: string
+        - name: since_rev0
+          in: query
+          schema:
+            type: string
         - name: minlinks
           in: query
           schema:

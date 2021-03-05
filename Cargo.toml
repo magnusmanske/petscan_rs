@@ -29,8 +29,8 @@ hyper = { version = "^0.14", features = ["full"] }
 qstring = "*"
 futures = "*"
 
-#[profile.release]
-#lto = "fat"
-#codegen-units = 1
+[profile.release]
+lto = "fat"
+codegen-units = 1
 #target-cpu = "native"
-#panic = "abort"
+panic = "abort"

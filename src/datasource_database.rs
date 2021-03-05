@@ -64,6 +64,7 @@ pub struct SourceDatabaseParameters {
     page_wikidata_item: String,
     larger: Option<usize>,
     smaller: Option<usize>,
+    since_rev0: Option<usize>,
     minlinks: Option<usize>,
     maxlinks: Option<usize>,
     wiki: Option<String>,
@@ -165,6 +166,7 @@ impl SourceDatabaseParameters {
             minlinks: platform.usize_option_from_param("minlinks"),
             maxlinks: platform.usize_option_from_param("maxlinks"),
             larger: platform.usize_option_from_param("larger"),
+            since_rev0: platform.usize_option_from_param("since_rev0"),
             smaller: platform.usize_option_from_param("smaller"),
             wiki: platform.get_main_wiki(),
             namespace_ids: platform
@@ -1131,6 +1133,11 @@ impl SourceDatabase {
         if let Some(i) = self.params.smaller {
             sql.0 += " AND p.page_len<=";
             sql.0 += i.to_string().as_str();
+        }
+        if let Some(i) = self.params.since_rev0 {
+            sql.0 += " AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0)*";
+            sql.0 += i.to_string().as_str();
+            sql.0 += "/100";
         }
 
         // Speed up "Only pages without Wikidata items"

@@ -224,6 +224,13 @@ function receiveEnglishNamespaceData ( j ) {
 </div>
 
 <div class="form-group row">
+<label class="col-sm-2 form-control-label"></label>
+<div class="col-sm-7">
+<div class="input-group"><div class="input-group-addon" tt="since_rev0"></div><input class="form-control" tt_placeholder="since_rev0_explanation" name="since_rev0" value="" type="text"></div>
+</div>
+</div>
+
+<div class="form-group row">
 <label class="col-sm-2 form-control-label"><span tt='link_number'></span></label>
 <div class="col-sm-5">
 <div class="input-group"><div class="input-group-addon" tt="minlinks"></div><input class="form-control" name="minlinks" placeholder="#" value="" type="text"></div>
@@ -265,25 +272,21 @@ function receiveEnglishNamespaceData ( j ) {
 
 <div class="form-group row">
 <label class="col-sm-2 form-control-label"><span tt='edits'></span>: <span tt='edit_bots'></span></label>
-<div class="col-sm-4">
+<div class="col-sm-2">
 <div class="radio-inline"><label><input type="radio" name="edits[bots]" value="both"> <span tt='edits_both'></span></label></div>
 <div class="radio-inline"><label><input type="radio" name="edits[bots]" value="yes"> <span tt='edits_yes'></span></label></div>
 <div class="radio-inline"><label><input type="radio" name="edits[bots]" value="no"> <span tt='edits_no'></span></label></div>
 </div>
-</div>
 
-<div class="form-group row">
-<label class="col-sm-2 form-control-label"><span tt='edits'></span>: <span tt='edit_anons'></span></label>
-<div class="col-sm-4">
+<label class="col-sm-1 form-control-label" style='font-weight: bold'> <span tt='edit_anons'></span></label>
+<div class="col-sm-2">
 <div class="radio-inline"><label><input type="radio" name="edits[anons]" value="both"> <span tt='edits_both'></span></label></div>
 <div class="radio-inline"><label><input type="radio" name="edits[anons]" value="yes"> <span tt='edits_yes'></span></label></div>
 <div class="radio-inline"><label><input type="radio" name="edits[anons]" value="no"> <span tt='edits_no'></span></label></div>
 </div>
-</div>
 
-<div class="form-group row">
-<label class="col-sm-2 form-control-label"><span tt='edits'></span>: <span tt='edit_flagged'></span></label>
-<div class="col-sm-4">
+<label class="col-sm-1 form-control-label" style='font-weight: bold'><span tt='edit_flagged'></span></label>
+<div class="col-sm-2">
 <div class="radio-inline"><label><input type="radio" name="edits[flagged]" value="both"> <span tt='edits_both'></span></label></div>
 <div class="radio-inline"><label><input type="radio" name="edits[flagged]" value="yes"> <span tt='edits_yes'></span></label></div>
 <div class="radio-inline"><label><input type="radio" name="edits[flagged]" value="no"> <span tt='edits_no'></span></label></div>
