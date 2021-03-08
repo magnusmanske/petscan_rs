@@ -28,6 +28,7 @@ tokio-util = "*"
 hyper = { version = "^0.14", features = ["full"] }
 qstring = "*"
 futures = "*"
+kml = "0.3.0"
 
 [profile.release]
 lto = "fat"

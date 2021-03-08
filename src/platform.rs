@@ -32,6 +32,7 @@ pub enum ContentType {
     JSONP,
     CSV,
     TSV,
+    KML,
 }
 
 impl ContentType {
@@ -43,6 +44,7 @@ impl ContentType {
             Self::JSONP => "application/javascript",
             Self::CSV => "text/csv; charset=utf-8",
             Self::TSV => "text/tab-separated-values; charset=utf-8",
+            Self::KML => "application/vnd.google-earth.kml+xml",
         }
     }
 }
@@ -634,7 +636,7 @@ impl Platform {
 
     async fn process_pages(&self, result: &PageList) -> Result<(), String> {
         let is_wikidata = result.wiki()==Ok(Some("wikidatawiki".to_string())) ;
-        let add_coordinates = self.has_param("add_coordinates");
+        let add_coordinates = self.has_param("add_coordinates")||self.get_param_blank("format")=="kml";
         let add_image = self.has_param("add_image");
         let add_defaultsort = self.has_param("add_defaultsort");
         let add_disambiguation = self.has_param("add_disambiguation");
@@ -1480,6 +1482,7 @@ impl Platform {
             "tsv" => RenderTSV::new("\t").response(&self, &wiki, pages).await,
             "json" => RenderJSON::new().response(&self, &wiki, pages).await,
             "pagepile" => RenderPagePile::new().response(&self, &wiki, pages).await,
+            "kml" => RenderKML::new().response(&self, &wiki, pages).await,
             _ => RenderHTML::new().response(&self, &wiki, pages).await,
         }
     }
