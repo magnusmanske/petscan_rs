@@ -635,9 +635,10 @@ impl Platform {
     }
 
     async fn process_pages(&self, result: &PageList) -> Result<(), String> {
+        let is_kml = self.get_param_blank("format")=="kml" ;
         let is_wikidata = result.wiki()==Ok(Some("wikidatawiki".to_string())) ;
-        let add_coordinates = self.has_param("add_coordinates")||self.get_param_blank("format")=="kml";
-        let add_image = self.has_param("add_image");
+        let add_coordinates = self.has_param("add_coordinates")||is_kml;
+        let add_image = self.has_param("add_image") || is_kml ;
         let add_defaultsort = self.has_param("add_defaultsort");
         let add_disambiguation = self.has_param("add_disambiguation");
         let add_incoming_links = self.get_param_blank("sortby") == "incoming_links";

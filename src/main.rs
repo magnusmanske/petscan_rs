@@ -210,6 +210,7 @@ async fn process_from_query(query:&str,app_state:Arc<AppState>) -> Result<Respon
     let ret = process_form(query,app_state).await;
     let response = Response::builder()
         .header(header::CONTENT_TYPE, ret.content_type.as_str())
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(Body::from(ret.s))
         .unwrap();
     Ok(response)

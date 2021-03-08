@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use wikibase::mediawiki::api::Api;
 use wikibase::mediawiki::title::Title;
-//use kml::{Kml, KmlWriter, types::{AltitudeMode, Coord, Point}};
 
 static MAX_HTML_RESULTS: usize = 10000;
 static AUTOLIST_WIKIDATA: &str = "www.wikidata.org";
@@ -58,7 +57,7 @@ impl RenderParams {
             thumbnails_in_wiki_output: platform.has_param("thumbnails_in_wiki_output"),
             wdi: platform.get_param_default("wikidata_item", "no"),
             add_coordinates: platform.has_param("add_coordinates"),
-            add_image: platform.has_param("add_image"),
+            add_image: platform.has_param("add_image")||platform.get_param_blank("format")=="kml",
             add_defaultsort: platform.has_param("add_defaultsort"),
             add_disambiguation: platform.has_param("add_disambiguation"),
             add_incoming_links: platform.get_param_blank("sortby") == "incoming_links",
@@ -1382,128 +1381,65 @@ pub struct RenderKML {}
 impl Render for RenderKML {
     async fn response(
         &self,
-        _platform: &Platform,
-        _wiki: &str,
+        platform: &Platform,
+        wiki: &str,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
+        let params = RenderParams::new(platform, wiki).await?;
+        let server = match params.state.get_server_url_for_wiki(wiki) {
+            Ok(url) => url,
+            Err(_e) => String::new(),
+        };
         let mut kml = String::new();
-
         kml += r#"<?xml version="1.0" encoding="UTF-8"?>
-        <kml xmlns="http://www.opengis.net/kml/2.2">
-        <Document>
-        <Style id="placemark1">
-  <IconStyle>
-    <Icon>
-      <href>https://maps.google.com/mapfiles/kml/pushpin/ylw-pushpin.png
-      </href>
-    </Icon>
-  </IconStyle>
-  <BalloonStyle>
-    <text>$[video]</text>
-  </BalloonStyle>
-</Style>
-"# ;
+        <kml xmlns="http://www.opengis.net/kml/2.2"><Document>"# ;
 
         for entry in entries {
-            match &entry.get_coordinates() {
-                Some(coords) => {
-                    let desc = match entry.get_wikidata_description() {
+            if let Some(coords) = &entry.get_coordinates() {
+                let title = entry.title();
+                let label = if let "wikidatawiki" = wiki {
+                    match entry.get_wikidata_label() {
                         Some(s) => s,
-                        None => String::new()
-                    } ;
-                    //let p = Kml::Point(Point::new(coords.lat, coords.lon, None));
-                    kml += r#"<Placemark>"# ;
-                    //kml += r#"<styleUrl>#placemark1</styleUrl>"# ;
-                    kml += format!("<name>{}</name>",entry.title().pretty()).as_str() ;
+                        None => title.pretty().to_string()
+                    }
+                } else {
+                    title.pretty().to_string()
+                } ;
+                kml += r#"<Placemark>"# ;
+                kml += format!("<name>{}</name>",label).as_str() ;
+                if let Some(desc) = entry.get_wikidata_description() {
                     kml += format!("<description>{}</description>",desc).as_str() ;
-                    kml += format!("<Point><coordinates>{}, {}, 0.</coordinates></Point>",coords.lon,coords.lat).as_str();
-                    kml += r#"</Placemark>"# ;
                 }
-                None => {}
+
+                kml += "<ExtendedData>";
+                if let Some(q) = entry.get_wikidata_item() {
+                    kml += format!("<Data name=\"q\"><value>{}</value></Data>",q).as_str() ;
+                }
+
+                let full_title = match title.full_with_underscores(&params.api) {
+                    Some(ft) => ft,
+                    None => format!("{:?}", title),
+                };
+                let url = format!("{}/wiki/{}",&server,&self.escape_attribute(&full_title));
+                kml += format!("<Data name=\"url\"><value>{}</value></Data>",url).as_str();
+
+                if let Some(img) = entry.get_page_image() {
+                    let file = self.escape_attribute(&img);
+                    let src = format!(
+                        "{}/wiki/Special:Redirect/file/{}?width={}",
+                        &server, &file, 120
+                    );
+                    kml += format!("<Data name=\"image\"><value>{}</value></Data>",src).as_str();
+                }
+
+                kml += "</ExtendedData>";
+
+                kml += format!("<Point><coordinates>{}, {}, 0.</coordinates></Point>",coords.lon,coords.lat).as_str();
+                kml += r#"</Placemark>"# ;
             }
         }
 
         kml += r#"</Document></kml>"# ;
-
-        /*
-        let mut buf = Vec::new();
-        let mut writer = KmlWriter::from_writer(&mut buf);
-        for entry in entries {
-            match &entry.get_coordinates() {
-                Some(coords) => {
-                    let p = Kml::Point(Point::new(coords.lat, coords.lon, None));
-                    writer.write(&p).unwrap();
-                            //format!("{}/{}", coords.lat, coords.lon),
-                }
-                None => {}
-            }
-        }
-        println!("{:?}",&buf);
-        */
-        /*
-        let mut params = RenderParams::new(platform, wiki).await?;
-        let mut rows: Vec<String> = vec![];
-        rows.push("== ".to_string() + &platform.combination().to_string() + " ==");
-
-        let petscan_query_url =
-            "https://petscan.wmflabs.org/?".to_string() + &platform.form_parameters().to_string();
-        let petscan_query_url_no_doit = "https://petscan.wmflabs.org/?".to_string()
-            + &platform.form_parameters().to_string_no_doit();
-
-        let utc: DateTime<Utc> = Utc::now();
-        rows.push(format!("Last updated on {}.", utc.to_rfc2822()));
-
-        rows.push(format!(
-            "[{} Regenerate this table] or [{} edit the query].\n",
-            &petscan_query_url, &petscan_query_url_no_doit
-        ));
-        rows.push("{| border=1 class='wikitable'".to_string());
-        let mut header: Vec<(&str, &str)> = vec![
-            ("title", "Title"),
-            ("page_id", "Page ID"),
-            ("namespace", "Namespace"),
-            ("size", "Size (bytes)"),
-            ("timestamp", "Last change"),
-        ];
-        if params.show_wikidata_item {
-            header.push(("wikidata_item", "Wikidata"));
-        }
-        if params.file_data {
-            self.file_data_keys()
-                .iter()
-                .for_each(|k| header.push((k, k)));
-        }
-        if params.do_output_redlinks {
-            header = vec![("redlink_count", "Wanted"), ("title", "Title")];
-        }
-        let mut header: Vec<(String, String)> = header
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        for col in self.get_initial_columns(&params) {
-            if !header.iter().any(|(k, _)| col == k) && col != "number" {
-                header.push((col.to_string(), col.to_string()));
-            }
-        }
-        rows.push(
-            "!".to_string()
-                + &header
-                    .iter()
-                    .map(|(_, v)| v.clone())
-                    .collect::<Vec<String>>()
-                    .join(" !! "),
-        );
-
-        for entry in entries {
-            params.row_number += 1;
-            rows.push("|-".to_string());
-            let row = self.row_from_entry(&entry, &header, &params, &platform);
-            let row = "| ".to_string() + &row.join(" || ");
-            rows.push(row);
-        }
-
-        rows.push("|}".to_string());
-        */
 
         Ok(MyResponse {
             s: kml,
@@ -1541,5 +1477,13 @@ impl Render for RenderKML {
 impl RenderKML {
     pub fn new() -> Box<Self> {
         Box::new(Self {})
+    }
+
+    fn escape_attribute(&self, s: &str) -> String {
+        FormParameters::percent_encode(s)
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
     }
 }
