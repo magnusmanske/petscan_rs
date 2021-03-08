@@ -1409,13 +1409,9 @@ impl Render for RenderKML {
                 Some(coords) => {
                     //let p = Kml::Point(Point::new(coords.lat, coords.lon, None));
                     kml += r#"<Placemark>"# ;
-                    kml += r#"<styleUrl>#placemark1</styleUrl>"# ;
-                    kml += r#"<Name>"# ;
-                    kml += "DUMMy";
-                    kml += r#"</Name>"# ;
-                    kml += r#"<Description>"# ;
-                    kml += "blah" ;
-                    kml += r#"</Description>"# ;
+                    //kml += r#"<styleUrl>#placemark1</styleUrl>"# ;
+                    kml += format!("<name>{}</name>","Dummy").as_str() ;
+                    kml += format!("<description>{}</description>","blah").as_str() ;
                     kml += format!("<Point><coordinates>{}, {}, 0.</coordinates></Point>",coords.lat,coords.lon).as_str();
                     kml += r#"</Placemark>"# ;
                 }
