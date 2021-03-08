@@ -1406,14 +1406,14 @@ impl Render for RenderKML {
                     title.pretty().to_string()
                 } ;
                 kml += r#"<Placemark>"# ;
-                kml += format!("<name>{}</name>",label).as_str() ;
+                kml += format!("<name>{}</name>",self.escape_xml(&label)).as_str() ;
                 if let Some(desc) = entry.get_wikidata_description() {
-                    kml += format!("<description>{}</description>",desc).as_str() ;
+                    kml += format!("<description>{}</description>",self.escape_xml(&desc)).as_str() ;
                 }
 
                 kml += "<ExtendedData>";
                 if let Some(q) = entry.get_wikidata_item() {
-                    kml += format!("<Data name=\"q\"><value>{}</value></Data>",q).as_str() ;
+                    kml += format!("<Data name=\"q\"><value>{}</value></Data>",self.escape_xml(&q)).as_str() ;
                 }
 
                 let full_title = match title.full_with_underscores(&params.api) {
@@ -1421,7 +1421,7 @@ impl Render for RenderKML {
                     None => format!("{:?}", title),
                 };
                 let url = format!("{}/wiki/{}",&server,&self.escape_attribute(&full_title));
-                kml += format!("<Data name=\"url\"><value>{}</value></Data>",url).as_str();
+                kml += format!("<Data name=\"url\"><value>{}</value></Data>",self.escape_xml(&url)).as_str();
 
                 if let Some(img) = entry.get_page_image() {
                     let file = self.escape_attribute(&img);
@@ -1429,7 +1429,7 @@ impl Render for RenderKML {
                         "{}/wiki/Special:Redirect/file/{}?width={}",
                         &server, &file, 120
                     );
-                    kml += format!("<Data name=\"image\"><value>{}</value></Data>",src).as_str();
+                    kml += format!("<Data name=\"image\"><value>{}</value></Data>",self.escape_xml(&src)).as_str();
                 }
 
                 kml += "</ExtendedData>";
@@ -1477,6 +1477,15 @@ impl Render for RenderKML {
 impl RenderKML {
     pub fn new() -> Box<Self> {
         Box::new(Self {})
+    }
+
+    fn escape_xml(&self, s:&str) -> String{
+        s
+            .replace("<","&lt;")
+            .replace(">","&gt;")
+            .replace('"',"&quot;")
+            .replace("'","&apos;")
+            .replace("&","&amp;")
     }
 
     fn escape_attribute(&self, s: &str) -> String {
