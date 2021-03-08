@@ -1407,12 +1407,16 @@ impl Render for RenderKML {
         for entry in entries {
             match &entry.get_coordinates() {
                 Some(coords) => {
+                    let desc = match entry.get_wikidata_description() {
+                        Some(s) => s,
+                        None => String::new()
+                    } ;
                     //let p = Kml::Point(Point::new(coords.lat, coords.lon, None));
                     kml += r#"<Placemark>"# ;
                     //kml += r#"<styleUrl>#placemark1</styleUrl>"# ;
-                    kml += format!("<name>{}</name>","Dummy").as_str() ;
-                    kml += format!("<description>{}</description>","blah").as_str() ;
-                    kml += format!("<Point><coordinates>{}, {}, 0.</coordinates></Point>",coords.lat,coords.lon).as_str();
+                    kml += format!("<name>{}</name>",entry.title().pretty()).as_str() ;
+                    kml += format!("<description>{}</description>",desc).as_str() ;
+                    kml += format!("<Point><coordinates>{}, {}, 0.</coordinates></Point>",coords.lon,coords.lat).as_str();
                     kml += r#"</Placemark>"# ;
                 }
                 None => {}
