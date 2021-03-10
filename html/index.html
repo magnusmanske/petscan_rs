@@ -9,7 +9,8 @@
 
 <!--<link rel="icon" type="image/png" href="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c6/PET-image.jpg/32px-PET-image.jpg">-->
 
-<link rel="stylesheet" href="https://tools-static.wmflabs.org/cdnjs/ajax/libs/twitter-bootstrap/4.0.0-beta.2/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://tools-static.wmflabs.org/cdnjs/ajax/libs/bootstrap-v4-rtl/4.5.2-1/css/bootstrap.min.css">
+
 <!--<link rel="stylesheet" href="//tools-static.wmflabs.org/cdnjs/ajax/libs/tether/1.1.1/css/tether.min.css">-->
 <link rel="stylesheet" href="https://tools-static.wmflabs.org/magnustools/resources/html/wikimedia.css">
 
@@ -17,7 +18,7 @@
 .radio-inline {
 	display:inline-block !important;
 }
-textarea, input[type=text], input[type=number], div.input-group-addon {
+textarea, input[type=text], input[type=number], div.input-group-prepend {
 	box-shadow:3px 3px 2px #DDD;
 }
 .smaller {
@@ -110,7 +111,7 @@ function receiveEnglishNamespaceData ( j ) {
 <!--<script src='https://meta.wikimedia.org/w/api.php?action=parse&prop=wikitext&page=PetScan/Interface&format=json&callback=receiveRawInterfaceText'></script>-->
 <script src='https://en.wikipedia.org/w/api.php?action=query&meta=siteinfo&siprop=namespaces&format=json&callback=receiveEnglishNamespaceData'></script>
 <script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
-<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/twitter-bootstrap/4.0.0-beta.2/js/bootstrap.bundle.min.js"></script>
+<script src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/bootstrap-v4-rtl/4.5.2-1/js/bootstrap.bundle.min.js"></script>
 <script src="https://tools-static.wmflabs.org/tooltranslate/tt.js"></script>
 <script src='main.js'></script>
 </head>
@@ -217,25 +218,35 @@ function receiveEnglishNamespaceData ( j ) {
 <div class="form-group row">
 <label class="col-sm-2 form-control-label"><span tt='size'></span></label>
 <div class="col-sm-5">
-<div class="input-group"><div class="input-group-addon" tt="larger"></div><input class="form-control" tt_placeholder="size_explanation" name="larger" value="" type="text"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="larger"></div></div>
+	<input class="form-control" tt_placeholder="size_explanation" name="larger" value="" type="text"></div>
 </div><div class="col-sm-5">
-<div class="input-group"><div class="input-group-addon" tt="smaller"></div><input class="form-control" tt_placeholder="size_explanation" name="smaller" value="" type="text"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="smaller"></div></div>
+	<input class="form-control" tt_placeholder="size_explanation" name="smaller" value="" type="text"></div>
 </div>
 </div>
 
 <div class="form-group row">
 <label class="col-sm-2 form-control-label"></label>
 <div class="col-sm-7">
-<div class="input-group"><div class="input-group-addon" tt="since_rev0"></div><input class="form-control" tt_placeholder="since_rev0_explanation" name="since_rev0" value="" type="text"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="since_rev0"></div></div>
+	<input class="form-control" tt_placeholder="since_rev0_explanation" name="since_rev0" value="" type="text"></div>
 </div>
 </div>
 
 <div class="form-group row">
 <label class="col-sm-2 form-control-label"><span tt='link_number'></span></label>
 <div class="col-sm-5">
-<div class="input-group"><div class="input-group-addon" tt="minlinks"></div><input class="form-control" name="minlinks" placeholder="#" value="" type="text"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="minlinks"></div></div>
+	<input class="form-control" name="minlinks" placeholder="#" value="" type="text"></div>
 </div><div class="col-sm-5">
-<div class="input-group"><div class="input-group-addon" tt="maxlinks"></div><input class="form-control" name="maxlinks" placeholder="#" value="" type="text"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="maxlinks"></div></div>
+	<input class="form-control" name="maxlinks" placeholder="#" value="" type="text"></div>
 </div>
 </div>
 
@@ -244,14 +255,20 @@ function receiveEnglishNamespaceData ( j ) {
 <div class="form-group row">
 <label class="col-sm-2 form-control-label"><span tt='edits'></span></label>
 <div class="col-sm-5">
-<div class="input-group"><div class="input-group-addon" tt="before"></div><input class="form-control" tt_placeholder="date_format" name="before" value="" type="text"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="before"></div></div>
+	<input class="form-control" tt_placeholder="date_format" name="before" value="" type="text"></div>
 </div><div class="col-sm-5">
-<div class="input-group"><div class="input-group-addon" tt="after"></div><input class="form-control" tt_placeholder="date_format" name="after" value="" type="text"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="after"></div></div>
+	<input class="form-control" tt_placeholder="date_format" name="after" value="" type="text"></div>
 </div></div>
 <div class="form-group row">
 <div class="col-sm-2">
 </div><div class="col-sm-5">
-<div class="input-group"><div class="input-group-addon" tt="max_age"></div><input class="form-control" tt_placeholder="max_age_format" name="max_age" value="" type="text"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="max_age"></div></div>
+	<input class="form-control" tt_placeholder="max_age_format" name="max_age" value="" type="text"></div>
 </div><div class="col-sm-5">
 <label><input type='checkbox' name='only_new' /> <span tt='only_new'></span></label>
 </div>
@@ -398,7 +415,9 @@ function receiveEnglishNamespaceData ( j ) {
 <div class="form-group row">
 <div class="col-sm-2"></div>
 <div class="col-sm-4">
-<div class="input-group"><div class="input-group-addon" tt="manual_list_wiki"></div><input class="form-control" tt_placeholder="manual_list_wiki_note" name="manual_list_wiki" value="" type="text"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="manual_list_wiki"></div></div>
+	<input class="form-control" tt_placeholder="manual_list_wiki_note" name="manual_list_wiki" value="" type="text"></div>
 </div>
 </div>
 
@@ -543,11 +562,15 @@ function receiveEnglishNamespaceData ( j ) {
 <div class="form-group row">
 <label class="col-sm-2 form-control-label"></label>
 <div class="col-sm-4">
-<div class="input-group"><div class="input-group-addon" tt="min_sitelink_count"></div><input class="form-control" name="min_sitelink_count" value="" type="number"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="min_sitelink_count"></div></div>
+	<input class="form-control" name="min_sitelink_count" value="" type="number"></div>
 </div>
 <div class="col-sm-1"></div>
 <div class="col-sm-4">
-<div class="input-group"><div class="input-group-addon" tt="max_sitelink_count"></div><input class="form-control" name="max_sitelink_count" value="" type="number"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="max_sitelink_count"></div></div>
+	<input class="form-control" name="max_sitelink_count" value="" type="number"></div>
 </div>
 </div>
 
@@ -735,7 +758,9 @@ function receiveEnglishNamespaceData ( j ) {
 </div>
 <div class="col-sm-2"></div>
 <div class="col-sm-4">
-<div class="input-group"><div class="input-group-addon" tt="min_redlink_count"></div><input class="form-control" name="min_redlink_count" value="" type="number"></div>
+<div class="input-group">
+	<div class="input-group-prepend"><div class="input-group-text" tt="min_redlink_count"></div></div>
+	<input class="form-control" name="min_redlink_count" value="" type="number"></div>
 </div>
 </div>
 

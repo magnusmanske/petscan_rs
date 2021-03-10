@@ -108,7 +108,12 @@ impl AppState {
             direction,
             interface_language.replace("'", "")
         );
-        self.main_page.replace("<html>", &h)
+        let ret = self.main_page.replace("<html>", &h) ;
+        if self.is_language_rtl(&interface_language) {
+            ret.replace("bootstrap.min.css","bootstrap-rtl.min.css")
+        } else {
+            ret
+        }
     }
 
     fn get_db_server_group(&self) -> &str {
