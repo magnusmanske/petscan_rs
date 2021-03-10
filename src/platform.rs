@@ -1428,6 +1428,7 @@ impl Platform {
             .replace("_", "-");
         let project = self.get_param_default("project", "wikipedia");
         self.get_wiki_for_language_project(&language, &project)
+        .and_then(|wiki|Some(self.state.fix_wiki_name(&wiki)))
     }
 
     pub fn get_wiki_for_language_project(

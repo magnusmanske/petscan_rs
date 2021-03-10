@@ -120,15 +120,18 @@ impl AppState {
         self.config["dbservergroup"].as_str().unwrap_or(".web.db.svc.eqiad.wmflabs")
     }
 
+    pub fn fix_wiki_name(&self,wiki: &str) -> String {
+        match wiki {
+            "be-taraskwiki" | "be-x-oldwiki" | "be_taraskwiki" | "be_x_oldwiki" => "be_x_oldwiki",
+            other => other,
+        }.to_string()
+    }
+
     /// Returns the server and database name for the wiki, as a tuple
     pub fn db_host_and_schema_for_wiki(&self, wiki: &str) -> Result<(String, String), String> {
         // TESTING
         // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N
-        let wiki = match wiki {
-            "be-taraskwiki" | "be-x-oldwiki" | "be_taraskwiki" | "be_x_oldwiki" => "be_x_oldwiki",
-            other => other,
-        };
-
+        let wiki = self.fix_wiki_name(wiki);
         let host = match self.config["host"].as_str() {
             Some("127.0.0.1") => "127.0.0.1".to_string(),
             Some(_host) => wiki.to_owned() + self.get_db_server_group(),
