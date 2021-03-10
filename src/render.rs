@@ -380,10 +380,17 @@ impl Render for RenderWiki {
     }
 
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
-        if entry.title().namespace_id() == 6 && params.thumbnails_in_wiki_output {
-            match entry.title().full_pretty(&params.api) {
-                Some(file) => "[[".to_string() + &file + "|120px|]]",
-                None => format!("[[File:{}|120px|]]",entry.title().pretty()),
+        if entry.title().namespace_id() == 6  {
+            if params.thumbnails_in_wiki_output {
+                match entry.title().full_pretty(&params.api) {
+                    Some(file) => format!("[[{}|120px|]]",&file),
+                    None => format!("[[File:{}|120px|]]",entry.title().pretty()),
+                }
+            } else {
+                match entry.title().full_pretty(&params.api) {
+                    Some(file) => format!("[[:{}|]]",&file),
+                    None => format!("[[:File:{}|]]",entry.title().pretty()),
+                }
             }
         } else {
             self.render_wikilink(&entry, &params)
