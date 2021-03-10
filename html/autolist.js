@@ -399,7 +399,9 @@ function AutoList ( callback ) {
 					qs = 'CREATE' ;
 					qs += "||LAST|S" + output_wiki + "|\"" + cmd.page + "\"" ;
 					let m = output_wiki.match ( /^([a-z-]+)wiki$/ ) ;
-					if ( m !== null ) qs += "||LAST|L" + m[1] + "|\"" + $.trim(cmd.page.replace(/_/g,' ').replace(/\s*\(.+?\)\s*/,' ')) + '"' ;
+					let lang = m[1] ;
+					if ( lang == 'commons' ) lang = 'en' ;
+					if ( m !== null ) qs += "||LAST|L" + lang + "|\"" + $.trim(cmd.page.replace(/_/g,' ').replace(/\s*\(.+?\)\s*/,' ')) + '"' ;
 				} else {
 					if ( cmd.mode == 'delete' ) qs = '-' ;
 					if ( /^create_item_/.test(cmd.q) ) qs += 'LAST' ;
@@ -505,11 +507,7 @@ function AutoList ( callback ) {
 		me.mode = $('#autolist_box').attr('mode') ;
 		me.commands_todo = [] ;
 		me.addCheckLinks () ;
-		me.widar = new WiDaR ( function () {
-			me.widar.tool_hashtag = 'petscan' ;
-			me.initializeAutoListBox() ;
-			if ( typeof callback != 'undefined' ) callback() ;
-		} ) ;
+		me.initializeAutoListBox() ;
 	});
 }
 
