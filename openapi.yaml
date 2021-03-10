@@ -315,6 +315,7 @@ paths:
               - uploaddate
               - sitelinks
               - random
+              - defaultsort
         - name: sortorder
           in: query
           schema:
