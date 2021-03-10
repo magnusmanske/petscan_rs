@@ -639,7 +639,7 @@ impl Platform {
         let is_wikidata = result.wiki()==Ok(Some("wikidatawiki".to_string())) ;
         let add_coordinates = self.has_param("add_coordinates")||is_kml;
         let add_image = self.has_param("add_image") || is_kml ;
-        let add_defaultsort = self.has_param("add_defaultsort");
+        let add_defaultsort = self.has_param("add_defaultsort")||self.get_param_blank("sortby")=="defaultsort";
         let add_disambiguation = self.has_param("add_disambiguation");
         let add_incoming_links = self.get_param_blank("sortby") == "incoming_links";
         let add_sitelinks = self.get_param_blank("sortby") == "sitelinks" && !result.has_sitelink_counts()?;
@@ -2158,17 +2158,21 @@ mod tests {
         check_results_for_psid(15960820, "frwiki", vec![Title::new("Magnus Manske", 0)]).await;
     }
 
-    #[tokio::test]
-    async fn test_trim_extended_whitespace() {
-        let platform = run_psid(15015735).await; // The categories contain a left-to-right mark
-        let result = platform.result.unwrap();
-        let entries = result
+    fn entries_from_result(result: PageList) -> Vec<PageListEntry> {
+        result
             .entries()
             .read()
             .unwrap()
             .iter()
             .cloned()
-            .collect::<Vec<PageListEntry>>();
+            .collect::<Vec<PageListEntry>>()
+    }
+
+    #[tokio::test]
+    async fn test_trim_extended_whitespace() {
+        let platform = run_psid(15015735).await; // The categories contain a left-to-right mark
+        let result = platform.result.unwrap();
+        let entries = entries_from_result(result);
         assert!(entries.len() > 20);
     }
 
@@ -2176,16 +2180,19 @@ mod tests {
     async fn test_template_talk_pages() {
         let platform = run_psid(15059382).await;
         let result = platform.result.unwrap();
-        let entries = result
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+        let entries = entries_from_result(result);
         assert!(!entries.is_empty());
         for entry in entries {
             assert_eq!(entry.title().namespace_id(), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn test_sort_by_defaultsort() {
+        check_results_for_psid(
+            18604332,
+            "enwiki",
+            vec![Title::new("Earth", 0),Title::new("Ayn Rand", 0)],
+        ).await;
     }
 }

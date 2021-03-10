@@ -26,6 +26,7 @@ pub enum PageListSort {
     Date(bool),
     RedlinksCount(bool),
     IncomingLinks(bool),
+    DefaultSort(bool),
     FileSize(bool),
     UploadDate(bool),
     Sitelinks(bool),
@@ -41,6 +42,7 @@ impl PageListSort {
             "date" => Self::Date(descending),
             "redlinks" => Self::RedlinksCount(descending),
             "incoming_links" => Self::IncomingLinks(descending),
+            "defaultsort" => Self::DefaultSort(descending),
             "filesize" => Self::FileSize(descending),
             "uploaddate" => Self::UploadDate(descending),
             "sitelinks" => Self::Sitelinks(descending),
@@ -352,6 +354,7 @@ impl PageListEntry {
             PageListSort::NsTitle(d) => self.compare_by_ns_title(other, *d),
             PageListSort::Size(d) => self.compare_by_size(other, *d),
             PageListSort::IncomingLinks(d) => self.compare_by_incoming(other, *d),
+            PageListSort::DefaultSort(d) => self.compare_by_defaultsort(other, *d, is_wikidata),
             PageListSort::Date(d) => self.compare_by_date(other, *d),
             PageListSort::UploadDate(d) => self.compare_by_upload_date(other, *d),
             PageListSort::FileSize(d) => self.compare_by_file_size(other, *d),
@@ -399,6 +402,30 @@ impl PageListEntry {
         descending: bool,
     ) -> Ordering {
         self.compare_by_opt(&self.incoming_links, &other.incoming_links, descending)
+    }
+
+    fn get_defaultsort_with_fallback(&self, is_wikidata: bool) -> Option<String> {
+        match &self.defaultsort {
+            Some(x) => Some(x.to_string()),
+            None => {
+                if is_wikidata {
+                    self.get_wikidata_label()
+                } else {
+                    Some(self.title.pretty().to_owned())
+                }
+            }
+        }
+    }
+
+    fn compare_by_defaultsort(
+        self: &PageListEntry,
+        other: &PageListEntry,
+        descending: bool,
+        is_wikidata: bool,
+    ) -> Ordering {
+        let ds_mine = self.get_defaultsort_with_fallback(is_wikidata) ;
+        let ds_other = other.get_defaultsort_with_fallback(is_wikidata) ;
+        self.compare_by_opt(&ds_mine, &ds_other, descending)
     }
 
     fn compare_by_sitelinks(
