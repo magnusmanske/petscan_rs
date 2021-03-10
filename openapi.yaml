@@ -293,6 +293,7 @@ paths:
               - wiki
               - json
               - pagepile
+              - plain
         - name: output_compatability
           in: query
           schema:

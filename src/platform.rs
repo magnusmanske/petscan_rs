@@ -1484,6 +1484,7 @@ impl Platform {
             "json" => RenderJSON::new().response(&self, &wiki, pages).await,
             "pagepile" => RenderPagePile::new().response(&self, &wiki, pages).await,
             "kml" => RenderKML::new().response(&self, &wiki, pages).await,
+            "plain" => RenderPlainText::new().response(&self, &wiki, pages).await,
             _ => RenderHTML::new().response(&self, &wiki, pages).await,
         }
     }
