@@ -1235,6 +1235,52 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         Ok(())
     }
 
+    async fn search_entry(&self, api: &wikibase::mediawiki::api::Api, search: &str, page_id: u32 ) -> Result<bool,String> {
+        let params = [
+            (format!("action"), format!("query")),
+            (format!("list"), format!("search")),
+            (format!("srnamespace"), format!("*")),
+            (format!("srlimit"), format!("1")),
+            (format!("srsearch"), format!("pageid:{} {}", page_id, search))
+        ].iter().cloned().collect() ;
+        let result = match api.get_query_api_json(&params).await {
+            Ok(result) => result,
+            Err(e) => return Err(format!("{:?}", e)),
+        };
+        let titles = wikibase::mediawiki::api::Api::result_array_to_titles(&result);
+        Ok(!titles.is_empty())
+    }
+
+    pub async fn search_filter(&self, platform: &Platform, search: &str) -> Result<(), String> {
+        let wiki = match self.wiki()? {
+            Some(wiki) => wiki,
+            None => {
+                return Ok(())
+            }
+        };
+        let page_ids : Vec<u32> = self
+            .entries
+            .read()
+            .map_err(|e| format!("{:?}", e))?
+            .iter()
+            .filter_map(|entry|entry.page_id)
+            .collect();
+        let api = platform.state().get_api_for_wiki(wiki).await?;
+        let mut retain_page_ids : Vec<u32> = vec![];
+        for page_id in page_ids {
+            if self.search_entry(&api,search,page_id).await? {
+                retain_page_ids.push(page_id);
+            }
+        }
+        self.retain_entries(&|entry: &PageListEntry|{
+            match entry.page_id {
+                Some(page_id) => retain_page_ids.contains(&page_id),
+                None => false
+            }
+        })?;
+        Ok(())
+    }
+
     pub fn is_wikidata(&self) -> bool {
         self.wiki().unwrap_or(None) == Some("wikidatawiki".to_string())
     }

@@ -369,7 +369,8 @@ impl Platform {
         );
         result.load_missing_metadata(Some(wikidata_label_language), &self).await?;
         Platform::profile("after load_missing_metadata", Some(result.len()?));
-        if let Some(regexp) = self.get_param("regexp_filter") { result.regexp_filter(&regexp)? }
+        if let Some(regexp) = self.get_param("regexp_filter") { result.regexp_filter(&regexp)?; }
+        if let Some(search) = self.get_param("search_filter") { result.search_filter(self,&search).await?; }
         self.process_redlinks(&result).await?;
         Platform::profile("after process_redlinks", Some(result.len()?));
         self.process_creator(&result).await?;
