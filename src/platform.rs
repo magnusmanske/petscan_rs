@@ -1503,6 +1503,10 @@ impl Platform {
         }
     }
 
+    pub fn is_param_blank(&self, param: &str) -> bool {
+        self.get_param_blank(param).trim().is_empty()
+    }
+
     pub fn get_param_blank(&self, param: &str) -> String {
         self.get_param(param).unwrap_or_default()
     }

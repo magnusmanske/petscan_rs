@@ -330,6 +330,8 @@ impl DataSource for SourceSearch {
         platform.has_param("search_query")
             && platform.has_param("search_wiki")
             && platform.has_param("search_max_results")
+            && !platform.is_param_blank("search_query")
+            && !platform.is_param_blank("search_wiki")
     }
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
