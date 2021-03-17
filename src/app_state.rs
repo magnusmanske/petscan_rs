@@ -123,10 +123,8 @@ impl AppState {
     pub fn fix_wiki_name(&self,wiki: &str) -> String {
         match wiki {
             "be-taraskwiki" | "be-x-oldwiki" | "be_taraskwiki" | "be_x_oldwiki" => "be_x_oldwiki",
-            "zh-yuewiki" => "zh_yuewiki",
-            "zh-classicalwiki" => "zh_classicalwiki",
             other => other,
-        }.to_string()
+        }.to_string().replace('-',"_")
     }
 
     /// Returns the server and database name for the wiki, as a tuple
