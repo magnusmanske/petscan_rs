@@ -1252,6 +1252,10 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
     }
 
     pub async fn search_filter(&self, platform: &Platform, search: &str) -> Result<(), String> {
+        let max_page_number : usize = 10000 ;
+        if self.len()? > max_page_number {
+            return Err(format!("Too many pages ({}), maximum is {}",self.len()?,&max_page_number));
+        }
         let wiki = match self.wiki()? {
             Some(wiki) => wiki,
             None => {
@@ -1266,12 +1270,32 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             .filter_map(|entry|entry.page_id)
             .collect();
         let api = platform.state().get_api_for_wiki(wiki).await?;
-        let mut retain_page_ids : Vec<u32> = vec![];
-        for page_id in page_ids {
-            if self.search_entry(&api,search,page_id).await? {
-                retain_page_ids.push(page_id);
-            }
+        let mut futures = vec![] ;
+        page_ids.iter().for_each(|page_id| {
+            let fut = self.search_entry(&api,search,page_id.to_owned()) ;
+            futures.push(fut);
+        });
+        println!("Starting {} searches",futures.len());
+        let results = join_all(futures).await;
+        println!("Searches finished!");
+
+        let mut searches_failed = false;
+        let retain_page_ids : Vec<u32> = page_ids
+            .iter()
+            .zip(results.iter())
+            .filter_map(|(page_id,result)|match result {
+                Ok(true) => Some(page_id.to_owned()),
+                Err(_) => {
+                    searches_failed = true ;
+                    None
+                }
+                _ => None
+            })
+            .collect();
+        if searches_failed {
+            println!("Filter searches have failed");
         }
+
         self.retain_entries(&|entry: &PageListEntry|{
             match entry.page_id {
                 Some(page_id) => retain_page_ids.contains(&page_id),
