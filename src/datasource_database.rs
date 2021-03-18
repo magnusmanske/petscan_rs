@@ -977,13 +977,18 @@ impl SourceDatabase {
         }
 
         // Negative categories
+        let negative_categories_use_not_exists = false ;
         if !self.cat_neg.is_empty() {
-            self.cat_neg.iter().for_each(|cats| {
-                sql.0 +=
-                    " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
-                self.sql_in(cats, &mut sql);
-                sql.0 += ")";
-            });
+            let mut cats : Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
+            cats.sort_unstable();
+            cats.dedup();
+            if negative_categories_use_not_exists {
+                sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks WHERE cl_from=p.page_id AND cl_to";
+            } else {
+                sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
+            }
+            self.sql_in(&cats, &mut sql);
+            sql.0 += ")";
         }
 
         // Templates as secondary; template namespace only!
@@ -1199,6 +1204,8 @@ impl SourceDatabase {
             "DSDB::get_pages_for_primary STARTING RUN",
             Some(sql.1.len()),
         );
+
+        //println!("{:?}",&sql);
 
         let sql_1_len = sql.1.len() ;
         let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await

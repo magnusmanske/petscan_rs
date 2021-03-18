@@ -1275,9 +1275,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             let fut = self.search_entry(&api,search,page_id.to_owned()) ;
             futures.push(fut);
         });
-        println!("Starting {} searches",futures.len());
         let results = join_all(futures).await;
-        println!("Searches finished!");
 
         let mut searches_failed = false;
         let retain_page_ids : Vec<u32> = page_ids
@@ -1293,7 +1291,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             })
             .collect();
         if searches_failed {
-            println!("Filter searches have failed");
+            return Err(format!("Filter searches have failed"));
         }
 
         self.retain_entries(&|entry: &PageListEntry|{
