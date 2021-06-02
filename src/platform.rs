@@ -358,6 +358,8 @@ impl Platform {
         Platform::profile("after process_files", Some(result.len()?));
         self.process_pages(&result).await?;
         Platform::profile("after process_pages", Some(result.len()?));
+        self.process_namespace_conversion(&result).await?;
+        Platform::profile("after process_namespace_conversion", Some(result.len()?));
         self.process_subpages(&result).await?;
         Platform::profile("after process_subpages", Some(result.len()?));
         self.annotate_with_wikidata_item(result).await?;
@@ -565,6 +567,31 @@ impl Platform {
             let title = Title::new(&page_title, namespace_id);
             *redlink_counter.entry(title).or_insert_with(||0) += 1 ;
         }
+        Ok(())
+    }
+
+    async fn process_namespace_conversion(&self, result: &PageList) -> Result<(), String> {
+        let namespace_conversion = self.get_param_default("namespace_conversion", "keep");
+        let add = match namespace_conversion.as_str() {
+            "topic" => 0,
+            "talk" => 1,
+            _ => return Ok(())
+        } ;
+        // Need tmp to avoid permanent double-lock on entries
+        let tmp = result
+        .entries()
+        .read()
+        .map_err(|e| format!("{:?}", e))?
+        .par_iter()
+        .map(|entry| {
+            let mut nsid = entry.title().namespace_id() ;
+            nsid = nsid - (nsid&1) + add; // Change "talk" bit
+            let t = entry.title().pretty();
+            let new_title = Title::new(t, nsid);
+            PageListEntry::new(new_title)
+        })
+        .collect();
+        *(result.entries().write().map_err(|e| format!("{:?}", e))?) = tmp ;
         Ok(())
     }
 

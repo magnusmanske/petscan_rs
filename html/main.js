@@ -22,6 +22,7 @@ var default_params = {
 	'active_tab':'tab_categories',
 	'common_wiki':'auto',
 	'subpage_filter':'either',
+	'namespace_conversion':'keep',
 	'sortorder':'ascending'
 } ;
 
