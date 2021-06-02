@@ -572,40 +572,26 @@ impl Platform {
 
     async fn process_namespace_conversion(&self, result: &PageList) -> Result<(), String> {
         let namespace_conversion = self.get_param_default("namespace_conversion", "keep");
-
-        match namespace_conversion.as_str() {
-            "topic" => {
-                *(result.entries().write().map_err(|e| format!("{:?}", e))?) = result
-                .entries()
-                .read()
-                .map_err(|e| format!("{:?}", e))?
-                .par_iter()
-                .map(|entry| {
-                    let mut nsid = entry.title().namespace_id() ;
-                    nsid = nsid - (nsid&1); // Reset "talk" bit to topic
-                    let t = entry.title().pretty();
-                    let new_title = Title::new(t, nsid);
-                    PageListEntry::new(new_title)
-                })
-                .collect();
-            }
-            "talk" => {
-                *(result.entries().write().map_err(|e| format!("{:?}", e))?) = result
-                .entries()
-                .read()
-                .map_err(|e| format!("{:?}", e))?
-                .par_iter()
-                .map(|entry| {
-                    let mut nsid = entry.title().namespace_id() ;
-                    nsid = nsid - (nsid&1) + 1; // Reset "talk" bit to talk page
-                    let t = entry.title().pretty();
-                    let new_title = Title::new(t, nsid);
-                    PageListEntry::new(new_title)
-                })
-                .collect();
-            }
-            _ => {}
-        }
+        let add = match namespace_conversion.as_str() {
+            "topic" => 0,
+            "talk" => 1,
+            _ => return Ok(())
+        } ;
+        // Need tmp to avoid permanent double-lock on entries
+        let tmp = result
+        .entries()
+        .read()
+        .map_err(|e| format!("{:?}", e))?
+        .par_iter()
+        .map(|entry| {
+            let mut nsid = entry.title().namespace_id() ;
+            nsid = nsid - (nsid&1) + add; // Change "talk" bit
+            let t = entry.title().pretty();
+            let new_title = Title::new(t, nsid);
+            PageListEntry::new(new_title)
+        })
+        .collect();
+        *(result.entries().write().map_err(|e| format!("{:?}", e))?) = tmp ;
         Ok(())
     }
 
