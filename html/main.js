@@ -76,29 +76,24 @@ function _t ( k , alt_lang ) {
 	return tt.t(k,{lang:alt_lang}) ;
 }
 
-function setPermalink ( q ) {
+function setPermalink () {
 	var psid = 0 ;
 	$('span[name="psid"]').each ( function () { psid = $(this).text() ; } ) ;
 
-	q = q.replace ( /&{0,1}doit=[^&]*&{0,1}/ , '&' ) ; // Removing auto-run
+	var q = $("#querystring").text();
+	if ( q != '' ) return;
 
-	// Removing empty parameters
-	var lq ;
-	do {
-		lq = q ;
-		q = q.replace ( /&[a-z_]+=&/g , '&' ) ;
-	} while ( lq != q ) ;
-	
-	// Removing default values
-	$.each ( default_params , function ( k , v ) {
-		var key = '&{0,1}' + encodeURIComponent(k) + '=' + encodeURIComponent(v) + '&{0,1}' ;
-		var r = new RegExp ( key ) ;
-		q = q.replace ( r , '&' ) ;
-	} ) ;
+	const params = new URLSearchParams(q);
+	// Removing auto-run
+	params.delete("doit");
+  	params.forEach(function (value, key) {
+    	// Removing empty parameters
+    	if (value === "") params.delete(key);
+    	// Removing default values
+    	if (value === default_params[key]) params.delete(key);
+	});
 
-	q = q.replace(/\[/g,'%5B').replace(/\]/g,'%5D').replace(/\|/g,'%7C').replace(/\n/g,'%0A');
-
-	var url = '/?' + q ;
+	var url = '/?' + params ;
 	var h = _t("query_url") ;
 	if ( typeof h == 'undefined' ) return ;
 	h = h.replace ( /\$1/ , url+"&doit=" ) ;
@@ -161,8 +156,8 @@ function applyParameters () {
 	}
 	wait2load_ns() ;
 	
-	var q = decodeURIComponent ( $('#querystring').text() ) ;
-	if ( q != '' ) setPermalink ( q ) ;
+	// Permalink
+	setPermalink () ;
 
 	if ( typeof params.active_tab != 'undefined' ) {
 		var tab = '#' + params.active_tab.replace(/ /g,'_') ; //$('input[name="active_tab"]').val() ;
@@ -183,8 +178,7 @@ function setInterfaceLanguage ( l ) {
 		$('#num_results').text ( _t('num_results').replace('$1',$('#num_results').attr('num')) ) ;
 
 		// Permalink
-		var query = decodeURIComponent ( $('#querystring').text() ) ;
-		if ( query != '' ) setPermalink ( query ) ;
+		setPermalink () ;
 	
 		$('#permalink a').each ( function () {
 			var a = $(this) ;
