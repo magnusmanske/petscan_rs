@@ -97,6 +97,7 @@ function setPermalink ( q ) {
 	} ) ;
 
 	q = q.replace(/\[/g,'%5B').replace(/\]/g,'%5D').replace(/\|/g,'%7C').replace(/\n/g,'%0A');
+	q = deXSS(q);
 
 	var url = '/?' + q ;
 	var h = _t("query_url") ;
