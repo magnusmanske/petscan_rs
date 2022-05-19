@@ -53,7 +53,7 @@ $.fn.is_on_screen = function(){
 
 
 function deXSS ( s ) {
-	return s.replace ( /<\s*script/ , '' ) ; // TODO this should be better...
+	return s.replace(/\&/,'&amp;').replace(/\</,'&lt;').replace(/\>/,'&gt;').replace(/\"/,'&quot;') ;
 }
 
 function getUrlVars () {
