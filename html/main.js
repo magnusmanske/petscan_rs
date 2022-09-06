@@ -53,7 +53,7 @@ $.fn.is_on_screen = function(){
 
 
 function deXSS ( s ) {
-	return s.replace ( /<\s*script/ , '' ) ; // TODO this should be better...
+	return s.replace(/\&/,'&amp;').replace(/\</,'&lt;').replace(/\>/,'&gt;').replace(/\"/,'&quot;') ;
 }
 
 function getUrlVars () {
@@ -92,6 +92,8 @@ function setPermalink () {
     	// Removing default values
     	if (value === default_params[key]) params.delete(key);
 	});
+
+  //q = deXSS(q); ??
 
 	var url = '/?' + params ;
 	var h = _t("query_url") ;
