@@ -924,7 +924,7 @@ impl RenderHTML {
                 None => "UNKNOWN".to_string(),
             };
             let class_name = match header_key.as_str() {
-                "number" | "page_id" | "timestamp" | "size" => "num",
+                "number" | "page_id" | "timestamp" | "size" => "text-right text-monospace",
                 "title" => "link_container",
                 _ => "",
             };
@@ -950,7 +950,7 @@ impl RenderHTML {
             let col = col.to_string();
             let x = match col.as_str() {
                 "checkbox" => "<th></th>".to_string(),
-                "number" => "<th class='num'>#</th>".to_string(),
+                "number" => "<th class='text-right text-monospace'>#</th>".to_string(),
                 "image" => "<th tt='h_image'></th>".to_string(),
                 "title" => "<th class='text-nowrap' tt='h_title'></th>".to_string(),
                 "page_id" => "<th class='text-nowrap' tt='h_id'></th>".to_string(),
