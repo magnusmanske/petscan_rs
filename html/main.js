@@ -81,7 +81,7 @@ function setPermalink () {
 	$('span[name="psid"]').each ( function () { psid = $(this).text() ; } ) ;
 
 	var q = $("#querystring").text();
-	if ( q != '' ) return;
+	if ( q == '' ) return;
 
 	const params = new URLSearchParams(q);
 	// Removing auto-run
