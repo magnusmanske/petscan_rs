@@ -171,7 +171,7 @@ impl AppState {
         Ok(())
     }
 
-    pub fn is_local_testing(&self) -> bool {
+    fn is_local_testing(&self) -> bool {
         self.local_testing
     }
 
