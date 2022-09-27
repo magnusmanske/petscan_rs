@@ -26,6 +26,7 @@ pub struct AppState {
     shutting_down: Arc<RwLock<bool>>,
     site_matrix: Value,
     main_page: String,
+    local_testing: bool
 }
 
 impl AppState {
@@ -44,6 +45,7 @@ impl AppState {
         let ret = Self {
             db_pool : Arc::new(Mutex::new(vec![])),
             config: config.to_owned(),
+            local_testing: config["host"] == "127.0.0.1",
             threads_running: Arc::new(RwLock::new(0)),
             shutting_down: Arc::new(RwLock::new(false)),
             site_matrix: AppState::load_site_matrix().await,
@@ -88,12 +90,17 @@ impl AppState {
 
     fn get_mysql_opts_for_wiki(&self,wiki:&str,user:&str,pass:&str) -> Result<my::OptsBuilder,String> {
         let ( host , schema ) = self.db_host_and_schema_for_wiki(&wiki)?;
+        let port: u16 = if self.is_local_testing() && wiki=="wikidatawiki" {
+            3309
+        } else {
+            self.config["db_port"].as_u64().unwrap_or(3306) as u16
+        };
         let opts = my::OptsBuilder::default()
             .ip_or_hostname(host)
             .db_name(Some(schema))
             .user(Some(user))
             .pass(Some(pass))
-            .tcp_port(self.config["db_port"].as_u64().unwrap_or(3306) as u16);
+            .tcp_port(port);
         Ok(opts)
     }
 
@@ -130,7 +137,8 @@ impl AppState {
     /// Returns the server and database name for the wiki, as a tuple
     pub fn db_host_and_schema_for_wiki(&self, wiki: &str) -> Result<(String, String), String> {
         // TESTING
-        // ssh magnus@tools-login.wmflabs.org -L 3307:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N
+        // ssh magnus@tools-login.wmflabs.org -L 3307:dewiki.web.db.svc.eqiad.wmflabs:3306 -N
+        // ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N
         let wiki = self.fix_wiki_name(wiki);
         let host = match self.config["host"].as_str() {
             Some("127.0.0.1") => "127.0.0.1".to_string(),
@@ -161,6 +169,10 @@ impl AppState {
             conn.exec_drop("SET SESSION group_concat_max_len = 1000000000",()).await.map_err(|e|format!("{:?}",e))?;
         }
         Ok(())
+    }
+
+    pub fn is_local_testing(&self) -> bool {
+        self.local_testing
     }
 
     pub async fn get_wiki_db_connection(

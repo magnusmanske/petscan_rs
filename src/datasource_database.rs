@@ -472,7 +472,7 @@ impl SourceDatabase {
                 " AND p.page_id IN "
             };
             sql.0 +=
-                "(SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
+                "(SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
         }
 
         self.sql_in(&input, &mut sql);
