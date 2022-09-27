@@ -464,7 +464,7 @@ impl SourceDatabase {
             } else {
                 " AND p.page_id IN "
             };
-            sql.0 += "(SELECT pt2.page_id FROM page pt,page pt2,templatelinks WHERE pt2.page_namespace+1=pt.page_namespace AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_namespace=10 AND tl_title";
+            sql.0 += "(SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace+1=pt.page_namespace AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
         } else {
             sql.0 += if find_not {
                 " AND p.page_id NOT IN "
@@ -472,7 +472,7 @@ impl SourceDatabase {
                 " AND p.page_id IN "
             };
             sql.0 +=
-                "(SELECT DISTINCT tl_from FROM templatelinks WHERE tl_namespace=10 AND tl_title";
+                "(SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
         }
 
         self.sql_in(&input, &mut sql);
@@ -1134,11 +1134,11 @@ impl SourceDatabase {
         let soft_redirects_page = "Soft_redirect";
         match self.params.soft_redirects.as_str() {
             "yes" => {
-                sql.0 += " AND EXISTS (SELECT * FROM templatelinks WHERE tl_from=p.page_id AND tl_namespace=10 AND tl_title=?)";
+                sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)";
                 sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
             }
             "no" => {
-                sql.0 += " AND NOT EXISTS (SELECT * FROM templatelinks WHERE tl_from=p.page_id AND tl_namespace=10 AND tl_title=?)";
+                sql.0 += " AND NOT EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)";
                 sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
             }
             _ => {}
