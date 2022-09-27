@@ -1134,11 +1134,11 @@ impl SourceDatabase {
         let soft_redirects_page = "Soft_redirect";
         match self.params.soft_redirects.as_str() {
             "yes" => {
+<<<<<<< HEAD
                 sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)";
+=======
+                sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)" ;
                 sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
-            }
-            "no" => {
-                sql.0 += " AND NOT EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)";
                 sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
             }
             _ => {}
