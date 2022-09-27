@@ -181,7 +181,7 @@ impl Platform {
         let namespace_info =
             api.get_site_info_value("namespaces", format!("{}", namespace_id).as_str());
         let ret = match namespace_info["case"].as_str() {
-            Some(c) => (c == "case-sensitive"),
+            Some(c) => c == "case-sensitive",
             None => false,
         };
         match self.namespace_case_sensitivity_cache.write() {
