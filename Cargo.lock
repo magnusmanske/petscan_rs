@@ -1634,7 +1634,6 @@ dependencies = [
  "lazy_static",
  "mysql_async",
  "percent-encoding",
- "qstring",
  "rand",
  "rayon",
  "regex",
@@ -1759,15 +1758,6 @@ checksum = "96a8c1bda5ae1af7f99a2962e49df150414a43d62404644d98dd5c3a93d07457"
 dependencies = [
  "idna 0.3.0",
  "psl-types",
-]
-
-[[package]]
-name = "qstring"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d464fae65fff2680baf48019211ce37aaec0c78e9264c84a3e484717f965104e"
-dependencies = [
- "percent-encoding",
 ]
 
 [[package]]

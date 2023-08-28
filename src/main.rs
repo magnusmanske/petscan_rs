@@ -19,7 +19,7 @@ pub mod wdfist;
 
 use tokio::fs::File as TokioFile;
 use tokio_util::codec::{BytesCodec, FramedRead};
-use qstring::QString;
+use url::form_urlencoded;
 use crate::form_parameters::FormParameters;
 use app_state::AppState;
 use platform::{MyResponse, Platform, ContentType};
@@ -35,8 +35,9 @@ use hyper::service::{make_service_fn, service_fn};
 static NOTFOUND: &[u8] = b"Not Found";
 
 async fn process_form(parameters:&str, state: Arc<AppState>) -> MyResponse {
-    let parameter_pairs = QString::from(parameters) ;
-    let parameter_pairs = parameter_pairs.to_pairs() ;
+    let parameter_pairs = form_urlencoded::parse(parameters.as_bytes())
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
     let mut form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
 
     // Restart command?

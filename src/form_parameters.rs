@@ -27,12 +27,9 @@ impl FormParameters {
         Self { ..Default::default() }
     }
 
-    pub fn new_from_pairs(parameter_pairs: Vec<(&str, &str)>) -> Self {
+    pub fn new_from_pairs(parameter_pairs: HashMap<String, String>) -> Self {
         let mut ret = Self::new();
-        ret.params = parameter_pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string().replace("+", " ")))
-            .collect();
+        ret.params = parameter_pairs;
         ret.ns = Self::ns_from_params(&ret.params);
         ret.legacy_parameters();
         ret
