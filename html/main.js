@@ -630,8 +630,9 @@ $(document).ready ( function () {
 	} ) ;
 
 
-	$.getJSON ( 'https://ores.wikimedia.org/v3/scores/?callback=?' , function ( d ) {
-		ores_data = d ;
-		fin() ;
-	} , 'json' ) ;
+	// Deactivated until CORS is restored
+	// $.getJSON ( 'https://ores.wikimedia.org/v3/scores/?callback=?' , function ( d ) {
+	// 	ores_data = d ;
+	// 	fin() ;
+	// } , 'json' ) ;
 } ) ;
