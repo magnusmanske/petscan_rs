@@ -466,7 +466,7 @@ impl DataSource for SourceSparql {
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder).await
             .map_err(|e| format!("SourceSparql::run:1 {:?}", e))?;
 
-        let sparql_url = api.get_site_info_string("general", "wikibase-sparql")?;
+        let sparql_url = api.get_site_info_string("general", "wikibase-sparql").map_err(|e|e.to_string())?;
         let mut params: HashMap<String, String> = HashMap::new();
         params.insert("query".to_string(), sparql.to_string());
         params.insert("format".to_string(), "json".to_string());

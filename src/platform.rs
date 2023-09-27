@@ -447,7 +447,7 @@ impl Platform {
         let batches: Vec<SQLtuple> = result
             .to_sql_batches(PAGE_BATCH_SIZE)?
             .par_iter_mut()
-            .map(|mut sql_batch| {
+            .map(|sql_batch| {
                 // Text for any label or alias used in an item
                 sql_batch.0 = "SELECT wbx_text FROM wbt_text WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id = wby_id AND wby_name IN ('label','alias') AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id) AND wbx_text IN (".to_string() ;
                 // One of these
@@ -500,7 +500,7 @@ impl Platform {
         let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE/20)? // ???
                 .par_iter_mut()
-                .map(|mut sql_batch| {
+                .map(|sql_batch| {
                     let mut sql = "SELECT pl_title,pl_namespace,(SELECT COUNT(*) FROM page p1 WHERE p1.page_title=pl0.pl_title AND p1.page_namespace=pl0.pl_namespace) AS cnt from page p0,pagelinks pl0 WHERE pl_from=p0.page_id AND ".to_string() ;
                     sql += &sql_batch.0 ;
                     if ns0_only {sql += " AND pl_namespace=0" ;}
@@ -684,7 +684,7 @@ impl Platform {
         let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE)?
                 .par_iter_mut()
-                .map(|mut sql_batch| {
+                .map(|sql_batch| {
                     let mut sql ="SELECT page_title,page_namespace".to_string();
                     if add_image {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname IN ('page_image','page_image_free') LIMIT 1) AS image" ;}
                     if add_coordinates {sql += ",(SELECT concat(gt_lat,',',gt_lon) FROM geo_tags WHERE gt_primary=1 AND gt_globe='earth' AND gt_page_id=page_id LIMIT 1) AS coord" ;}
@@ -783,7 +783,7 @@ impl Platform {
             let batches: Vec<SQLtuple> = result
                 .to_sql_batches_namespace(PAGE_BATCH_SIZE,6)?
                 .par_iter_mut()
-                .map(|mut sql_batch| {
+                .map(|sql_batch| {
                     sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
                     sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
                     sql_batch.0 += ")";
@@ -821,7 +821,7 @@ impl Platform {
             let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE)?
                 .par_iter_mut()
-                .map(|mut sql_batch| {
+                .map(|sql_batch| {
                     sql_batch.0 = "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN (".to_string() ;
                     sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
                     sql_batch.0 += ")";

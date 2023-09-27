@@ -951,7 +951,7 @@ impl PageList {
             let batches: Vec<SQLtuple> = self
                 .to_sql_batches(PAGE_BATCH_SIZE)?
                 .par_iter_mut()
-                .map(|mut sql_batch| {
+                .map(|sql_batch| {
                     sql_batch.0 =
                         "SELECT page_title,page_namespace,page_id,page_len,(SELECT rev_timestamp FROM revision WHERE rev_id=page_latest LIMIT 1) AS page_last_rev_timestamp FROM page WHERE"
                             .to_string() + &sql_batch.0;
@@ -1047,7 +1047,7 @@ impl PageList {
         let batches: Vec<SQLtuple> = self
             .to_sql_batches_namespace(PAGE_BATCH_SIZE,namespace_id)?
             .iter_mut()
-            .filter_map(|mut sql_batch| {
+            .filter_map(|sql_batch| {
                 // entity_type and namespace_id are "database safe"
                 let prefix = match entity_type {
                     "item" => "Q",
