@@ -151,6 +151,7 @@ impl FormParameters {
     fn legacy_parameters(&mut self) {
         self.fallback("language", "lang");
         self.fallback("categories", "cats");
+        self.fallback("rxp_filter", "regexp_filter");
 
         // Old hack using manual wiki with no pages as "common wiki"
         if self.has_param_with_value("manual_list_wiki")

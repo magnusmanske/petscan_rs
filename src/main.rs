@@ -27,7 +27,7 @@ use serde_json::Value;
 use std::env;
 use std::fs::File;
 use std::sync::Arc;
-use std::{net::SocketAddr};
+use std::net::SocketAddr;
 use hyper::{header, Body, Request, Response, Server, Error, StatusCode, Method};
 use hyper::service::{make_service_fn, service_fn};
 //type GenericError = Box<dyn std::error::Error + Send + Sync>;

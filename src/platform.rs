@@ -371,7 +371,7 @@ impl Platform {
         );
         result.load_missing_metadata(Some(wikidata_label_language), &self).await?;
         Platform::profile("after load_missing_metadata", Some(result.len()?));
-        if let Some(regexp) = self.get_param("regexp_filter") { result.regexp_filter(&regexp)?; }
+        if let Some(regexp) = self.get_param("rxp_filter") { result.regexp_filter(&regexp)?; }
         if let Some(search) = self.get_param("search_filter") { result.search_filter(self,&search).await?; }
         self.process_redlinks(&result).await?;
         Platform::profile("after process_redlinks", Some(result.len()?));
@@ -2160,28 +2160,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_manual_list_wikidata_regexp() {
+    async fn test_regexp_filter_fallback() {
+        // Old parameter
         check_results_for_psid_ext(
             10140344,
             "&regexp_filter=.*Manske",
             "wikidatawiki",
             vec![Title::new("Q13520818", 0)],
         ).await;
+
+        // New parameter
         check_results_for_psid_ext(
             10140344,
-            "&regexp_filter=Graaf.*",
+            "&rxp_filter=.*Manske",
+            "wikidatawiki",
+            vec![Title::new("Q13520818", 0)],
+        ).await;
+    }
+
+    #[tokio::test]
+    async fn test_manual_list_wikidata_regexp() {
+        check_results_for_psid_ext(
+            10140344,
+            "&rxp_filter=.*Manske",
+            "wikidatawiki",
+            vec![Title::new("Q13520818", 0)],
+        ).await;
+        check_results_for_psid_ext(
+            10140344,
+            "&rxp_filter=Graaf.*",
             "wikidatawiki",
             vec![Title::new("Q12345", 0)],
         ).await;
         check_results_for_psid_ext(
             10140616,
-            "&regexp_filter=&regexp_filter=Jimbo.*",
+            "&rxp_filter=&rxp_filter=Jimbo.*",
             "enwiki",
             vec![Title::new("Jimbo Wales", 0)],
         ).await;
         check_results_for_psid_ext(
             10140616,
-            "&regexp_filter=&regexp_filter=.*Sanger",
+            "&rxp_filter=&rxp_filter=.*Sanger",
             "enwiki",
             vec![Title::new("Larry Sanger", 0)],
         ).await;

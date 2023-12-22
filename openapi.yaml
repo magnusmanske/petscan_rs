@@ -324,7 +324,7 @@ paths:
             enum:
               - ascending
               - descending
-        - name: regexp_filter
+        - name: rxp_filter
           in: query
           schema:
             type: string

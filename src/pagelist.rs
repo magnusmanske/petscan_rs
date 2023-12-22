@@ -1020,7 +1020,7 @@ impl PageList {
         }
 
         // No need to load labels for WDFIST mode
-        if !platform.has_param("regexp_filter") && platform.has_param("wdf_main") {
+        if !platform.has_param("rxp_filter") && platform.has_param("wdf_main") {
             return Ok(());
         }
 
