@@ -16,11 +16,11 @@ url = "*"
 rayon = "*"
 htmlescape = "*"
 rand = "*"
-mysql_async = "*"
-reqwest = { version = "*", features = ["json"] }
+mysql_async = "^0.31"
+reqwest = { version = "^0.11", features = ["json"] }
 time = "^0.3"
 percent-encoding = "*"
-async-trait = "*"
+async-trait = "^0.1.53"
 async-recursion = "^1"
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
 tokio = { version = "^1", features = ["macros","fs","sync"] }
