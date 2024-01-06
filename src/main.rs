@@ -239,6 +239,7 @@ async fn process_request(mut req: Request<Body>,app_state:Arc<AppState>) -> Resu
 
 #[tokio::main]
 async fn main() -> Result<(),Error> {
+    tracing_subscriber::fmt::init();
 
     let basedir = env::current_dir()
         .expect("Can't get CWD")

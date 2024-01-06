@@ -16,7 +16,7 @@ url = "*"
 rayon = "*"
 htmlescape = "*"
 rand = "*"
-mysql_async = "*"
+mysql_async = { version = "*", features = ["tracing"] }
 reqwest = { version = "*", features = ["json"] }
 time = "^0.3"
 percent-encoding = "*"
@@ -28,6 +28,8 @@ tokio-util = "*"
 hyper = { version = "^0.14", features = ["full"] }
 qstring = "*"
 futures = "*"
+tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
+tracing = "0.1.40"
 
 [profile.release]
 lto = "fat"

@@ -1,6 +1,7 @@
 use std::fmt;
 use tokio::sync::Mutex as TokioMutex;
 use futures::future::join_all;
+use tracing::{instrument, debug};
 use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
@@ -8,7 +9,6 @@ use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
 use crate::render::*;
 use crate::wdfist::*;
-use chrono::Local;
 use mysql_async::from_row;
 use mysql_async as my;
 use mysql_async::Value as MyValue;
@@ -194,6 +194,7 @@ impl Platform {
         ret
     }
 
+    #[instrument(skip_all, err(level = tracing::Level::INFO))]
     pub async fn run(&mut self) -> Result<(), String> {
         Platform::profile("begin run", None);
         let start_time = SystemTime::now();
@@ -312,14 +313,7 @@ impl Platform {
     }
 
     pub fn profile(label: &str, num: Option<usize>) {
-        if false {
-            println!(
-                "{} [{}]: {}",
-                Local::now().format("%Y-%m-%d %H:%M:%S"),
-                num.unwrap_or(0),
-                label,
-            );
-        }
+        debug!(num, "{}", label);
     }
 
     async fn post_process_result(&self, available_sources: &[String]) -> Result<(), String> {
