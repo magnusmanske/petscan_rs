@@ -25,7 +25,9 @@ async-recursion = "^1"
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
 tokio = { version = "^1", features = ["macros","fs","sync"] }
 tokio-util = "*"
-hyper = { version = "^0.14", features = ["full"] }
+hyper = { version = "^1", features = ["full"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["full"] }
 futures = "*"
 tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
 tracing = "0.1.40"
