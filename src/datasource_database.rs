@@ -716,8 +716,7 @@ impl SourceDatabase {
         let mut after: String = self.params.after.clone();
         let mut is_before_after_done: bool = false;
         if let Some(max_age) = self.params.max_age {
-            let utc: DateTime<Utc> = Utc::now();
-            let utc = utc.sub(Duration::hours(max_age));
+            let utc = Utc::now().sub(Duration::hours(max_age));
             before = String::new();
             after = utc.format("%Y%m%d%H%M%S").to_string();
         }
@@ -1100,12 +1099,10 @@ impl SourceDatabase {
                 _ => {}
             }
             if let Some(x) = self.params.ores_prob_from {
-                sql.0 += " AND oresc_probability>=";
-                sql.0 += x.to_string().as_str();
+                sql.0 += &format!(" AND oresc_probability>={x}");
             }
             if let Some(x) = self.params.ores_prob_to {
-                sql.0 += " AND oresc_probability<=";
-                sql.0 += x.to_string().as_str();
+                sql.0 += &format!(" AND oresc_probability<={x}");
             }
             sql.0 += ")";
         }
@@ -1138,7 +1135,7 @@ impl SourceDatabase {
             "yes" => {
                 sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)" ;
                 sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
-                sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
+                // sql.1.push(MyValue::Bytes(soft_redirects_page.into())); // TODO FIXME why twice?
             }
             _ => {}
         }
@@ -1159,13 +1156,10 @@ impl SourceDatabase {
             sql.0 += i.to_string().as_str();
         }
         if let Some(i) = self.params.smaller {
-            sql.0 += " AND p.page_len<=";
-            sql.0 += i.to_string().as_str();
+            sql.0 += &format!(" AND p.page_len<={i}");
         }
         if let Some(i) = self.params.since_rev0 {
-            sql.0 += " AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*";
-            sql.0 += i.to_string().as_str();
-            sql.0 += "/100";
+            sql.0 += &format!(" AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*{i}/100");
         }
 
         // Speed up "Only pages without Wikidata items"
