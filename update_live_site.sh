@@ -7,6 +7,7 @@ git pull
 
 # Build new server binary
 cargo build --release
+cp target/release/petscan_rs .
 
 # Get restart code from config file
 #code=`jq -r '.["restart-code"]' config.json`
