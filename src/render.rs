@@ -740,7 +740,7 @@ impl Render for RenderHTML {
                     "{}/wiki/Special:Redirect/file/{}?width={}",
                     &server_url, &file, &thumnail_size
                 );
-                format!("<div class='card thumbcard'><a target='_blank' href='{}'><img class='card-img thumbcard-img' src='{}'/></a></div>",url,src)
+                format!("<div class='card thumbcard'><a target='_blank' href='{}'><img class='card-img thumbcard-img' src='{}' loading='lazy' /></a></div>",url,src)
             }
             None => String::new(),
         }
