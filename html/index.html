@@ -114,23 +114,24 @@ function receiveEnglishNamespaceData ( j ) {
 <body style='display:none'>
 
 <nav class="navbar navbar-expand-lg navbar-light bg-light">
+  <a class="navbar-brand" tt="toolname" href="/"></a>
 
 	<button class="navbar-toggler navbar-toggler-right" type="button" data-toggle="collapse" data-target="#navbarSupportedContent" aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
 	<span class="navbar-toggler-icon"></span>
 	</button>
 
-	<div class="collapse navbar-collapse" id="bd-main-nav">
-	<ul class="navbar-nav mr-auto">
-		<li class="nav-item"><a class="nav-item nav-link active" tt="toolname" href="/"></a></li>
-		<li class="nav-item"><a target='_blank' class="nav-item nav-link" tt="manual" href="#"></a></li>
-		<li class="nav-item"><a target='_blank' class="nav-item nav-link" tt="issues" href="https://github.com/magnusmanske/petscan_rs/issues"></a></li>
-		<li class="nav-item"><div class="btn-group nav-item nav-link" id='interface_languages_wrapper'></div></li>
-	</ul>
+	<div class="collapse navbar-collapse" id="navbarSupportedContent">
+	<ul class="navbar-nav">
+		<li class="nav-item"><a target='_blank' class="nav-link" tt="manual" href="#"></a></li>
+		<li class="nav-item"><a target='_blank' class="nav-link" tt="issues" href="https://github.com/magnusmanske/petscan_rs/issues"></a></li>
+    </ul>
+		<div class="btn-group nav-item nav-link mr-auto" id='interface_languages_wrapper'></div>
 
-	<div class="btn-group nav-item nav-link"><a target='_blank' class="btn btn-outline-warning" tt="examples" href="#"></a></div>
-	<div class="btn-group nav-item nav-link"><button class='btn btn-outline-default' tt='toggle_list' id='tab-list'></button></div>
-    <a style="margin:0px;padding:0px;margin-top:4px;margin-left:10px;" href="https://tools.wmflabs.org" target='_blank'><img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Toolforge_logo.svg/32px-Toolforge_logo.svg.png" tt_title="wmf_powered" border="0" width="32px"></a>
-
+  <ul class="navbar-nav">
+    <li class="nav-item mx-2"><a target='_blank' class="btn btn-outline-primary" tt="examples" href="#"></a></li>
+    <li class="nav-item mx-2"><button class='btn btn-outline-secondary' tt='toggle_list' id='tab-list'></button></li>
+    <li class="nav-item mx-2"><a href="https://tools.wmflabs.org" target='_blank'><img src="https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Toolforge_logo.svg/32px-Toolforge_logo.svg.png" tt_title="wmf_powered" width="32px" style="margin: 3px 0"></a></li>
+  </ul>
   </div>
 </nav>
 
