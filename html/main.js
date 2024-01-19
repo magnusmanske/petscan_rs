@@ -51,11 +51,6 @@ $.fn.is_on_screen = function(){
     return (!(viewport.right < bounds.left || viewport.left > bounds.right || viewport.bottom < bounds.top || viewport.top > bounds.bottom));
 };
 
-
-function deXSS ( s ) {
-	return s.replace(/\&/,'&amp;').replace(/\</,'&lt;').replace(/\>/,'&gt;').replace(/\"/,'&quot;') ;
-}
-
 function getUrlVars () {
 	var vars = {} ;
 	var params = $('#querystring').text() ;
@@ -93,8 +88,6 @@ function setPermalink () {
     	if (value === default_params[key]) params.delete(key);
 	});
 
-  //q = deXSS(q); ??
-
 	var url = '/?' + params ;
 	var h = _t("query_url") ;
 	if ( typeof h == 'undefined' ) return ;
@@ -127,10 +120,10 @@ function applyParameters () {
 		
 		$('input:radio[name="'+name+'"][value="'+value.replace(/"/g,'&quot;')+'"]').prop('checked', true);
 		
-		$('input[type="hidden"][name="'+name+'"]').val ( deXSS(value) ) ;
-		$('input[type="text"][name="'+name+'"]').val ( deXSS(value) ) ;
+		$('input[type="hidden"][name="'+name+'"]').val ( value ) ;
+		$('input[type="text"][name="'+name+'"]').val ( value ) ;
 		$('input[type="number"][name="'+name+'"]').val ( parseInt(value) ) ;
-		$('textarea[name="'+name+'"]').val ( deXSS(value.replace(/\+/g,' ')) ) ;
+		$('textarea[name="'+name+'"]').val ( value ) ;
 		
 		if ( value == '1' || value == 'on' ) $('input[type="checkbox"][name="'+name+'"]').prop('checked', true);
 		
@@ -142,7 +135,7 @@ function applyParameters () {
 		if ( psid != 0 ) {
 			let url = params['referrer_url'].replace('{PSID}',psid) ;
 			let name = params['referrer_name'] || url; 
-			$('#referrer').attr({href:url}).text(deXSS(name));
+			$('#referrer').attr({href:url}).text(name);
 			$("#referrer_box").show();
 		}
 	}
@@ -439,14 +432,12 @@ function showExamples ( filter ) {
 			} ) ;
 			if ( found != max_words ) return ;
 		}
-		h += "<div style='display:table-row'>" ;
-		h += "<div class='example_psid'><a href='?psid=" + example.psid + "'>" + example.psid + "</a></div>" ;
-		h += "<div class='example_desc'>" + example.desc + "</div>" ;
-		h += "</div>" ;
+		var row = $("<div style='display:table-row'></div>");
+		row.html("<div class='example_psid'><a href='?psid=" + example.psid + "'>" + example.psid + "</a></div>");
+		row.append($("<div class='example_desc'></div>").text(example.desc));
+		$('#example_list').append(row);	
 	} ) ;
 	
-	$('#example_list').html ( h ) ;
-
 	if ( filter != '' ) return ;
 
 	$('#example_dialog').modal ( 'show' ) ;
@@ -463,7 +454,7 @@ function addExamples () {
 				$.each ( rows , function ( dummy , row ) {
 					var m = row.match ( /^;\s*(\d+)\s*:(.*)$/ ) ;
 					if ( m === null ) return ;
-					example_list.push ( { psid:m[1] , desc:deXSS(m[2]) } ) ;
+					example_list.push ( { psid:m[1] , desc:m[2] } ) ;
 				} ) ;
 				showExamples('');
 			} ) ;
