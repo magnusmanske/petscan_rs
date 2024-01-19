@@ -5,6 +5,8 @@ use crate::app_state::AppState;
 use crate::datasource::DataSource;
 use crate::datasource::SQLtuple;
 use crate::pagelist::*;
+use crate::pagelist_entry::LinkCount;
+use crate::pagelist_entry::PageListEntry;
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use chrono::prelude::*;
 use chrono::Duration;

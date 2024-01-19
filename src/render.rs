@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use crate::app_state::AppState;
 use crate::form_parameters::FormParameters;
-use crate::pagelist::{LinkCount, PageListEntry};
+use crate::pagelist_entry::{LinkCount, PageListEntry};
 use crate::platform::*;
 use chrono::prelude::*;
 use htmlescape::encode_minimal;

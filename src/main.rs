@@ -12,6 +12,7 @@ pub mod app_state;
 pub mod datasource;
 pub mod datasource_database;
 pub mod form_parameters;
+pub mod pagelist_entry;
 pub mod pagelist;
 pub mod platform;
 pub mod render;

@@ -1,4 +1,5 @@
 use crate::pagelist::*;
+use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;

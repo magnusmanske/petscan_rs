@@ -7,6 +7,7 @@ use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
+use crate::pagelist_entry::{PageListEntry, LinkCount, PageCoordinates, TriState, FileInfo, PageListSort};
 use crate::render::*;
 use crate::wdfist::*;
 use mysql_async::from_row;
@@ -22,7 +23,7 @@ use std::time::{Duration, SystemTime};
 use wikibase::mediawiki::api::NamespaceID;
 use wikibase::mediawiki::title::Title;
 
-pub static PAGE_BATCH_SIZE: usize = 20000;
+pub static PAGE_BATCH_SIZE: usize = 15000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentType {
@@ -445,7 +446,7 @@ impl Platform {
                 // Text for any label or alias used in an item
                 sql_batch.0 = "SELECT wbx_text FROM wbt_text WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id = wby_id AND wby_name IN ('label','alias') AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id) AND wbx_text IN (".to_string() ;
                 // One of these
-                sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
+                sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len()) ;
                 sql_batch.0 += ")";
                 // Looking for labels, so spaces instead of underscores
                 for element in sql_batch.1.iter_mut() {
@@ -779,7 +780,7 @@ impl Platform {
                 .par_iter_mut()
                 .map(|sql_batch| {
                     sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
-                    sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
+                    sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len()) ;
                     sql_batch.0 += ")";
                     if file_usage_data_ns0  {sql_batch.0 += " AND gil_page_namespace_id=0" ;}
                     sql_batch.0 += " GROUP BY gil_to" ;
@@ -817,7 +818,7 @@ impl Platform {
                 .par_iter_mut()
                 .map(|sql_batch| {
                     sql_batch.0 = "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN (".to_string() ;
-                    sql_batch.0 += &Platform::get_questionmarks(sql_batch.1.len()) ;
+                    sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len()) ;
                     sql_batch.0 += ")";
                     sql_batch.to_owned()
                 })
@@ -917,7 +918,7 @@ impl Platform {
                 })
                 .map(|s|s.into())
                 .collect();
-            let mut sql = (Platform::get_questionmarks(escaped.len()), escaped);
+            let mut sql = (Platform::get_placeholders(escaped.len()), escaped);
 
             sql.0 = format!("SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='{}' and ips_site_page IN ({})", &wiki,&sql.0);
             batches.push(sql);
@@ -1052,7 +1053,7 @@ impl Platform {
             .to_sql_batches(PAGE_BATCH_SIZE)?
             .par_iter_mut()
             .map(|sql_batch| {
-                let question_marks = Platform::get_questionmarks(sql.1.len()) ;
+                let question_marks = Platform::get_placeholders(sql.1.len()) ;
                 sql_batch.0 = sql.0.to_owned() + &question_marks + ")";
                 sql_batch.1.splice(..0, sql.1.to_owned());
                 sql_batch.to_owned()
@@ -1554,7 +1555,7 @@ impl Platform {
             .filter(|s| !s.is_empty())
             .map(|s| MyValue::Bytes(s.into()))
             .collect();
-        (Platform::get_questionmarks(escaped.len()), escaped)
+        (Platform::get_placeholders(escaped.len()), escaped)
     }
 
     pub fn full_entity_id_to_number(strings: &[String]) -> SQLtuple {
@@ -1565,11 +1566,11 @@ impl Platform {
             .map(|s| s[1..].to_string())
             .map(|s|MyValue::Bytes(s.into()))
             .collect();
-        (Platform::get_questionmarks(escaped.len()), escaped)
+        (Platform::get_placeholders(escaped.len()), escaped)
     }
 
     // Generates a string with `len` comma-separated question marks
-    pub fn get_questionmarks(len: usize) -> String {
+    pub fn get_placeholders(len: usize) -> String {
         let mut questionmarks: Vec<String> = Vec::new();
         questionmarks.resize(len, "?".to_string());
         questionmarks.join(",")
