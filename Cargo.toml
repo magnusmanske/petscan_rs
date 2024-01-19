@@ -26,7 +26,6 @@ wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
 tokio = { version = "^1", features = ["macros","fs","sync"] }
 tokio-util = "*"
 hyper = { version = "^0.14", features = ["full"] }
-qstring = "*"
 futures = "*"
 
 [profile.release]
