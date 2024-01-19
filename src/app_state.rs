@@ -1,6 +1,7 @@
 use rand::seq::SliceRandom;
 use rand::prelude::thread_rng;
 use tokio::sync::Mutex;
+use tracing::{trace, instrument};
 use crate::form_parameters::FormParameters;
 use crate::platform::{ContentType, MyResponse};
 use chrono::prelude::*;
@@ -88,7 +89,7 @@ impl AppState {
         self.config["restart-code"].as_str()
     }
 
-    fn get_mysql_opts_for_wiki(&self,wiki:&str,user:&str,pass:&str) -> Result<my::OptsBuilder,String> {
+    fn get_mysql_opts_for_wiki(&self,wiki:&str,user:&str,pass:&str) -> Result<my::Opts,String> {
         let ( host , schema ) = self.db_host_and_schema_for_wiki(&wiki)?;
         let port: u16 = if self.is_local_testing() && wiki=="wikidatawiki" {
             3309
@@ -100,7 +101,8 @@ impl AppState {
             .db_name(Some(schema))
             .user(Some(user))
             .pass(Some(pass))
-            .tcp_port(port);
+            .tcp_port(port)
+            .into();
         Ok(opts)
     }
 
@@ -175,6 +177,7 @@ impl AppState {
         self.local_testing
     }
 
+    #[instrument(skip(self), err)]
     pub async fn get_wiki_db_connection(
         &self,
         wiki: &str,
@@ -185,8 +188,9 @@ impl AppState {
         }
         pool.rotate_left(1);
         let last = pool.len()-1;
-        let opts_builder = self.get_mysql_opts_for_wiki(wiki,&pool[last].0,&pool[last].1)?;
-        let conn = my::Conn::new(opts_builder).await;
+        let opts = self.get_mysql_opts_for_wiki(wiki,&pool[last].0,&pool[last].1)?;
+        trace!(user = opts.user());
+        let conn = my::Conn::new(opts).await;
         let mut conn = conn.map_err(|e|format!("{:?}",e))? ;
         self.set_group_concat_max_len(wiki,&mut conn).await?;
         Ok(conn)
@@ -447,6 +451,7 @@ impl AppState {
             .map_err(|e|format!("{:?}",e))
     }
 
+    #[instrument(skip_all, ret)]
     pub async fn get_or_create_psid_for_query(&self, query_string: &str) -> Result<u64, String> {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
