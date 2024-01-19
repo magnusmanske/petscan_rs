@@ -190,9 +190,23 @@ impl AppState {
         let last = pool.len()-1;
         let opts = self.get_mysql_opts_for_wiki(wiki,&pool[last].0,&pool[last].1)?;
         trace!(user = opts.user());
-        let conn = my::Conn::new(opts).await;
-        let mut conn = conn.map_err(|e|format!("{:?}",e))? ;
-        self.set_group_concat_max_len(wiki,&mut conn).await?;
+        let mut conn;
+        loop {
+            conn = match my::Conn::new(opts.to_owned()).await.map_err(|e|format!("{:?}",e)) {
+                Ok(conn) => conn,
+                Err(s) => {
+                    // Checking if max_user_connections was exceeded. That should not happen but sometimes it does.
+                    if s.contains("max_user_connections") {
+                        // trace!(s);
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    return Err(s);
+                }
+            };
+            self.set_group_concat_max_len(wiki,&mut conn).await?;
+            break;
+        }
         Ok(conn)
     }
 
