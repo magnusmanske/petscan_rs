@@ -463,12 +463,14 @@ impl SourceDatabase {
             futures.push(future) ;
         }
 
-        Ok(join_all(futures)
-            .await
-            .into_par_iter()
-            .filter_map(|i|i.ok())
-            .filter(|i|!i.is_empty())
-            .collect())
+        let mut ret = vec![];
+        for result in join_all(futures).await {
+            let result = result?;
+            if !result.is_empty() {
+                ret.push(result);
+            }
+        }
+        Ok(ret)
     }
 
     async fn get_talk_namespace_ids(&self, conn: &mut my::Conn) -> Result<String, String> {
