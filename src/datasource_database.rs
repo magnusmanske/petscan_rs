@@ -20,7 +20,7 @@ use wikibase::mediawiki::api::{Api, NamespaceID};
 use wikibase::mediawiki::title::Title;
 
 static MAX_CATEGORY_BATCH_SIZE: usize = 2500;
-static MAX_SUBCATEGORIES_IN_TREE: usize = 150000;
+static MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
 
 #[derive(Debug)]
 struct DsdbParams {
@@ -351,7 +351,7 @@ impl SourceDatabase {
             }
             // println!("Depth {remaining_depth} adding {} new sub-categories",categories_new.len());
             if categories_done.len() > MAX_SUBCATEGORIES_IN_TREE {
-                return Err(format!("Sub-categories for \"{title}\" exceed {}, please limit that category depth, or fix the category tree",categories_done.len()));
+                return Err(format!("Sub-categories for \"{title}\" exceed {}, please limit that category depth, or fix the category tree",MAX_SUBCATEGORIES_IN_TREE));
             }
             categories_todo = categories_new.drain().collect();
         }
