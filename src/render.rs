@@ -961,7 +961,7 @@ impl RenderHTML {
                 "timestamp" => "<th class='text-nowrap' tt='h_touched'></th>".to_string(),
                 "wikidata_item" => "<th tt='h_wikidata'></th>".to_string(),
                 "coordinates" => "<th tt='h_coordinates'></th>".to_string(),
-                "defaultsort" => "<th tt='h_defaultsort'></th>".to_string(),
+                "defaultsort" => "<th tt='h_defaultsort' style='white-space: nowrap;'></th>".to_string(),
                 "disambiguation" => "<th tt='h_disambiguation'></th>".to_string(),
                 "incoming_links" => "<th tt='h_incoming_links'></th>".to_string(),
                 "sitelinks" => "<th tt='h_sitelinks'></th>".to_string(),
