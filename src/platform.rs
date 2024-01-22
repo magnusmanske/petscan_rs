@@ -261,9 +261,10 @@ impl Platform {
                 panic!("Platform::run names is empty");
             }
             let name = names.remove(0);
-            if let Ok(r) = result {
-                results.insert(name,r);
-            }
+            results.insert(name,result?);
+            // if let Ok(r) = result {
+            //     results.insert(name,r);
+            // }
         }
         drop(tmp_results);
 
