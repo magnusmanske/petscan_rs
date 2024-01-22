@@ -1370,23 +1370,4 @@ mod tests {
         let result = simulate_category_query(params).await.unwrap();
         assert!(result.len().unwrap() > 0);
     }
-
-
-    use std::time::Instant;
-
-    #[tokio::test]
-    async fn test_cat_db() {
-        let state = get_state().await;
-        let params = SourceDatabaseParameters::new();
-        let dbs = SourceDatabase::new(params);
-        let category = "Monochrome photographs";
-        let depth = 100;
-
-        println!("RUNNING");
-
-        let start_time = Instant::now();
-        let result = dbs.get_categories_in_tree(&state,"commonswiki",category,depth).await.unwrap();
-        let end_time = Instant::now();
-        println!("ORIG: {} pages in {:.2}",result.len(),(end_time-start_time).as_secs_f64());
-    }
 }
