@@ -269,6 +269,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Shared state
     let app_state = Arc::new(AppState::new_from_config(&petscan_config).await) ;
 
+    let mut args = std::env::args();
+    if args.len()==2 { // ASSUMING PSID, eg 26799233
+        let _ = args.next();
+        let psid: String = args.next().unwrap();
+        let parameter_pairs = std::collections::HashMap::new();
+        let mut form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
+        match app_state.get_query_from_psid(&psid).await {
+            Ok(psid_query) => {
+                let psid_params = FormParameters::outcome_from_query(&psid_query).unwrap();
+                form_parameters.rebase(&psid_params);
+            }
+            Err(e) => panic!("{}", e),
+        }
+        let mut platform = Platform::new_from_parameters(&form_parameters, app_state.clone());
+        let _ = platform.run().await;
+        println!("{:?}",platform.result().as_ref().unwrap().entries().read());
+        std::process::exit(0);
+    }
+
     // Run on IP/port
     let port = petscan_config["http_port"].as_u64().unwrap_or(80) as u16;    
     let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
@@ -304,48 +323,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
     }
 }
-
-
-/*
-
-#[tokio::main]
-async fn main() -> Result<(),Error> {
-    tracing_subscriber::fmt::init();
-
-    let basedir = env::current_dir()
-        .expect("Can't get CWD")
-        .to_str()
-        .expect("Can't convert CWD to_str")
-        .to_string();
-    let path = basedir.to_owned() + "/config.json";
-    let file = File::open(&path).unwrap_or_else(|_| panic!("Can not open config file at {}", &path));
-    let petscan_config: Value =
-        serde_json::from_reader(file).expect("Can not parse JSON from config file");
-
-    let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
-    let port = petscan_config["http_port"].as_u64().unwrap_or(80) as u16;    
-    let app_state = Arc::new(AppState::new_from_config(&petscan_config).await) ;
-
-    let ip_address : Vec<u8> = ip_address.split('.').map(|s|s.parse::<u8>().unwrap()).collect();
-    let ip_address = std::net::Ipv4Addr::new(ip_address[0],ip_address[1],ip_address[2],ip_address[3],);
-    let addr = SocketAddr::from((ip_address, port));
-
-    let make_service = make_service_fn(move |_| {
-        let app_state = app_state.clone();
-        
-        async {
-            Ok::<_, Error>(service_fn(move |req|  {
-                process_request(req,app_state.to_owned())
-            }))
-        }
-    });
-    
-    let server = Server::bind(&addr).serve(make_service);
-
-    println!("Listening on http://{}", addr);
-
-    server.await?;
-
-    Ok(())
-}
- */

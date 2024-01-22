@@ -832,27 +832,27 @@ impl SourceDatabase {
         let nslist = primary_pagelist.group_by_namespace()?;
         let mut batches: Vec<SQLtuple> = vec![];
         nslist.iter().for_each(|nsgroup| {
-                    nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
-                        let mut sql = Platform::sql_tuple();
-                        sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
-                        sql.0 += &params.link_count_sql;
-                        sql.0 += " FROM page p";
-                        if !params.is_before_after_done {
-                            Platform::append_sql(&mut sql, params.sql_before_after.clone());
-                        }
-                        sql.0 += " WHERE (p.page_namespace=";
-                        sql.0 += &nsgroup.0.to_string();
-                        sql.0 += " AND p.page_title IN (";
-                        Platform::append_sql(&mut sql, Platform::prep_quote(&titles));
-                        sql.0 += "))";
-                        batches.push(sql);
-                    });
-                });
+            nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
+                let mut sql = Platform::sql_tuple();
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
+                sql.0 += &params.link_count_sql;
+                sql.0 += " FROM page p";
+                if !params.is_before_after_done {
+                    Platform::append_sql(&mut sql, params.sql_before_after.clone());
+                }
+                sql.0 += " WHERE (p.page_namespace=";
+                sql.0 += &nsgroup.0.to_string();
+                sql.0 += " AND p.page_title IN (";
+                Platform::append_sql(&mut sql, Platform::prep_quote(&titles));
+                sql.0 += "))";
+                batches.push(sql);
+            });
+        });
 
         // Either way, it's done
         params.is_before_after_done = true;
 
-        let wiki = primary_pagelist.wiki()?.ok_or_else(|| "No wiki 12345".to_string())?;
+        let wiki = primary_pagelist.wiki()?.ok_or_else(|| "No wiki given in datasource_database::get_pages_pagelist".to_string())?;
 
         let mut futures : Vec<_> = vec![] ;
         for sql in batches {
@@ -898,8 +898,7 @@ impl SourceDatabase {
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList, String> {
-        let mut params =
-            self.get_pages_initialize_query(state, primary_pagelist).await?;
+        let mut params = self.get_pages_initialize_query(state, primary_pagelist).await?;
 
         let mut sql = Platform::sql_tuple();
 
@@ -995,7 +994,7 @@ impl SourceDatabase {
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
 
         // Namespaces
-        if !self.params.namespace_ids.is_empty() {
+        if !self.params.namespace_ids.is_empty() && primary!="pagelist" {
             let namespace_ids = &self
                 .params
                 .namespace_ids
@@ -1226,8 +1225,6 @@ impl SourceDatabase {
             "DSDB::get_pages_for_primary STARTING RUN",
             Some(sql.1.len()),
         );
-
-        //println!("{:?}",&sql);
 
         let sql_1_len = sql.1.len() ;
         let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
