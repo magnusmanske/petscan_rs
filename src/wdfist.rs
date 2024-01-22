@@ -864,7 +864,7 @@ mod tests {
             .item2files
             .get(&"Q350".to_string())
             .unwrap()
-            .contains_key(&"Cambridge_Wikidata_dinner.jpg".to_string()));
+            .contains_key(&"Cycling_down_Malcolm_Street_-_geograph.org.uk_-_3751839.jpg".to_string()));
     }
 
     #[tokio::test]
