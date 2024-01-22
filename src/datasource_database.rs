@@ -20,6 +20,7 @@ use wikibase::mediawiki::api::{Api, NamespaceID};
 use wikibase::mediawiki::title::Title;
 
 static MAX_CATEGORY_BATCH_SIZE: usize = 2500;
+static MAX_SUBCATEGORIES_IN_TREE: usize = 150000;
 
 #[derive(Debug)]
 struct DsdbParams {
@@ -325,7 +326,7 @@ impl SourceDatabase {
         categories_done.insert(title.to_owned());
 
         let mut categories_todo = vec![];
-        categories_todo.push(title);
+        categories_todo.push(title.to_owned());
 
         let mut remaining_depth = depth;
         while remaining_depth>0 && !categories_todo.is_empty() {
@@ -348,10 +349,107 @@ impl SourceDatabase {
                     }
                 }
             }
+            // println!("Depth {remaining_depth} adding {} new sub-categories",categories_new.len());
+            if categories_done.len() > MAX_SUBCATEGORIES_IN_TREE {
+                return Err(format!("Sub-categories for \"{title}\" exceed {}, please limit that category depth, or fix the category tree",categories_done.len()));
+            }
             categories_todo = categories_new.drain().collect();
         }
         Ok(categories_done.drain().collect())
     }
+
+    /*
+    // This might be nice but PetScan is not allowed to create temporary tables on Commons
+    async fn get_categories_in_tree_db(
+        &self,
+        state: &AppState,
+        wiki: &str,
+        title: &str,
+        depth: u16,
+    ) -> Result<Vec<String>, String> {
+        let is_cs = self.params.category_namespace_is_case_insensitive;
+        let title = SourceDatabaseParameters::s2u_ucfirst(title,is_cs);
+
+        let mut conn = state.get_wiki_db_connection(&wiki).await?;
+
+        // Initialize temporary tables
+        let sql = "CREATE TEMPORARY TABLE `categories_done` (
+            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+            `category` varchar(255) NOT NULL DEFAULT '',
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `category1` (`category`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;" ;
+        conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
+
+        let sql = "CREATE TEMPORARY TABLE `categories_todo` (
+            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+            `category` varchar(255) NOT NULL DEFAULT '',
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `category2` (`category`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;" ;
+        conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
+
+        let sql = "CREATE TEMPORARY TABLE `categories_new` (
+            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+            `category` varchar(255) NOT NULL DEFAULT '',
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `category3` (`category`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;" ;
+        conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
+
+        let sql : SQLtuple = ("INSERT INTO `categories_done` (?)".to_string(),vec![title.to_owned().into()]);
+        conn.exec_drop(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await.map_err(|e|format!("{:?}",e))?;
+
+        let sql : SQLtuple = ("INSERT INTO `categories_todo` (?)".to_string(),vec![title.into()]);
+        conn.exec_drop(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await.map_err(|e|format!("{:?}",e))?;
+
+        // Iterate on depth
+        let mut remaining_depth = depth;
+        while remaining_depth>0 {
+            remaining_depth -= 1 ;
+
+            // Find new sub-categories
+            let sql = "INSERT INTO categories_new (category) 
+                SELECT DISTINCT page_title 
+                FROM page,categorylinks,categories_todo 
+                WHERE cl_from=page_id 
+                AND cl_type='subcat' 
+                AND cl_to=categories_todo.category
+                AND NOT EXISTS (SELECT * FROM categories_done WHERE category=page_title)" ;
+            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
+            if conn.affected_rows() == 0 {
+                break; // Nothing new, we are done here
+            }
+
+            // Add new sub-categories to categories_done
+            let sql = "INSERT INTO `categories_done` (category) SELECT category FROM categories_new";
+            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
+
+            // Clear categories_todo and add new sub-categories
+            let sql = "TRUNCATE `categories_todo`";
+            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
+
+            let sql = "INSERT INTO `categories_todo` (category) SELECT category FROM categories_new";
+            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
+
+            // Clear categories_new for next round
+            let sql = "TRUNCATE `categories_new`";
+            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
+        }
+
+        // Retrieve results
+        let sql = "SELECT `category` FROM `categories_done`";
+        let result = conn
+            .exec_iter(sql,()).await
+            .map_err(|e|format!("{:?}",e))?
+            .map_and_drop(from_row::<Vec<u8>>)
+            .await
+            .map_err(|e|format!("{:?}",e))?
+            .iter()
+            .map(|row| String::from_utf8_lossy(&row).into_owned())
+            .collect();
+        Ok(result)
+    } */
 
     pub async fn parse_category_list(
         &self,
@@ -1273,4 +1371,22 @@ mod tests {
         assert!(result.len().unwrap() > 0);
     }
 
+
+    use std::time::Instant;
+
+    #[tokio::test]
+    async fn test_cat_db() {
+        let state = get_state().await;
+        let params = SourceDatabaseParameters::new();
+        let dbs = SourceDatabase::new(params);
+        let category = "Monochrome photographs";
+        let depth = 100;
+
+        println!("RUNNING");
+
+        let start_time = Instant::now();
+        let result = dbs.get_categories_in_tree(&state,"commonswiki",category,depth).await.unwrap();
+        let end_time = Instant::now();
+        println!("ORIG: {} pages in {:.2}",result.len(),(end_time-start_time).as_secs_f64());
+    }
 }
