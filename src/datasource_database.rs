@@ -1,4 +1,3 @@
-use async_recursion::async_recursion;
 use futures::future::join_all;
 use async_trait::async_trait;
 use crate::app_state::AppState;
@@ -17,7 +16,6 @@ use mysql_async::from_row;
 use mysql_async as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
 use wikibase::mediawiki::api::{Api, NamespaceID};
 use wikibase::mediawiki::title::Title;
 
@@ -294,116 +292,26 @@ impl SourceDatabase {
             .collect()
     }
 
-    async fn go_depth_batch(
-        &self,
-        state: &AppState,
-        wiki: &str,
-        categories_batch: Vec<String>,
-        categories_done: &RwLock<HashSet<String>>,
-        new_categories: &RwLock<Vec<String>>,
-    ) -> Result<(), String> {
+    async fn get_categories_in_list(&self, state: &AppState, wiki: &str, categories: &[String]) -> Result<Vec<String>,String> {
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
-        categories_batch.iter().for_each(|c| {
-            // Don't par_iter, already in pool!
-            if let Ok(mut cd) = categories_done.write() {
-                cd.insert(c.to_string());
-            }
-        });
-        Platform::append_sql(&mut sql, Platform::prep_quote(&categories_batch));
+        Platform::append_sql(&mut sql, Platform::prep_quote(categories));
         sql.0 += ")";
-
-        let mut conn = state
-            .get_wiki_db_connection(&wiki)
-            .await? ;
-        let result = conn
+        let result = state.get_wiki_db_connection(&wiki).await?
             .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
             .map_err(|e|format!("{:?}",e))?
             .map_and_drop(from_row::<Vec<u8>>)
             .await
             .map_err(|e|format!("{:?}",e))?;
-        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
-
-        let mut err : Option<String> = None ;
-        result
+        let result: Vec<String> = result
             .iter()
             .map(|row| String::from_utf8_lossy(&row).into_owned())
-            .for_each(|page_title| {
-                let do_add = match categories_done.read() {
-                    Ok(cd) => !cd.contains(&page_title),
-                    _ => false,
-                };
-                if do_add {
-                    match new_categories.write() {
-                        Ok(mut nc) => { nc.push(page_title.to_owned()); }
-                        Err(e) => { err = Some(e.to_string()); }
-                    }
-                    match categories_done.write() {
-                        Ok(mut cd) => { cd.insert(page_title); }
-                        Err(e) => { err = Some(e.to_string()); }
-                    }
-                }
-            });
-        match err {
-            Some(e) => Err(e),
-            None => Ok(())
-        }
+            .collect();
+        Ok(result)
     }
 
-    #[async_recursion]
-    async fn go_depth(
-        &self,
-        state: &AppState,
-        wiki: &str,
-        categories_done: &RwLock<HashSet<String>>,
-        categories_to_check: &[String],
-        depth: u16,
-    ) -> Result<(), String> {
-        if depth == 0 || categories_to_check.is_empty() {
-            return Ok(());
-        }
-        Platform::profile("DSDB::do_depth begin", Some(categories_to_check.len()));
-
-        let new_categories: Vec<String> = vec![];
-        let new_categories = RwLock::new(new_categories);
-
-        let category_batches = categories_to_check
-            .par_iter()
-            .map(|s|s.to_string())
-            .chunks(PAGE_BATCH_SIZE)
-            .collect::<Vec<Vec<String>>>();
-        let mut futures = vec![] ;
-        for categories_batch in category_batches {
-            let future = self.go_depth_batch(
-                &state,
-                wiki,
-                categories_batch,
-                &categories_done,
-                &new_categories,
-            ) ;
-            futures.push(future);
-        }
-        join_all(futures).await;
-
-        let new_categories = new_categories
-            .into_inner()
-            .map_err(|e| format!("{:?}", e))?;
-
-        Platform::profile("DSDB::do_depth new categories", Some(new_categories.len()));
-
-        Platform::profile(
-            "DSDB::do_depth end, categories done",
-            Some(
-                categories_done
-                    .read()
-                    .map_err(|e| format!("{:?}", e))?
-                    .len(),
-            ),
-        );
-
-        self.go_depth(&state, wiki, categories_done, &new_categories, depth - 1).await?;
-        Ok(())
-    }
-
+    /// Takes a root category and returns all subcategories to a specified depth.
+    /// The returend list contains the root cagegory.
+    /// Depth 0 returns only the root category, depth 1 adds all direct subcategories etc.
     async fn get_categories_in_tree(
         &self,
         state: &AppState,
@@ -411,17 +319,38 @@ impl SourceDatabase {
         title: &str,
         depth: u16,
     ) -> Result<Vec<String>, String> {
-        let categories_done = RwLock::new(HashSet::new());
-        let title = SourceDatabaseParameters::s2u_ucfirst(
-            title,
-            self.params.category_namespace_is_case_insensitive,
-        );
-        (*categories_done.write().map_err(|e| format!("{:?}", e))?).insert(title.to_owned());
-        self.go_depth(&state, wiki, &categories_done, &[title.to_string()], depth).await?;
-        let mut tmp = categories_done
-            .into_inner()
-            .map_err(|e| format!("{:?}", e))?;
-        Ok(tmp.drain().collect())
+        let is_cs = self.params.category_namespace_is_case_insensitive;
+        let mut categories_done = HashSet::new();
+        let title = SourceDatabaseParameters::s2u_ucfirst(title,is_cs);
+        categories_done.insert(title.to_owned());
+
+        let mut categories_todo = vec![];
+        categories_todo.push(title);
+
+        let mut remaining_depth = depth;
+        while remaining_depth>0 && !categories_todo.is_empty() {
+            remaining_depth -= 1 ;
+            let mut futures = vec![];
+            for chunk in categories_todo.chunks(MAX_CATEGORY_BATCH_SIZE*10) {
+                let future = self.get_categories_in_list(&state, &wiki, chunk);
+                futures.push(future);
+            }
+            let results = join_all(futures).await;
+            categories_todo.clear();
+            categories_todo.shrink_to_fit();
+            let mut categories_new = HashSet::new();
+            for result in results {
+                for category in result? {
+                    let title = SourceDatabaseParameters::s2u_ucfirst(&category,is_cs);
+                    if !categories_done.contains(&title) {
+                        categories_new.insert(category);
+                        categories_done.insert(title);
+                    }
+                }
+            }
+            categories_todo = categories_new.drain().collect();
+        }
+        Ok(categories_done.drain().collect())
     }
 
     pub async fn parse_category_list(
@@ -1343,4 +1272,5 @@ mod tests {
         let result = simulate_category_query(params).await.unwrap();
         assert!(result.len().unwrap() > 0);
     }
+
 }

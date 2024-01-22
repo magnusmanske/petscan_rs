@@ -27,7 +27,7 @@ pub struct AppState {
     shutting_down: Arc<RwLock<bool>>,
     site_matrix: Value,
     main_page: String,
-    local_testing: bool
+    port_mapping: HashMap<String,u16>, // Local testing only
 }
 
 impl AppState {
@@ -43,10 +43,17 @@ impl AppState {
                 .expect("No password key in config file")
                 .to_string(),
         );
+        let port_mapping = config["port_mapping"]
+            .as_object()
+            .map(|x|x.to_owned())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k,v)|(k.to_string(),v.as_i64().unwrap_or_default() as u16))
+            .collect();
         let ret = Self {
             db_pool : Arc::new(Mutex::new(vec![])),
             config: config.to_owned(),
-            local_testing: config["host"] == "127.0.0.1",
+            port_mapping,
             threads_running: Arc::new(RwLock::new(0)),
             shutting_down: Arc::new(RwLock::new(false)),
             site_matrix: AppState::load_site_matrix().await,
@@ -91,10 +98,9 @@ impl AppState {
 
     fn get_mysql_opts_for_wiki(&self,wiki:&str,user:&str,pass:&str) -> Result<my::Opts,String> {
         let ( host , schema ) = self.db_host_and_schema_for_wiki(&wiki)?;
-        let port: u16 = if self.is_local_testing() && wiki=="wikidatawiki" {
-            3309
-        } else {
-            self.config["db_port"].as_u64().unwrap_or(3306) as u16
+        let port: u16 = match self.port_mapping.get(wiki) {
+            Some(port) => *port,
+            None => self.config["db_port"].as_u64().unwrap_or(3306) as u16,
         };
         let opts = my::OptsBuilder::default()
             .ip_or_hostname(host)
@@ -171,10 +177,6 @@ impl AppState {
             conn.exec_drop("SET SESSION group_concat_max_len = 1000000000",()).await.map_err(|e|format!("{:?}",e))?;
         }
         Ok(())
-    }
-
-    fn is_local_testing(&self) -> bool {
-        self.local_testing
     }
 
     #[instrument(skip(self), err)]
