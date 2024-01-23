@@ -139,20 +139,27 @@ function AutoList ( callback ) {
 			}
 			
 			$.each ( rows , function ( k , row ) {
-				var cmd = { q:q , status:'waiting' } ;
-				var m = row.match ( /^\s*-(P\d+)/i ) ;
-				if ( m == null ) {
-					m = row.match ( /^\s*(P\d+)\s*:\s*(Q\d+)\s*$/i ) ;
-					if ( m != null ) {
-						cmd.mode = 'add' ;
+				let cmd = { q:q , status:'waiting' } ;
+				let m = row.match ( /^\s*-D(\S+)\t(.+)$/i ) ;
+				if ( m != null ) {
+					cmd.mode = 'desc';
+					cmd.language = m[1] ;
+					cmd.value = m[2].replace(/^"(.+?)"$/,"$1") ;
+				} else {
+					m = row.match ( /^\s*-(P\d+)/i ) ;
+					if ( m == null ) {
+						m = row.match ( /^\s*(P\d+)\s*:\s*(Q\d+)\s*$/i ) ;
+						if ( m != null ) {
+							cmd.mode = 'add' ;
+							cmd.prop = m[1] ;
+							cmd.value = m[2] ;
+						} else return ;
+					} else { // Delete property
+						cmd.mode = 'delete' ;
 						cmd.prop = m[1] ;
-						cmd.value = m[2] ;
-					} else return ;
-				} else { // Delete property
-					cmd.mode = 'delete' ;
-					cmd.prop = m[1] ;
-					m = row.match ( /^\s*-(P\d+)\s*:\s*(Q\d+)/i ) ;
-					if ( m != null ) cmd.value = m[2] ;
+						m = row.match ( /^\s*-(P\d+)\s*:\s*(Q\d+)/i ) ;
+						if ( m != null ) cmd.value = m[2] ;
+					}
 				}
 				remove_q = me.commands_todo.length ;
 				me.commands_todo.push ( cmd ) ;
