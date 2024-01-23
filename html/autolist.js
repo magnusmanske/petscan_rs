@@ -140,7 +140,7 @@ function AutoList ( callback ) {
 			
 			$.each ( rows , function ( k , row ) {
 				let cmd = { q:q , status:'waiting' } ;
-				let m = row.match ( /^\s*-D(\S+)\t(.+)$/i ) ;
+				let m = row.match ( /^\s*-D(\S+):(.+)$/i ) ;
 				if ( m != null ) {
 					cmd.mode = 'desc';
 					cmd.language = m[1] ;
