@@ -140,7 +140,7 @@ function AutoList ( callback ) {
 			
 			$.each ( rows , function ( k , row ) {
 				let cmd = { q:q , status:'waiting' } ;
-				let m = row.match ( /^\s*-D(\S+):(.+)$/i ) ;
+				let m = row.match ( /^\s*D(\S+):(.+)$/i ) ;
 				if ( m != null ) {
 					cmd.mode = 'desc';
 					cmd.language = m[1] ;
@@ -410,6 +410,8 @@ function AutoList ( callback ) {
 					if ( lang == 'commons' ) lang = interface_language;//'en' ;
 					let the_label = $.trim(cmd.page.replace(/_/g,' ').replace(/\s*\(.+?\)\s*/,' ')).replace(/^\S+:/,'');
 					if ( m !== null ) qs += "||LAST|L" + lang + "|\"" + the_label + '"' ;
+				} else if ( cmd.mode == 'desc' ) {
+					qs = "LAST|D"+cmd.language+"|\""+cmd.value+"\"";
 				} else {
 					if ( cmd.mode == 'delete' ) qs = '-' ;
 					if ( /^create_item_/.test(cmd.q) ) qs += 'LAST' ;
