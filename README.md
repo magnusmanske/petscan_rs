@@ -15,7 +15,6 @@ Docs: https://meta.wikimedia.org/wiki/PetScan/en
 * MySQL server
 * [Toolforge account](https://wikitech.wikimedia.org/wiki/Help:Toolforge)
 
-
 ### Setup local MySQL database on port 3308
 
 ```sql
@@ -48,6 +47,8 @@ XXX: wiki to be queried (e.g. commonswiki)
 
 
 ### Create config.json
+Put the ports from the above `ssh` command with the respective wikis into `port_mapping`:
+
 ```json
 {
   "host": "127.0.0.1",
@@ -57,6 +58,10 @@ XXX: wiki to be queried (e.g. commonswiki)
   "http_port": 8000,
   "timeout": 30000,
   "restart-code": "",
+  "port_mapping":{
+    "<xxx>":3306,
+    "wikidatawiki":3309
+  },
   "mysql": [
     [
       "<replicausername>",
@@ -73,4 +78,11 @@ The credentials to the database replicas can be found in `~/replica.my.cnf` of t
 
 ```bash
 cargo run
+```
+
+### Run a query from command line
+
+You can run a query from command line using the URL parameters. Output will be in the specified format, except HTML whcih will be automatically rewritten to JSON.
+```bash
+cargo run -- 'url_parameters'
 ```

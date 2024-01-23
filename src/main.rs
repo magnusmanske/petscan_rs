@@ -253,41 +253,59 @@ async fn process_request(req: Request<hyper::body::Incoming>,app_state:Arc<AppSt
     
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tracing_subscriber::fmt::init();
-
-    let basedir = env::current_dir()
-        .expect("Can't get CWD")
-        .to_str()
-        .expect("Can't convert CWD to_str")
-        .to_string();
-    let path = basedir.to_owned() + "/config.json";
-    let file = File::open(&path).unwrap_or_else(|_| panic!("Can not open config file at {}", &path));
-    let petscan_config: Value = serde_json::from_reader(file).expect("Can not parse JSON from config file");
-
-    // Shared state
-    let app_state = Arc::new(AppState::new_from_config(&petscan_config).await) ;
-
+async fn command_line_useage(app_state: Arc<AppState>) -> Result<(),String> {
     let mut args = std::env::args();
-    if args.len()==2 { // ASSUMING PSID, eg 26799233
-        let _ = args.next();
-        let psid: String = args.next().unwrap();
-        let parameter_pairs = std::collections::HashMap::new();
-        let mut form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
-        match app_state.get_query_from_psid(&psid).await {
-            Ok(psid_query) => {
-                let psid_params = FormParameters::outcome_from_query(&psid_query).unwrap();
-                form_parameters.rebase(&psid_params);
+    let _ = args.next(); // the actual command
+    let argument: String = args.next().unwrap();
+
+    let parameter_pairs = form_urlencoded::parse(argument.as_bytes())
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    let mut form_parameters = FormParameters::new_from_pairs ( parameter_pairs ) ;
+    
+    // Never output HTML, pick JSON instead as default
+    let format: String = match form_parameters.params.get("format") {
+        Some(format) => {
+            match format.as_str() {
+                "html"|"" => "json".into(),
+                other => other.into(),
             }
-            Err(e) => panic!("{}", e),
         }
-        let mut platform = Platform::new_from_parameters(&form_parameters, app_state.clone());
-        let _ = platform.run().await;
-        println!("{:?}",platform.result().as_ref().unwrap().entries().read());
-        std::process::exit(0);
+        None => "json".into(),
+    };
+    form_parameters.params.insert("format".into(),format);
+
+    // Load PSID if set
+    if let Some(psid) = form_parameters.params.get("psid") {
+        if !psid.trim().is_empty() {
+            match app_state.get_query_from_psid(&psid.to_string()).await {
+                Ok(psid_query) => {
+                    let psid_params = match FormParameters::outcome_from_query(&psid_query) {
+                        Ok(pp) => pp,
+                        Err(e) => panic!("{}", e),
+                    };
+                    form_parameters.rebase(&psid_params);
+                }
+                Err(e) => panic!("{}", e),
+            }
+        }
     }
 
+    let mut platform = Platform::new_from_parameters(&form_parameters, app_state.clone());
+    let _ = platform.run().await;
+    // println!("{:?}",platform.result().as_ref().unwrap().entries().read());
+
+    let response = match platform.get_response().await {
+        Ok(response) => response,
+        Err(error) => app_state.render_error(error, &form_parameters),
+    };
+    println!("{}",json!(response.s).as_str().unwrap());
+
+
+    Ok(())
+}
+
+async fn web_server(app_state: Arc<AppState>, petscan_config: Value) -> Result<(),String> {
     // Run on IP/port
     let port = petscan_config["http_port"].as_u64().unwrap_or(80) as u16;    
     let ip_address = petscan_config["http_server"].as_str().unwrap_or("0.0.0.0").to_string();
@@ -297,11 +315,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Listening on http://{}", addr);
 
     // We create a TcpListener and bind it to IP:port
-    let listener = TcpListener::bind(addr).await?;
+    let listener = TcpListener::bind(addr).await.expect("web_server: Cannot bind IP");
 
     // We start a loop to continuously accept incoming connections
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = listener.accept().await.expect("web_server: Cannot accept request");
 
         // Use an adapter to access something implementing `tokio::io` traits as if they implement
         // `hyper::rt` IO traits.
@@ -322,4 +340,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
         });
     }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    tracing_subscriber::fmt::init();
+
+    let basedir = env::current_dir()
+        .expect("Can't get CWD")
+        .to_str()
+        .expect("Can't convert CWD to_str")
+        .to_string();
+    let path = basedir.to_owned() + "/config.json";
+    let file = File::open(&path).unwrap_or_else(|_| panic!("Can not open config file at {}", &path));
+    let petscan_config: Value = serde_json::from_reader(file).expect("Can not parse JSON from config file");
+
+    // Shared state
+    let app_state = Arc::new(AppState::new_from_config(&petscan_config).await) ;
+
+    let args = std::env::args();
+    if args.len()>1 {
+        let _ = command_line_useage(app_state).await;
+    } else {
+        let _ = web_server(app_state,petscan_config).await;
+    }
+    Ok(())
 }

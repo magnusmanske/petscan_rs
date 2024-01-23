@@ -767,17 +767,14 @@ impl Platform {
         Ok(())
     }
 
-    async fn process_files(&self, result: &PageList) -> Result<(), String> {
-        let giu = self.has_param("giu");
-        let file_data = self.has_param("ext_image_data")
-            || self.get_param("sortby") == Some("filesize".to_string())
-            || self.get_param("sortby") == Some("uploaddate".to_string());
-        let file_usage = giu || self.has_param("file_usage_data");
-        let file_usage_data_ns0 = self.has_param("file_usage_data_ns0");
-
-        if file_usage {
+    async fn file_usage(&self, result: &PageList, file_usage_data_ns0: bool) -> Result<(), String> {
+        let mut batch_size = PAGE_BATCH_SIZE ;
+        loop {
+            if batch_size==0 {
+                return Err("file_usage: Too much file usage to report back from MySQL".into());
+            }
             let batches: Vec<SQLtuple> = result
-                .to_sql_batches_namespace(PAGE_BATCH_SIZE,6)?
+                .to_sql_batches_namespace(batch_size,6)?
                 .par_iter_mut()
                 .map(|sql_batch| {
                     sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
@@ -795,7 +792,17 @@ impl Platform {
             } ;
             let col_title : usize = 0 ;
             let col_ns : usize = 1 ;
-            result.run_batch_queries(&self.state(), batches).await?
+            let batch_results = match result.run_batch_queries(&self.state(), batches).await {
+                Ok(res) => res,
+                Err(e) => {
+                    if e.contains("packet too large") { // Happens for heavily used files, try again with half batch size
+                        batch_size = std::cmp::min(batch_size,result.len().unwrap())/2;
+                        continue;
+                    }
+                    return Err(e); // Some other error
+                },
+            };
+            batch_results
                 .iter()
                 .filter_map(|row| {
                     result.entry_from_row(row, col_title, col_ns)
@@ -811,6 +818,21 @@ impl Platform {
                     the_f(row.clone(), &mut entry);
                     result.add_entry(entry).unwrap_or(());
                 });
+            return Ok(());
+        }
+    }
+    
+
+    async fn process_files(&self, result: &PageList) -> Result<(), String> {
+        let giu = self.has_param("giu");
+        let file_data = self.has_param("ext_image_data")
+            || self.get_param("sortby") == Some("filesize".to_string())
+            || self.get_param("sortby") == Some("uploaddate".to_string());
+        let file_usage = giu || self.has_param("file_usage_data");
+        let file_usage_data_ns0 = self.has_param("file_usage_data_ns0");
+
+        if file_usage {
+            self.file_usage(result, file_usage_data_ns0).await?;
         }
 
         if file_data {
