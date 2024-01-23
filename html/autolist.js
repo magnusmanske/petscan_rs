@@ -400,8 +400,9 @@ function AutoList ( callback ) {
 					qs += "||LAST|S" + output_wiki + "|\"" + cmd.page + "\"" ;
 					let m = output_wiki.match ( /^([a-z-]+)wiki$/ ) ;
 					let lang = m[1] ;
-					if ( lang == 'commons' ) lang = 'en' ;
-					if ( m !== null ) qs += "||LAST|L" + lang + "|\"" + $.trim(cmd.page.replace(/_/g,' ').replace(/\s*\(.+?\)\s*/,' ')) + '"' ;
+					if ( lang == 'commons' ) lang = interface_language;//'en' ;
+					let the_label = $.trim(cmd.page.replace(/_/g,' ').replace(/\s*\(.+?\)\s*/,' ')).replace(/^\S+:/,'');
+					if ( m !== null ) qs += "||LAST|L" + lang + "|\"" + the_label + '"' ;
 				} else {
 					if ( cmd.mode == 'delete' ) qs = '-' ;
 					if ( /^create_item_/.test(cmd.q) ) qs += 'LAST' ;
