@@ -6,7 +6,6 @@ use wikibase::mediawiki::title::Title;
 
 //________________________________________________________________________________________________________________________
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum PageListSort {
     Default(bool),
@@ -44,7 +43,6 @@ impl PageListSort {
 
 //________________________________________________________________________________________________________________________
 
-
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FileInfo {
     pub file_usage: Vec<FileUsage>,
@@ -64,18 +62,19 @@ impl FileInfo {
         let mut ret = Self::new();
         ret.file_usage = gil_group
             .split('|')
-            .filter_map(|part| FileUsage::new_from_part(&part.to_string()))
+            .filter_map(FileUsage::new_from_part)
             .collect();
         ret
     }
 
     pub fn new() -> Self {
-        Self { ..Default::default() }
+        Self {
+            ..Default::default()
+        }
     }
 }
 
 //________________________________________________________________________________________________________________________
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileUsage {
@@ -125,6 +124,7 @@ pub struct PageCoordinates {
 impl PageCoordinates {
     pub fn new_from_lat_lon(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split(',').collect();
+        /* trunk-ignore(clippy/get_first) */
         let lat = parts.get(0)?.parse::<f64>().ok()?;
         let lon = parts.get(1)?.parse::<f64>().ok()?;
         Some(Self { lat, lon })
@@ -132,7 +132,6 @@ impl PageCoordinates {
 }
 
 //________________________________________________________________________________________________________________________
-
 
 pub type LinkCount = u32;
 
@@ -173,14 +172,14 @@ pub struct PageListEntry {
     pub link_count: Option<LinkCount>,
     pub redlink_count: Option<LinkCount>,
     pub sitelink_count: Option<LinkCount>,
-    page_timestamp: Option<Box<String>>,
-    page_image: Option<Box<String>>,
-    wikidata_item: Option<Box<String>>,
-    wikidata_label: Option<Box<String>>,
-    wikidata_description: Option<Box<String>>,
-    defaultsort: Option<Box<String>>,
-    coordinates: Option<Box<PageCoordinates>>,
-    file_info: Option<Box<FileInfo>>,
+    page_timestamp: Option<String>,
+    page_image: Option<String>,
+    wikidata_item: Option<String>,
+    wikidata_label: Option<String>,
+    wikidata_description: Option<String>,
+    defaultsort: Option<String>,
+    coordinates: Option<PageCoordinates>,
+    file_info: Option<FileInfo>,
 }
 
 impl Hash for PageListEntry {
@@ -221,115 +220,83 @@ impl PageListEntry {
     }
 
     pub fn get_file_info(&self) -> Option<FileInfo> {
-        match &self.file_info {
-            Some(file_info) => Some(*(file_info.clone())),
-            None => None,
-        }
+        self.file_info
+            .as_ref()
+            .map(|file_info| file_info.to_owned())
     }
 
     pub fn set_file_info(&mut self, file_info_option: Option<FileInfo>) {
-        self.file_info = match file_info_option {
-            Some(file_info) => Some(Box::new(file_info)),
-            None => None,
-        }
+        self.file_info = file_info_option
     }
 
     pub fn get_coordinates(&self) -> Option<PageCoordinates> {
-        match &self.coordinates {
-            Some(coordinates) => Some(*(coordinates.clone())),
-            None => None,
-        }
+        self.coordinates
+            .as_ref()
+            .map(|coordinates| coordinates.to_owned())
     }
 
     pub fn set_coordinates(&mut self, coordinates_option: Option<PageCoordinates>) {
-        self.coordinates = match coordinates_option {
-            Some(coordinates) => Some(Box::new(coordinates)),
-            None => None,
-        }
+        self.coordinates = coordinates_option
     }
 
     pub fn get_defaultsort(&self) -> Option<String> {
-        match &self.defaultsort {
-            Some(defaultsort) => Some(*(defaultsort.clone())),
-            None => None,
-        }
+        self.defaultsort
+            .as_ref()
+            .map(|defaultsort| defaultsort.to_owned())
     }
 
     pub fn set_defaultsort(&mut self, defaultsort_option: Option<String>) {
-        self.defaultsort = match defaultsort_option {
-            Some(defaultsort) => Some(Box::new(defaultsort)),
-            None => None,
-        }
+        self.defaultsort = defaultsort_option
     }
 
     pub fn get_wikidata_description(&self) -> Option<String> {
-        match &self.wikidata_description {
-            Some(wikidata_description) => Some(*(wikidata_description.clone())),
-            None => None,
-        }
+        self.wikidata_description
+            .as_ref()
+            .map(|wikidata_description| wikidata_description.to_owned())
     }
 
     pub fn set_wikidata_description(&mut self, wikidata_description_option: Option<String>) {
-        self.wikidata_description = match wikidata_description_option {
-            Some(wikidata_description) => Some(Box::new(wikidata_description)),
-            None => None,
-        }
+        self.wikidata_description = wikidata_description_option
     }
 
     pub fn get_wikidata_label(&self) -> Option<String> {
-        match &self.wikidata_label {
-            Some(wikidata_label) => Some(*(wikidata_label.clone())),
-            None => None,
-        }
+        self.wikidata_label
+            .as_ref()
+            .map(|wikidata_label| wikidata_label.to_owned())
     }
 
     pub fn set_wikidata_label(&mut self, wikidata_label_option: Option<String>) {
-        self.wikidata_label = match wikidata_label_option {
-            Some(wikidata_label) => Some(Box::new(wikidata_label)),
-            None => None,
-        }
+        self.wikidata_label = wikidata_label_option
     }
 
     pub fn get_wikidata_item(&self) -> Option<String> {
-        match &self.wikidata_item {
-            Some(wikidata_item) => Some(*(wikidata_item.clone())),
-            None => None,
-        }
+        self.wikidata_item
+            .as_ref()
+            .map(|wikidata_item| wikidata_item.to_owned())
     }
 
     pub fn set_wikidata_item(&mut self, wikidata_item_option: Option<String>) {
-        self.wikidata_item = match wikidata_item_option {
-            Some(wikidata_item) => Some(Box::new(wikidata_item)),
-            None => None,
-        }
+        self.wikidata_item = wikidata_item_option
     }
 
     pub fn get_page_image(&self) -> Option<String> {
-        match &self.page_image {
-            Some(page_image) => Some(*(page_image.clone())),
-            None => None,
-        }
+        self.page_image
+            .as_ref()
+            .map(|page_image| page_image.to_owned())
     }
 
     pub fn set_page_image(&mut self, page_image_option: Option<String>) {
-        self.page_image = match page_image_option {
-            Some(page_image) => Some(Box::new(page_image)),
-            None => None,
-        }
+        self.page_image = page_image_option
     }
 
     pub fn get_page_timestamp(&self) -> Option<String> {
-        match &self.page_timestamp {
-            Some(page_timestamp) => Some(*(page_timestamp.clone())),
-            None => None,
-        }
+        self.page_timestamp
+            .as_ref()
+            .map(|page_timestamp| page_timestamp.to_owned())
     }
 
     pub fn set_page_timestamp(&mut self, page_timestamp_option: Option<String>) {
-        self.page_timestamp = match page_timestamp_option {
-            Some(page_timestamp) => Some(Box::new(page_timestamp)),
-            None => None,
-        }
+        self.page_timestamp = page_timestamp_option
     }
 
     pub fn title(&self) -> &Title {
@@ -418,8 +385,8 @@ impl PageListEntry {
         descending: bool,
         is_wikidata: bool,
     ) -> Ordering {
-        let ds_mine = self.get_defaultsort_with_fallback(is_wikidata) ;
-        let ds_other = other.get_defaultsort_with_fallback(is_wikidata) ;
+        let ds_mine = self.get_defaultsort_with_fallback(is_wikidata);
+        let ds_other = other.get_defaultsort_with_fallback(is_wikidata);
         self.compare_by_opt(&ds_mine, &ds_other, descending)
     }
 
@@ -475,7 +442,7 @@ impl PageListEntry {
     ) -> Ordering {
         self.compare_order(
             match (mine, other) {
-                (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(Ordering::Less),
+                (Some(a), Some(b)) => a.partial_cmp(b).unwrap_or(Ordering::Less),
                 (Some(_), None) => Ordering::Less,
                 (None, Some(_)) => Ordering::Greater,
                 (None, None) => Ordering::Equal,
@@ -535,11 +502,9 @@ impl PageListEntry {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn file_usage() {
@@ -596,5 +561,4 @@ mod tests {
             })
         );
     }
-
 }

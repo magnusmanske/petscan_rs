@@ -2,8 +2,8 @@ use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use regex::Regex;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use url::*;
 use std::fmt;
+use url::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct FormParameters {
@@ -13,7 +13,8 @@ pub struct FormParameters {
 
 impl fmt::Display for FormParameters {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ret = self.params
+        let ret = self
+            .params
             .iter()
             .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
             .collect::<Vec<String>>()
@@ -24,7 +25,9 @@ impl fmt::Display for FormParameters {
 
 impl FormParameters {
     pub fn new() -> Self {
-        Self { ..Default::default() }
+        Self {
+            ..Default::default()
+        }
     }
 
     pub fn new_from_pairs(parameter_pairs: HashMap<String, String>) -> Self {
@@ -67,7 +70,7 @@ impl FormParameters {
         };
         let params: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
         let ns = Self::ns_from_params(&params);
-        let mut ret = FormParameters { params , ns } ;
+        let mut ret = FormParameters { params, ns };
         ret.legacy_parameters();
         Ok(ret)
     }
@@ -157,8 +160,8 @@ impl FormParameters {
         {
             if let Some(wiki) = self.params.get("manual_list_wiki") {
                 let wiki = wiki.to_owned();
-                self.set_param(&"common_wiki_other".to_string(), &wiki);
-                self.set_param(&"manual_list_wiki".to_string(), &String::new());
+                self.set_param("common_wiki_other", &wiki);
+                self.set_param("manual_list_wiki", "");
             }
         }
 

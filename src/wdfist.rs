@@ -100,7 +100,7 @@ impl WDfist {
         // Prepare batches to get item/wiki/title triples
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(&chunk);
+            let mut sql = Platform::prep_quote(chunk);
             sql.0 = format!("SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN ({})",&sql.0) ;
             sql.1 = sql.1.par_iter().filter_map(|q|{
                 match q {
@@ -124,7 +124,7 @@ impl WDfist {
                     return;
                 }
                 let q = format!("Q{}", item_id);
-                let page = page.replace(" ", "_");
+                let page = page.replace(' ', "_");
                 if !wiki2title_q.contains_key(&wiki) {
                     wiki2title_q.insert(wiki.to_owned(), vec![]);
                 }
@@ -153,7 +153,7 @@ impl WDfist {
         titles.par_sort();
         titles.dedup();
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(&chunk);
+            let mut sql = Platform::prep_quote(chunk);
             sql.0 = format!("SELECT page_title,pp_value FROM page,page_props WHERE page_id=pp_page AND page_namespace=0 AND pp_propname='page_image_free' AND page_title IN ({})",&sql.0) ;
             batches.push(sql);
         });
@@ -179,10 +179,13 @@ impl WDfist {
                 .par_iter()
                 .map(|(title, q)| (title.to_string(), q.to_string()))
                 .collect();
-            let titles: Vec<String> = page2q.par_iter().map(|(title, _q)| title.to_string()).collect();
+            let titles: Vec<String> = page2q
+                .par_iter()
+                .map(|(title, _q)| title.to_string())
+                .collect();
             let mut batches: Vec<SQLtuple> = vec![];
             titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-                let mut sql = Platform::prep_quote(&chunk);
+                let mut sql = Platform::prep_quote(chunk);
                 sql.0 = format!("SELECT DISTINCT gil_page_title AS page,gil_to AS image FROM page,globalimagelinks WHERE gil_wiki='{}' AND gil_page_title IN ({})",wiki,&sql.0) ;
                 sql.0 += " AND gil_page_namespace_id=0 AND page_namespace=6 and page_title=gil_to AND page_is_redirect=0" ;
                 sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks where page_id=cl_from and cl_to='Crop_for_Wikidata')" ; // To-be-cropped
@@ -190,31 +193,35 @@ impl WDfist {
             });
 
             // Run batches
-            let rows = PageList::new_from_wiki("commonswiki").run_batch_queries(&self.state, batches).await.map_err(|e|format!("{:?}",e))?;
+            let rows = PageList::new_from_wiki("commonswiki")
+                .run_batch_queries(&self.state, batches)
+                .await
+                .map_err(|e| format!("{:?}", e))?;
 
             // Collect pages and items, per wiki
             let page_file: Vec<(String, String)> = rows
-                    .par_iter()
-                    .map(|row| my::from_row::<(String, String)>(row.to_owned()))
-                    .collect();
-            let mut page_file = self.filter_page_images(&wiki, page_file).await.map_err(|e|format!("{:?}",e))?
                 .par_iter()
-                .filter_map(|(page, file)| match page2q.get(page) {
-                    Some(q) => {
-                        Some((q.to_string(),file.to_string()))
-                    }
-                    None => None
-                }).collect();
+                .map(|row| my::from_row::<(String, String)>(row.to_owned()))
+                .collect();
+            let mut page_file = self
+                .filter_page_images(&wiki, page_file)
+                .await
+                .map_err(|e| format!("{:?}", e))?
+                .par_iter()
+                .filter_map(|(page, file)| {
+                    page2q.get(page).map(|q| (q.to_string(), file.to_string()))
+                })
+                .collect();
             add_item_file
                 .lock()
-                .map_err(|e|format!("{:?}",e))?
+                .map_err(|e| format!("{:?}", e))?
                 .append(&mut page_file);
         }
 
         // Add files
         add_item_file
             .lock()
-            .map_err(|e|format!("{:?}",e))?
+            .map_err(|e| format!("{:?}", e))?
             .iter()
             .for_each(|(q, file)| self.add_file_to_item(q, file));
 
@@ -225,7 +232,7 @@ impl WDfist {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(&chunk);
+            let mut sql = Platform::prep_quote(chunk);
             sql.0 = format!("SELECT page_title,gt_lat,gt_lon FROM geo_tags,page WHERE page_namespace=0 AND page_id=gt_page_id AND gt_globe='earth' AND gt_primary=1 AND page_title IN ({})",&sql.0) ;
             batches.push(sql);
         });
@@ -241,14 +248,16 @@ impl WDfist {
             .collect();
 
         // Get nearby files
-        let api = Api::new("https://commons.wikimedia.org/w/api.php").await
+        let api = Api::new("https://commons.wikimedia.org/w/api.php")
+            .await
             .map_err(|e| format!("{:?}", e))?;
         //let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
 
-        let params : Vec<_> = page_coords
+        let params: Vec<_> = page_coords
             .iter()
             .map(|(_q, lat, lon)| {
-                api.params_into(&[("action", "query"),
+                api.params_into(&[
+                    ("action", "query"),
                     ("list", "geosearch"),
                     ("gscoord", format!("{}|{}", lat, lon).as_str()),
                     (
@@ -256,7 +265,8 @@ impl WDfist {
                         format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
                     ),
                     ("gslimit", "50"),
-                    ("gsnamespace", "6")])
+                    ("gsnamespace", "6"),
+                ])
             })
             .collect();
 
@@ -269,17 +279,18 @@ impl WDfist {
         let results = join_all(futures).await;
         */
 
-        let mut results : Vec<_> = vec![] ;
+        let mut results: Vec<_> = vec![];
         for param in params {
             match api.get_query_api_json(&param).await {
-                Ok(x) => { results.push ( x ) }
-                _ => { results.push(json!({})) } // Ignore
+                Ok(x) => results.push(x),
+                _ => results.push(json!({})), // Ignore
             }
         }
 
-        let add_item_file : Vec<(String, String)> = results.iter()
+        let add_item_file: Vec<(String, String)> = results
+            .iter()
             .zip(page_coords)
-            .filter_map(|(result,(q,_lat,_lon))|{
+            .filter_map(|(result, (q, _lat, _lon))| {
                 let images = result["query"]["geosearch"].as_array()?;
                 let item_file: Vec<(String, String)> = images
                     .par_iter()
@@ -310,7 +321,7 @@ impl WDfist {
     }
 
     // Remove leading "File:"
-    fn remove_leading_file_namespace(&self,filename:&str) -> String {
+    fn remove_leading_file_namespace(&self, filename: &str) -> String {
         if filename.len() < 6 {
             String::new()
         } else {
@@ -318,16 +329,23 @@ impl WDfist {
         }
     }
 
-    fn get_commons_search_query(&self, label:&str) -> String {
-        let svg = if self.wdf_allow_svg { "" } else { "-filemime:svg" } ;
-        format!("{} -filemime:pdf -filemime:djvu -filemime:gif {}",&label,svg)
+    fn get_commons_search_query(&self, label: &str) -> String {
+        let svg = if self.wdf_allow_svg {
+            ""
+        } else {
+            "-filemime:svg"
+        };
+        format!(
+            "{} -filemime:pdf -filemime:djvu -filemime:gif {}",
+            &label, svg
+        )
     }
 
     async fn follow_search_commons(&mut self) -> Result<(), String> {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::full_entity_id_to_number(&chunk);
+            let mut sql = Platform::full_entity_id_to_number(chunk);
             sql.0 = format!("SELECT concat('Q',wbit_item_id) AS term_full_entity_id, wbx_text as term_text FROM wbt_item_terms INNER JOIN wbt_term_in_lang ON wbit_term_in_lang_id = wbtl_id INNER JOIN wbt_type ON wbtl_type_id = wby_id AND wby_name='label' INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language='en' WHERE wbit_item_id IN ({})",&sql.0) ;
             batches.push(sql);
         });
@@ -343,15 +361,20 @@ impl WDfist {
             .collect();
 
         // Get search results
-        let api = Api::new("https://commons.wikimedia.org/w/api.php").await.map_err(|e| format!("{:?}", e))?;
+        let api = Api::new("https://commons.wikimedia.org/w/api.php")
+            .await
+            .map_err(|e| format!("{:?}", e))?;
 
-        let params : Vec<_> = item2label
+        let params: Vec<_> = item2label
             .iter()
-            .map(|(_q, label)|
-                api.params_into(&[("action", "query"),
+            .map(|(_q, label)| {
+                api.params_into(&[
+                    ("action", "query"),
                     ("list", "search"),
                     ("srnamespace", "6"),
-                    ("srsearch", &self.get_commons_search_query(&label))]))
+                    ("srsearch", &self.get_commons_search_query(label)),
+                ])
+            })
             .collect();
 
         /*
@@ -363,18 +386,18 @@ impl WDfist {
         let results = join_all(futures).await;
         */
 
-        let mut results : Vec<_> = vec![] ;
+        let mut results: Vec<_> = vec![];
         for param in params {
             match api.get_query_api_json(&param).await {
-                Ok(x) => { results.push ( x ) }
-                _ => { results.push(json!({})) } // Ignore
+                Ok(x) => results.push(x),
+                _ => results.push(json!({})), // Ignore
             }
         }
 
-
-        let add_item_file : Vec<(String, String)> = results.iter()
+        let add_item_file: Vec<(String, String)> = results
+            .iter()
             .zip(item2label)
-            .filter_map(|(result,(q,_label)):(&Value,(String,String))|{
+            .filter_map(|(result, (q, _label)): (&Value, (String, String))| {
                 let images = match result["query"]["search"].as_array() {
                     Some(a) => a,
                     None => {
@@ -434,7 +457,10 @@ impl WDfist {
             Ok(api) => api,
             Err(_e) => return Err("Can\'t open Wikidata API".to_string()),
         };
-        let wikitext = match api.query_raw(url_with_ignore_list, &HashMap::new(), "GET").await {
+        let wikitext = match api
+            .query_raw(url_with_ignore_list, &HashMap::new(), "GET")
+            .await
+        {
             Ok(t) => t,
             Err(e) => {
                 return Err(format!(
@@ -446,7 +472,7 @@ impl WDfist {
         // TODO only rows starting with '*'?
         wikitext.split('\n').for_each(|filename| {
             let filename = filename.trim_start_matches(|c| c == ' ' || c == '*');
-            let filename = self.normalize_filename(&filename.to_string());
+            let filename = self.normalize_filename(filename);
             if self.is_valid_filename(&filename) {
                 self.files2ignore.insert(filename);
             }
@@ -456,22 +482,24 @@ impl WDfist {
 
     async fn seed_ignore_files_from_ignore_database(&mut self) -> Result<(), String> {
         let state = self.state.clone();
-        let tool_db_user_pass = state
-            .get_tool_db_user_pass()
-            .lock().await;
-        let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone()).await?;
+        let tool_db_user_pass = state.get_tool_db_user_pass().lock().await;
+        let mut conn = state
+            .get_tool_db_connection(tool_db_user_pass.clone())
+            .await?;
 
         let sql = format!("SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={}",MIN_IGNORE_DB_FILE_COUNT);
 
-        let rows = conn.exec_iter(sql.as_str(),()).await
-            .map_err(|e|format!("{:?}",e))?
+        let rows = conn
+            .exec_iter(sql.as_str(), ())
+            .await
+            .map_err(|e| format!("{:?}", e))?
             .map_and_drop(from_row::<Vec<u8>>)
             .await
-            .map_err(|e|format!("{:?}",e))?;
+            .map_err(|e| format!("{:?}", e))?;
 
         for filename in rows {
             let filename = String::from_utf8_lossy(&filename);
-            let filename = self.normalize_filename(&filename.to_string());
+            let filename = self.normalize_filename(filename.as_ref());
             if self.is_valid_filename(&filename) {
                 self.files2ignore.insert(filename);
             }
@@ -485,7 +513,7 @@ impl WDfist {
         let wdf_only_items_without_p18 = self.bool_param("wdf_only_items_without_p18");
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(&chunk);
+            let mut sql = Platform::prep_quote(chunk);
             sql.0 = format!("SELECT page_title FROM page WHERE page_namespace=0 AND page_is_redirect=0 AND page_title IN ({})",&sql.0) ;
             if  wdf_only_items_without_p18 {sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=120 AND pl_title='P18')" ;}
             sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=0 AND pl_title IN ('Q13406463','Q4167410'))" ; // No list/disambig
@@ -523,7 +551,7 @@ impl WDfist {
             .map(|(q, _files)| q[1..].to_string())
             .collect();
         items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(&chunk);
+            let mut sql = Platform::prep_quote(chunk);
             sql.0 = format!(
                 "SELECT concat('Q',q),CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files WHERE q IN ({})",
                 &sql.0
@@ -533,19 +561,20 @@ impl WDfist {
 
         // Prepare
         let state = self.state.clone();
-        let tool_db_user_pass = state
-            .get_tool_db_user_pass()
-            .lock()
-            .await;
-        let mut conn = state.get_tool_db_connection(tool_db_user_pass.clone()).await?;
+        let tool_db_user_pass = state.get_tool_db_user_pass().lock().await;
+        let mut conn = state
+            .get_tool_db_connection(tool_db_user_pass.clone())
+            .await?;
 
         // Run batches sequentially
         for sql in batches {
-            let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
-                .map_err(|e|format!("{:?}",e))?
+            let rows = conn
+                .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+                .await
+                .map_err(|e| format!("{:?}", e))?
                 .map_and_drop(from_row::<(String, String)>)
                 .await
-                .map_err(|e|format!("{:?}",e))?;
+                .map_err(|e| format!("{:?}", e))?;
 
             for (item, filename) in rows {
                 let filename = self.normalize_filename(&filename.to_string());
@@ -588,7 +617,7 @@ impl WDfist {
             // Create batches
             let mut batches: Vec<SQLtuple> = vec![];
             filenames.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-                let mut sql = Platform::prep_quote(&chunk);
+                let mut sql = Platform::prep_quote(chunk);
                 sql.0 = format!(
                     "SELECT DISTINCT il_to FROM imagelinks WHERE il_from_namespace=0 AND il_to IN ({})",
                     &sql.0
@@ -636,7 +665,7 @@ impl WDfist {
     }
 
     fn normalize_filename(&self, filename: &str) -> String {
-        filename.trim().replace(" ", "_")
+        filename.trim().replace(' ', "_")
     }
 
     // Requires normalized filename
@@ -675,7 +704,7 @@ impl WDfist {
                 }
                 !(filetype == "png" && RE_KEY_PHRASES_PNG.is_match(filename))
             }
-            None => false
+            None => false,
         }
     }
 
@@ -849,7 +878,7 @@ mod tests {
         let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
         wdfist.follow_language_links().await.unwrap();
         assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
-        let x = wdfist.item2files.get(&"Q1481".to_string()).unwrap() ;
+        let x = wdfist.item2files.get(&"Q1481".to_string()).unwrap();
         assert!(x.len() < 50);
         assert!(x.contains_key(&"Felsberg_(Hessen).jpg".to_string()));
     }
@@ -864,7 +893,9 @@ mod tests {
             .item2files
             .get(&"Q350".to_string())
             .unwrap()
-            .contains_key(&"Cycling_down_Malcolm_Street_-_geograph.org.uk_-_3751839.jpg".to_string()));
+            .contains_key(
+                &"Cycling_down_Malcolm_Street_-_geograph.org.uk_-_3751839.jpg".to_string()
+            ));
     }
 
     #[tokio::test]

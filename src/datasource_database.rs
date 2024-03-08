@@ -1,5 +1,3 @@
-use futures::future::join_all;
-use async_trait::async_trait;
 use crate::app_state::AppState;
 use crate::datasource::DataSource;
 use crate::datasource::SQLtuple;
@@ -7,13 +5,15 @@ use crate::pagelist::*;
 use crate::pagelist_entry::LinkCount;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
+use async_trait::async_trait;
 use chrono::prelude::*;
 use chrono::Duration;
 use core::ops::Sub;
+use futures::future::join_all;
+use mysql_async as my;
+use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use mysql_async::Value as MyValue;
-use mysql_async::from_row;
-use mysql_async as my;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use wikibase::mediawiki::api::{Api, NamespaceID};
@@ -126,8 +126,8 @@ impl SourceDatabaseParameters {
         if cat_pos.len() == 1 && combine == "subset" {
             combine = "union".to_string(); // Easier to construct
         }
-        let ns10_case_sensitive = platform.get_namespace_case_sensitivity(10).await ;
-        let ns14_case_sensitive = platform.get_namespace_case_sensitivity(14).await ;
+        let ns10_case_sensitive = platform.get_namespace_case_sensitivity(10).await;
+        let ns14_case_sensitive = platform.get_namespace_case_sensitivity(14).await;
         let mut ret = SourceDatabaseParameters {
             combine,
             only_new_since: platform.has_param("only_new"),
@@ -288,24 +288,32 @@ impl SourceDatabase {
                     }
                     None => default_depth,
                 };
-                Some(SourceDatabaseCatDepth { name , depth })
+                Some(SourceDatabaseCatDepth { name, depth })
             })
             .collect()
     }
 
-    async fn get_categories_in_list(&self, state: &AppState, wiki: &str, categories: &[String]) -> Result<Vec<String>,String> {
+    async fn get_categories_in_list(
+        &self,
+        state: &AppState,
+        wiki: &str,
+        categories: &[String],
+    ) -> Result<Vec<String>, String> {
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         Platform::append_sql(&mut sql, Platform::prep_quote(categories));
         sql.0 += ")";
-        let result = state.get_wiki_db_connection(&wiki).await?
-            .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
-            .map_err(|e|format!("{:?}",e))?
+        let result = state
+            .get_wiki_db_connection(wiki)
+            .await?
+            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .await
+            .map_err(|e| format!("{:?}", e))?
             .map_and_drop(from_row::<Vec<u8>>)
             .await
-            .map_err(|e|format!("{:?}",e))?;
+            .map_err(|e| format!("{:?}", e))?;
         let result: Vec<String> = result
             .iter()
-            .map(|row| String::from_utf8_lossy(&row).into_owned())
+            .map(|row| String::from_utf8_lossy(row).into_owned())
             .collect();
         Ok(result)
     }
@@ -322,18 +330,18 @@ impl SourceDatabase {
     ) -> Result<Vec<String>, String> {
         let is_cs = self.params.category_namespace_is_case_insensitive;
         let mut categories_done = HashSet::new();
-        let title = SourceDatabaseParameters::s2u_ucfirst(title,is_cs);
+        let title = SourceDatabaseParameters::s2u_ucfirst(title, is_cs);
         categories_done.insert(title.to_owned());
 
         let mut categories_todo = vec![];
         categories_todo.push(title.to_owned());
 
         let mut remaining_depth = depth;
-        while remaining_depth>0 && !categories_todo.is_empty() {
-            remaining_depth -= 1 ;
+        while remaining_depth > 0 && !categories_todo.is_empty() {
+            remaining_depth -= 1;
             let mut futures = vec![];
-            for chunk in categories_todo.chunks(MAX_CATEGORY_BATCH_SIZE*10) {
-                let future = self.get_categories_in_list(&state, &wiki, chunk);
+            for chunk in categories_todo.chunks(MAX_CATEGORY_BATCH_SIZE * 10) {
+                let future = self.get_categories_in_list(state, wiki, chunk);
                 futures.push(future);
             }
             let results = join_all(futures).await;
@@ -342,7 +350,7 @@ impl SourceDatabase {
             let mut categories_new = HashSet::new();
             for result in results {
                 for category in result? {
-                    let title = SourceDatabaseParameters::s2u_ucfirst(&category,is_cs);
+                    let title = SourceDatabaseParameters::s2u_ucfirst(&category, is_cs);
                     if !categories_done.contains(&title) {
                         categories_new.insert(category);
                         categories_done.insert(title);
@@ -409,11 +417,11 @@ impl SourceDatabase {
             remaining_depth -= 1 ;
 
             // Find new sub-categories
-            let sql = "INSERT INTO categories_new (category) 
-                SELECT DISTINCT page_title 
-                FROM page,categorylinks,categories_todo 
-                WHERE cl_from=page_id 
-                AND cl_type='subcat' 
+            let sql = "INSERT INTO categories_new (category)
+                SELECT DISTINCT page_title
+                FROM page,categorylinks,categories_todo
+                WHERE cl_from=page_id
+                AND cl_type='subcat'
                 AND cl_to=categories_todo.category
                 AND NOT EXISTS (SELECT * FROM categories_done WHERE category=page_title)" ;
             conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
@@ -457,10 +465,10 @@ impl SourceDatabase {
         wiki: &str,
         input: &[SourceDatabaseCatDepth],
     ) -> Result<Vec<Vec<String>>, String> {
-        let mut futures = vec![] ;
+        let mut futures = vec![];
         for i in input {
-            let future = self.get_categories_in_tree(&state, wiki, &i.name, i.depth) ;
-            futures.push(future) ;
+            let future = self.get_categories_in_tree(state, wiki, &i.name, i.depth);
+            futures.push(future);
         }
 
         let mut ret = vec![];
@@ -474,20 +482,24 @@ impl SourceDatabase {
     }
 
     async fn get_talk_namespace_ids(&self, conn: &mut my::Conn) -> Result<String, String> {
-        let rows = conn.exec_iter("SELECT DISTINCT page_namespace FROM page WHERE MOD(page_namespace,2)=1",()).await
-            .map_err(|e|format!("{:?}",e))?
+        let rows = conn
+            .exec_iter(
+                "SELECT DISTINCT page_namespace FROM page WHERE MOD(page_namespace,2)=1",
+                (),
+            )
+            .await
+            .map_err(|e| format!("{:?}", e))?
             .map_and_drop(from_row::<NamespaceID>)
             .await
-            .map_err(|e|format!("{:?}",e))?;
-        Ok(rows.iter().map(|ns|ns.to_string()).collect::<Vec<String>>().join(","))
+            .map_err(|e| format!("{:?}", e))?;
+        Ok(rows
+            .iter()
+            .map(|ns| ns.to_string())
+            .collect::<Vec<String>>()
+            .join(","))
     }
 
-    fn template_subquery(
-        &self,
-        input: &[String],
-        use_talk_page: bool,
-        find_not: bool,
-    ) -> SQLtuple {
+    fn template_subquery(&self, input: &[String], use_talk_page: bool, find_not: bool) -> SQLtuple {
         let mut sql = Platform::sql_tuple();
         if use_talk_page {
             sql.0 += if find_not {
@@ -506,18 +518,18 @@ impl SourceDatabase {
                 "(SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
         }
 
-        self.sql_in(&input, &mut sql);
+        self.sql_in(input, &mut sql);
 
         if !self.params.namespace_ids.is_empty() {
-            let v : Vec<String> = self
+            let v: Vec<String> = self
                 .params
                 .namespace_ids
                 .iter()
                 .map(|ns| if use_talk_page { ns + 1 } else { *ns })
                 .map(|s| s.to_string())
-                .collect() ;
+                .collect();
             sql.0 += " AND tl_from_namespace";
-            self.sql_in(&v,&mut sql);
+            self.sql_in(&v, &mut sql);
         }
 
         sql.0 += ")";
@@ -543,8 +555,10 @@ impl SourceDatabase {
     ) -> HashMap<NamespaceID, Vec<String>> {
         let mut ret: HashMap<NamespaceID, Vec<String>> = HashMap::new();
         input.iter().for_each(|title| {
-            let title = Title::new_from_full(title, &api);
-            ret.entry(title.namespace_id()).or_insert_with(Vec::new).push(title.with_underscores());
+            let title = Title::new_from_full(title, api);
+            ret.entry(title.namespace_id())
+                .or_default()
+                .push(title.with_underscores());
         });
         ret
     }
@@ -583,11 +597,7 @@ impl SourceDatabase {
         sql
     }
 
-    fn iterate_category_batches(
-        &self,
-        categories: &[Vec<String>],
-        start: usize,
-    ) -> Vec<Vec<Vec<String>>> {
+    fn iterate_category_batches(categories: &[Vec<String>], start: usize) -> Vec<Vec<Vec<String>>> {
         let mut ret: Vec<Vec<Vec<String>>> = vec![];
         categories[start]
             .chunks(MAX_CATEGORY_BATCH_SIZE * 10)
@@ -597,7 +607,7 @@ impl SourceDatabase {
                     ret.push(to_add);
                     return;
                 }
-                let tmp = self.iterate_category_batches(categories, start + 1);
+                let tmp = Self::iterate_category_batches(categories, start + 1);
                 tmp.iter().for_each(|t| {
                     let mut to_add = vec![c.to_vec()];
                     to_add.append(&mut t.to_owned());
@@ -624,7 +634,7 @@ impl SourceDatabase {
                 sql.0 += ")) cl0";
                 for (a, item) in category_batch.iter().enumerate().skip(1) {
                     sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
-                    Platform::append_sql(&mut sql, Platform::prep_quote(&item));
+                    Platform::append_sql(&mut sql, Platform::prep_quote(item));
                     sql.0 += ")";
                 }
             }
@@ -658,7 +668,7 @@ impl SourceDatabase {
             Some(sql.1.len()),
         );
         self.get_pages_for_primary_new_connection(
-            &state,
+            state,
             &params.wiki,
             &params.primary.to_string(),
             sql,
@@ -666,7 +676,8 @@ impl SourceDatabase {
             &mut pl2,
             &mut params.is_before_after_done.clone(),
             api,
-        ).await?;
+        )
+        .await?;
         Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH", None);
         ret.union(&pl2, None).await?;
         Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE", None);
@@ -696,22 +707,26 @@ impl SourceDatabase {
         };
 
         // Get positive categories serial list
-        self.cat_pos = self.parse_category_list(
-            &state,
-            &wiki,
-            &self.parse_category_depth(&self.params.cat_pos, self.params.depth),
-        ).await?;
+        self.cat_pos = self
+            .parse_category_list(
+                state,
+                &wiki,
+                &self.parse_category_depth(&self.params.cat_pos, self.params.depth),
+            )
+            .await?;
 
         // Get negative categories serial list
-        self.cat_neg = self.parse_category_list(
-            &state,
-            &wiki,
-            &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
-        ).await?;
+        self.cat_neg = self
+            .parse_category_list(
+                state,
+                &wiki,
+                &self.parse_category_depth(&self.params.cat_neg, self.params.depth),
+            )
+            .await?;
 
         let mut conn = state.get_wiki_db_connection(&wiki).await?;
         self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn).await?;
-        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
+        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
@@ -785,7 +800,7 @@ impl SourceDatabase {
         state: &AppState,
     ) -> Result<PageList, String> {
         let category_batches = if self.params.use_new_category_mode {
-            self.iterate_category_batches(&self.cat_pos, 0)
+            Self::iterate_category_batches(&self.cat_pos, 0)
         } else {
             vec![self.cat_pos.to_owned()]
         };
@@ -796,9 +811,11 @@ impl SourceDatabase {
         );
         let ret = PageList::new_from_wiki(&params.wiki);
 
-        let futures : Vec<_> = category_batches
+        let futures: Vec<_> = category_batches
             .iter()
-            .map(|category_batch| self.get_pages_for_category_batch(&params, category_batch, &state, &ret))
+            .map(|category_batch| {
+                self.get_pages_for_category_batch(params, category_batch, state, &ret)
+            })
             .collect();
 
         let results = join_all(futures).await;
@@ -822,7 +839,9 @@ impl SourceDatabase {
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList, String> {
         let ret = PageList::new_from_wiki(&params.wiki);
-        let primary_pagelist = primary_pagelist.ok_or_else(|| "SourceDatabase::get_pages: pagelist: No primary_pagelist".to_string())?;
+        let primary_pagelist = primary_pagelist.ok_or_else(|| {
+            "SourceDatabase::get_pages: pagelist: No primary_pagelist".to_string()
+        })?;
         ret.set_wiki(primary_pagelist.wiki()?)?;
         if primary_pagelist.is_empty()? {
             // Nothing to do, but that's OK
@@ -843,7 +862,7 @@ impl SourceDatabase {
                 sql.0 += " WHERE (p.page_namespace=";
                 sql.0 += &nsgroup.0.to_string();
                 sql.0 += " AND p.page_title IN (";
-                Platform::append_sql(&mut sql, Platform::prep_quote(&titles));
+                Platform::append_sql(&mut sql, Platform::prep_quote(titles));
                 sql.0 += "))";
                 batches.push(sql);
             });
@@ -852,12 +871,14 @@ impl SourceDatabase {
         // Either way, it's done
         params.is_before_after_done = true;
 
-        let wiki = primary_pagelist.wiki()?.ok_or_else(|| "No wiki given in datasource_database::get_pages_pagelist".to_string())?;
+        let wiki = primary_pagelist.wiki()?.ok_or_else(|| {
+            "No wiki given in datasource_database::get_pages_pagelist".to_string()
+        })?;
 
-        let mut futures : Vec<_> = vec![] ;
+        let mut futures: Vec<_> = vec![];
         for sql in batches {
-            let future = self.get_pages_pagelist_batch(wiki.clone(),sql,&state,&params) ;
-            futures.push ( future ) ;
+            let future = self.get_pages_pagelist_batch(wiki.clone(), sql, state, &params);
+            futures.push(future);
         }
         let results = join_all(futures).await;
 
@@ -865,16 +886,17 @@ impl SourceDatabase {
         for pl2 in results {
             ret.union(&pl2?, None).await?;
         }
-        
+
         Ok(ret)
     }
 
-    async fn get_pages_pagelist_batch(&self,
-        wiki:String,
-        sql:SQLtuple,
-        state:&AppState,
-        params:&DsdbParams,
-    ) -> Result<PageList,String> {
+    async fn get_pages_pagelist_batch(
+        &self,
+        wiki: String,
+        sql: SQLtuple,
+        state: &AppState,
+        params: &DsdbParams,
+    ) -> Result<PageList, String> {
         let mut conn = state.get_wiki_db_connection(&wiki).await?;
         let sql_before_after = params.sql_before_after.clone();
         let mut is_before_after_done = params.is_before_after_done;
@@ -888,7 +910,8 @@ impl SourceDatabase {
             &mut pl2,
             &mut is_before_after_done,
             api,
-        ).await?;
+        )
+        .await?;
         drop(conn);
         Ok(pl2)
     }
@@ -898,16 +921,20 @@ impl SourceDatabase {
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList, String> {
-        let mut params = self.get_pages_initialize_query(state, primary_pagelist).await?;
+        let mut params = self
+            .get_pages_initialize_query(state, primary_pagelist)
+            .await?;
 
         let mut sql = Platform::sql_tuple();
 
         match params.primary.as_str() {
             "categories" => {
-                return self.get_pages_categories(&params, &state).await;
+                return self.get_pages_categories(&params, state).await;
             }
             "pagelist" => {
-                return self.get_pages_pagelist(params, &state, primary_pagelist).await;
+                return self
+                    .get_pages_pagelist(params, state, primary_pagelist)
+                    .await;
             }
             "no_wikidata" => {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
@@ -947,40 +974,45 @@ impl SourceDatabase {
             &mut ret,
             &mut params.is_before_after_done,
             state.get_api_for_wiki(params.wiki.clone()).await?,
-        ).await?;
-        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
+        )
+        .await?;
+        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
         Ok(ret)
     }
 
+    /* trunk-ignore(clippy/too_many_arguments) */
     async fn get_pages_for_primary_new_connection(
         &self,
         state: &AppState,
-        wiki: &String,
+        wiki: &str,
         primary: &String,
-        sql:SQLtuple,
+        sql: SQLtuple,
         sql_before_after: &mut SQLtuple,
         pages_sublist: &mut PageList,
         is_before_after_done: &mut bool,
         api: Api,
     ) -> Result<(), String> {
-        let mut conn = state.get_wiki_db_connection(&wiki).await?;
+        let mut conn = state.get_wiki_db_connection(wiki).await?;
         Platform::profile(
             "DSDB::get_pages_for_primary_new_connection STARTING",
             Some(sql.1.len()),
         );
-        let ret = self.get_pages_for_primary(
-            &mut conn,
-            primary,
-            sql,
-            sql_before_after.clone(),
-            pages_sublist,
-            is_before_after_done,
-            api,
-        ).await;
-        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
+        let ret = self
+            .get_pages_for_primary(
+                &mut conn,
+                primary,
+                sql,
+                sql_before_after.clone(),
+                pages_sublist,
+                is_before_after_done,
+                api,
+            )
+            .await;
+        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
         ret
     }
 
+    /* trunk-ignore(clippy/too_many_arguments) */
     async fn get_pages_for_primary(
         &self,
         conn: &mut my::Conn,
@@ -994,7 +1026,7 @@ impl SourceDatabase {
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
 
         // Namespaces
-        if !self.params.namespace_ids.is_empty() && primary!="pagelist" {
+        if !self.params.namespace_ids.is_empty() && primary != "pagelist" {
             let namespace_ids = &self
                 .params
                 .namespace_ids
@@ -1002,19 +1034,20 @@ impl SourceDatabase {
                 .map(|ns| ns.to_string())
                 .collect::<Vec<String>>();
             sql.0 += " AND p.page_namespace";
-            self.sql_in(&namespace_ids, &mut sql);
+            self.sql_in(namespace_ids, &mut sql);
         }
 
         // Negative categories
-        let negative_categories_use_not_exists = false ;
+        let negative_categories_use_not_exists = false;
         if !self.cat_neg.is_empty() {
-            let mut cats : Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
+            let mut cats: Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
             cats.sort_unstable();
             cats.dedup();
             if negative_categories_use_not_exists {
                 sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks WHERE cl_from=p.page_id AND cl_to";
             } else {
-                sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
+                sql.0 +=
+                    " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
             }
             self.sql_in(&cats, &mut sql);
             sql.0 += ")";
@@ -1056,10 +1089,7 @@ impl SourceDatabase {
         // Links from all
         self.params.linked_from_all.iter().for_each(|l| {
             sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(
-                &mut sql,
-                self.links_from_subquery(&[l.to_owned()], &api),
-            );
+            Platform::append_sql(&mut sql, self.links_from_subquery(&[l.to_owned()], &api));
         });
 
         // Links from any
@@ -1120,7 +1150,8 @@ impl SourceDatabase {
                 || self.params.ores_prob_to.is_some())
         {
             sql.0 += " AND EXISTS (SELECT * FROM ores_classification WHERE p.page_latest=oresc_rev AND oresc_model IN (SELECT oresm_id FROM ores_model WHERE oresm_is_current=1 AND oresm_name=?)" ;
-            sql.1.push(MyValue::Bytes(self.params.ores_type.to_owned().into()));
+            sql.1
+                .push(MyValue::Bytes(self.params.ores_type.to_owned().into()));
             match self.params.ores_prediction.as_str() {
                 "yes" => sql.0 += " AND oresc_is_predicted=1",
                 "no" => sql.0 += " AND oresc_is_predicted=0",
@@ -1159,13 +1190,10 @@ impl SourceDatabase {
         // Misc page types
         // TODO FIXME get local "Soft_redirect" page title from Wikidata Q4844001
         let soft_redirects_page = "Soft_redirect";
-        match self.params.soft_redirects.as_str() {
-            "yes" => {
-                sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)" ;
-                sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
-                // sql.1.push(MyValue::Bytes(soft_redirects_page.into())); // TODO FIXME why twice?
-            }
-            _ => {}
+        if "yes" == self.params.soft_redirects.as_str() {
+            sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)" ;
+            sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
+            // sql.1.push(MyValue::Bytes(soft_redirects_page.into())); // TODO FIXME why twice?
         }
         match self.params.redirects.as_str() {
             "yes" => sql.0 += " AND p.page_is_redirect=1",
@@ -1203,8 +1231,12 @@ impl SourceDatabase {
 
         // Link count
         let mut having: Vec<SQLtuple> = vec![];
-        if let Some(l) = self.params.minlinks { having.push(("link_count>=".to_owned() + l.to_string().as_str(), vec![])) }
-        if let Some(l) = self.params.maxlinks { having.push(("link_count<=".to_owned() + l.to_string().as_str(), vec![])) }
+        if let Some(l) = self.params.minlinks {
+            having.push(("link_count>=".to_owned() + l.to_string().as_str(), vec![]))
+        }
+        if let Some(l) = self.params.maxlinks {
+            having.push(("link_count<=".to_owned() + l.to_string().as_str(), vec![]))
+        }
 
         // HAVING
         if !having.is_empty() {
@@ -1214,29 +1246,30 @@ impl SourceDatabase {
             }
         }
 
-        let wiki = match &self.params.wiki {
-            Some(wiki) => wiki,
-            None => {
-                return Err("SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params".to_string())
-            }
-        };
+        let wiki =
+            match &self.params.wiki {
+                Some(wiki) => wiki,
+                None => return Err(
+                    "SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params"
+                        .to_string(),
+                ),
+            };
 
         Platform::profile(
             "DSDB::get_pages_for_primary STARTING RUN",
             Some(sql.1.len()),
         );
 
-        let sql_1_len = sql.1.len() ;
-        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
-            .map_err(|e|format!("{:?}",e))?
+        let sql_1_len = sql.1.len();
+        let rows = conn
+            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .await
+            .map_err(|e| format!("{:?}", e))?
             .map_and_drop(from_row::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>)
             .await
-            .map_err(|e|format!("{:?}",e))?;
+            .map_err(|e| format!("{:?}", e))?;
 
-        Platform::profile(
-            "DSDB::get_pages_for_primary RUN FINISHED",
-            Some(sql_1_len),
-        );
+        Platform::profile("DSDB::get_pages_for_primary RUN FINISHED", Some(sql_1_len));
 
         pages_sublist.set_wiki(Some(wiki.to_string()))?;
         pages_sublist.clear_entries()?;
@@ -1246,22 +1279,20 @@ impl SourceDatabase {
             Some(sql_1_len),
         );
 
-        rows
-            .iter()
-            .for_each(
-                |(page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count)| {
-                    let page_title = String::from_utf8_lossy(&page_title).into_owned();
-                    let page_timestamp = String::from_utf8_lossy(&page_timestamp).into_owned();
-                    let mut entry = PageListEntry::new(Title::new(&page_title, *page_namespace));
-                    entry.page_id = Some(*page_id);
-                    entry.page_bytes = Some(*page_bytes);
-                    entry.set_page_timestamp(Some(page_timestamp));
-                    if self.params.gather_link_count {
-                        entry.link_count = Some(*link_count);
-                    }
-                    if pages_sublist.add_entry(entry).is_ok() {}
-                },
-            );
+        rows.iter().for_each(
+            |(page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count)| {
+                let page_title = String::from_utf8_lossy(page_title).into_owned();
+                let page_timestamp = String::from_utf8_lossy(page_timestamp).into_owned();
+                let mut entry = PageListEntry::new(Title::new(&page_title, *page_namespace));
+                entry.page_id = Some(*page_id);
+                entry.page_bytes = Some(*page_bytes);
+                entry.set_page_timestamp(Some(page_timestamp));
+                if self.params.gather_link_count {
+                    entry.link_count = Some(*link_count);
+                }
+                if pages_sublist.add_entry(entry).is_ok() {}
+            },
+        );
 
         Platform::profile("DSDB::get_pages_for_primary COMPLETE", Some(sql_1_len));
 

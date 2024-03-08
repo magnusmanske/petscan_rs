@@ -1,33 +1,33 @@
-use rand::seq::SliceRandom;
-use rand::prelude::thread_rng;
-use tokio::sync::Mutex;
-use tracing::{trace, instrument};
 use crate::form_parameters::FormParameters;
 use crate::platform::{ContentType, MyResponse};
 use chrono::prelude::*;
-use mysql_async::prelude::Queryable;
-use mysql_async::from_row;
 use mysql_async as my;
+use mysql_async::from_row;
+use mysql_async::prelude::Queryable;
 use mysql_async::Value as MyValue;
+use rand::prelude::thread_rng;
+use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, RwLock};
+use tokio::sync::Mutex;
+use tracing::{instrument, trace};
 use wikibase::mediawiki::api::Api;
 
 pub type DbUserPass = (String, String);
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    db_pool:Arc<Mutex<Vec<DbUserPass>>>,
+    db_pool: Arc<Mutex<Vec<DbUserPass>>>,
     config: Value,
     tool_db_mutex: Arc<Mutex<DbUserPass>>,
     threads_running: Arc<RwLock<i64>>,
     shutting_down: Arc<RwLock<bool>>,
     site_matrix: Value,
     main_page: String,
-    port_mapping: HashMap<String,u16>, // Local testing only
+    port_mapping: HashMap<String, u16>, // Local testing only
 }
 
 impl AppState {
@@ -45,13 +45,13 @@ impl AppState {
         );
         let port_mapping = config["port_mapping"]
             .as_object()
-            .map(|x|x.to_owned())
+            .map(|x| x.to_owned())
             .unwrap_or_default()
             .into_iter()
-            .map(|(k,v)|(k.to_string(),v.as_i64().unwrap_or_default() as u16))
+            .map(|(k, v)| (k.to_string(), v.as_i64().unwrap_or_default() as u16))
             .collect();
         let ret = Self {
-            db_pool : Arc::new(Mutex::new(vec![])),
+            db_pool: Arc::new(Mutex::new(vec![])),
             config: config.to_owned(),
             port_mapping,
             threads_running: Arc::new(RwLock::new(0)),
@@ -63,11 +63,10 @@ impl AppState {
             )
             .parse()
             .expect("Parsing index.html failed"),
-
         };
 
         if let Some(up_list) = config["mysql"].as_array() {
-            let mut pool = ret.db_pool.lock().await ;
+            let mut pool = ret.db_pool.lock().await;
             for up in up_list {
                 let user = up[0]
                     .as_str()
@@ -80,8 +79,8 @@ impl AppState {
                 let connections = up[2].as_u64().unwrap_or(5);
                 // Ignore toolname up[3]
 
-                for _num in 1 .. connections {
-                    pool.push ( (user.to_string(),pass.to_string()) );
+                for _num in 1..connections {
+                    pool.push((user.to_string(), pass.to_string()));
                 }
             }
             pool.shuffle(&mut thread_rng());
@@ -96,8 +95,13 @@ impl AppState {
         self.config["restart-code"].as_str()
     }
 
-    fn get_mysql_opts_for_wiki(&self,wiki:&str,user:&str,pass:&str) -> Result<my::Opts,String> {
-        let ( host , schema ) = self.db_host_and_schema_for_wiki(&wiki)?;
+    fn get_mysql_opts_for_wiki(
+        &self,
+        wiki: &str,
+        user: &str,
+        pass: &str,
+    ) -> Result<my::Opts, String> {
+        let (host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
         let port: u16 = match self.port_mapping.get(wiki) {
             Some(port) => *port,
             None => self.config["db_port"].as_u64().unwrap_or(3306) as u16,
@@ -121,25 +125,29 @@ impl AppState {
         let h = format!(
             "<html dir='{}' lang='{}'>",
             direction,
-            interface_language.replace("'", "")
+            interface_language.replace('\'', "")
         );
-        let ret = self.main_page.replace("<html>", &h) ;
+        let ret = self.main_page.replace("<html>", &h);
         if self.is_language_rtl(&interface_language) {
-            ret.replace("bootstrap.min.css","bootstrap-rtl.min.css")
+            ret.replace("bootstrap.min.css", "bootstrap-rtl.min.css")
         } else {
             ret
         }
     }
 
     fn get_db_server_group(&self) -> &str {
-        self.config["dbservergroup"].as_str().unwrap_or(".web.db.svc.eqiad.wmflabs")
+        self.config["dbservergroup"]
+            .as_str()
+            .unwrap_or(".web.db.svc.eqiad.wmflabs")
     }
 
-    pub fn fix_wiki_name(&self,wiki: &str) -> String {
+    pub fn fix_wiki_name(&self, wiki: &str) -> String {
         match wiki {
             "be-taraskwiki" | "be-x-oldwiki" | "be_taraskwiki" | "be_x_oldwiki" => "be_x_oldwiki",
             other => other,
-        }.to_string().replace('-',"_")
+        }
+        .to_string()
+        .replace('-', "_")
     }
 
     /// Returns the server and database name for the wiki, as a tuple
@@ -153,7 +161,7 @@ impl AppState {
             Some(_host) => wiki.to_owned() + self.get_db_server_group(),
             None => panic!("No host in config file"),
         };
-        let schema = format!("{}_p",wiki);
+        let schema = format!("{}_p", wiki);
         Ok((host, schema))
     }
 
@@ -172,29 +180,35 @@ impl AppState {
         (host, schema)
     }
 
-    async fn set_group_concat_max_len(&self, wiki: &str, conn: &mut my::Conn) -> Result<(), String> {
+    async fn set_group_concat_max_len(
+        &self,
+        wiki: &str,
+        conn: &mut my::Conn,
+    ) -> Result<(), String> {
         if wiki == "commonswiki" {
-            conn.exec_drop("SET SESSION group_concat_max_len = 1000000000",()).await.map_err(|e|format!("{:?}",e))?;
+            conn.exec_drop("SET SESSION group_concat_max_len = 1000000000", ())
+                .await
+                .map_err(|e| format!("{:?}", e))?;
         }
         Ok(())
     }
 
     #[instrument(skip(self), err)]
-    pub async fn get_wiki_db_connection(
-        &self,
-        wiki: &str,
-    ) -> Result<my::Conn, String> {
+    pub async fn get_wiki_db_connection(&self, wiki: &str) -> Result<my::Conn, String> {
         let mut pool = self.db_pool.lock().await;
         if pool.is_empty() {
             panic!("pool is empty");
         }
         pool.rotate_left(1);
-        let last = pool.len()-1;
-        let opts = self.get_mysql_opts_for_wiki(wiki,&pool[last].0,&pool[last].1)?;
+        let last = pool.len() - 1;
+        let opts = self.get_mysql_opts_for_wiki(wiki, &pool[last].0, &pool[last].1)?;
         trace!(user = opts.user());
         let mut conn;
         loop {
-            conn = match my::Conn::new(opts.to_owned()).await.map_err(|e|format!("{:?}",e)) {
+            conn = match my::Conn::new(opts.to_owned())
+                .await
+                .map_err(|e| format!("{:?}", e))
+            {
                 Ok(conn) => conn,
                 Err(s) => {
                     // Checking if max_user_connections was exceeded. That should not happen but sometimes it does.
@@ -206,7 +220,7 @@ impl AppState {
                     return Err(s);
                 }
             };
-            self.set_group_concat_max_len(wiki,&mut conn).await?;
+            self.set_group_concat_max_len(wiki, &mut conn).await?;
             break;
         }
         Ok(conn)
@@ -289,10 +303,7 @@ impl AppState {
         match site[key_match].as_str() {
             Some(site_url) => {
                 if value == site_url {
-                    match site[key_return].as_str() {
-                        Some(url) => Some(url.to_string()),
-                        None => None,
-                    }
+                    site[key_return].as_str().map(|url| url.to_string())
                 } else {
                     None
                 }
@@ -347,7 +358,7 @@ impl AppState {
     }
 
     pub fn get_server_url_for_wiki(&self, wiki: &str) -> Result<String, String> {
-        match wiki.replace("_", "-").as_str() {
+        match wiki.replace('_', "-").as_str() {
             "be-taraskwiki" | "be-x-oldwiki" => {
                 return Ok("https://be-tarask.wikipedia.org".to_string())
             }
@@ -412,7 +423,9 @@ impl AppState {
     }
 
     pub async fn get_query_from_psid(&self, psid: &str) -> Result<String, String> {
-        let mut conn = self.get_tool_db_connection(self.tool_db_mutex.lock().await.clone()).await?;
+        let mut conn = self
+            .get_tool_db_connection(self.tool_db_mutex.lock().await.clone())
+            .await?;
 
         let psid = match psid.parse::<usize>() {
             Ok(psid) => psid,
@@ -420,14 +433,16 @@ impl AppState {
         };
         let sql = format!("SELECT querystring FROM query WHERE id={}", psid);
 
-        let rows = conn.exec_iter(sql.as_str(),()).await
-            .map_err(|e|format!("{:?}",e))?
+        let rows = conn
+            .exec_iter(sql.as_str(), ())
+            .await
+            .map_err(|e| format!("{:?}", e))?
             .map_and_drop(from_row::<Vec<u8>>)
             .await
-            .map_err(|e|format!("{:?}",e))?;
+            .map_err(|e| format!("{:?}", e))?;
 
-        match rows.get(0) {
-            Some(ret) => Ok(String::from_utf8_lossy(&ret).into_owned()),
+        match rows.first() {
+            Some(ret) => Ok(String::from_utf8_lossy(ret).into_owned()),
             None => Err("No such PSID in the database".to_string()),
         }
     }
@@ -445,32 +460,37 @@ impl AppState {
             ],
         );
 
-
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
-        conn.exec_drop(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await.map_err(|e|format!("{:?}",e))?;
-        conn.last_insert_id().ok_or_else(|| "AppState::log_query_start: Could not insert".to_string())
+        let mut conn = self
+            .get_tool_db_connection(tool_db_user_pass.clone())
+            .await?;
+        conn.exec_drop(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .await
+            .map_err(|e| format!("{:?}", e))?;
+        conn.last_insert_id()
+            .ok_or_else(|| "AppState::log_query_start: Could not insert".to_string())
     }
 
-    pub async fn log_query_end(&self, query_id: u64) -> Result<(),String> {
+    pub async fn log_query_end(&self, query_id: u64) -> Result<(), String> {
         let sql = (
             "DELETE FROM `started_queries` WHERE id=?",
             vec![MyValue::UInt(query_id)],
         );
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        self
-            .get_tool_db_connection(tool_db_user_pass.clone())
+        self.get_tool_db_connection(tool_db_user_pass.clone())
             .await
-            .map_err(|e|format!("{:?}",e))?
-            .exec_drop(sql.0,mysql_async::Params::Positional(sql.1))
+            .map_err(|e| format!("{:?}", e))?
+            .exec_drop(sql.0, mysql_async::Params::Positional(sql.1))
             .await
-            .map_err(|e|format!("{:?}",e))
+            .map_err(|e| format!("{:?}", e))
     }
 
     #[instrument(skip_all, ret)]
     pub async fn get_or_create_psid_for_query(&self, query_string: &str) -> Result<u64, String> {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = self.get_tool_db_connection(tool_db_user_pass.clone()).await?;
+        let mut conn = self
+            .get_tool_db_connection(tool_db_user_pass.clone())
+            .await?;
 
         // Check for existing entry
         let sql = (
@@ -478,43 +498,54 @@ impl AppState {
             vec![MyValue::Bytes(query_string.to_owned().into())],
         );
 
-        let rows = conn.exec_iter(sql.0,mysql_async::Params::Positional(sql.1)).await
-            .map_err(|e|format!("{:?}",e))?
+        let rows = conn
+            .exec_iter(sql.0, mysql_async::Params::Positional(sql.1))
+            .await
+            .map_err(|e| format!("{:?}", e))?
             .map_and_drop(from_row::<u64>)
             .await
-            .map_err(|e|format!("{:?}",e))?;
+            .map_err(|e| format!("{:?}", e))?;
 
-        if let Some(id) = rows.get(0) { return Ok(*id) }
+        if let Some(id) = rows.first() {
+            return Ok(*id);
+        }
 
         // Create new entry
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
         let sql = (
             "INSERT IGNORE INTO `query` (querystring,created) VALUES (?,?)",
-            vec![MyValue::Bytes(query_string.to_owned().into()), MyValue::Bytes(now.into())],
+            vec![
+                MyValue::Bytes(query_string.to_owned().into()),
+                MyValue::Bytes(now.into()),
+            ],
         );
 
-        conn.exec_drop(sql.0,mysql_async::Params::Positional(sql.1)).await.map_err(|e|format!("{:?}",e))?;
+        conn.exec_drop(sql.0, mysql_async::Params::Positional(sql.1))
+            .await
+            .map_err(|e| format!("{:?}", e))?;
         match conn.last_insert_id() {
             Some(id) => Ok(id),
-            None => Err("get_or_create_psid_for_query: Could not insert new PSID".to_string())
+            None => Err("get_or_create_psid_for_query: Could not insert new PSID".to_string()),
         }
     }
 
     async fn load_site_matrix() -> Value {
-        let api =
-            Api::new("https://www.wikidata.org/w/api.php").await.expect("Can't talk to Wikidata API");
+        let api = Api::new("https://www.wikidata.org/w/api.php")
+            .await
+            .expect("Can't talk to Wikidata API");
         let params: HashMap<String, String> = vec![("action", "sitematrix")]
             .par_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        api.get_query_api_json(&params).await
+        api.get_query_api_json(&params)
+            .await
             .expect("Can't run action=sitematrix on Wikidata API")
     }
 
     pub fn try_shutdown(&self) {
         if !self.is_shutting_down() {
-            return ;
+            return;
         }
         if let Ok(tr) = self.threads_running.read() {
             if *tr == 0 {
@@ -524,19 +555,23 @@ impl AppState {
     }
 
     pub fn modify_threads_running(&self, diff: i64) {
-        if let Ok(mut tr) = self.threads_running.write() { *tr += diff }
+        if let Ok(mut tr) = self.threads_running.write() {
+            *tr += diff
+        }
         self.try_shutdown()
     }
 
     pub fn is_shutting_down(&self) -> bool {
         match self.shutting_down.read() {
             Ok(x) => *x,
-            _ => true
+            _ => true,
         }
     }
 
     pub fn shut_down(&self) {
-        if let Ok(mut sd) = self.shutting_down.write() { *sd = true ; }
+        if let Ok(mut sd) = self.shutting_down.write() {
+            *sd = true;
+        }
     }
 }
 
@@ -563,12 +598,12 @@ mod tests {
 
     async fn get_state() -> Arc<AppState> {
         get_new_state().await // TODO use static
-        /*
-        lazy_static! {
-            static ref STATE: Arc<AppState> = get_new_state();
-        }
-        STATE.clone()
-        */
+                              /*
+                              lazy_static! {
+                                  static ref STATE: Arc<AppState> = get_new_state();
+                              }
+                              STATE.clone()
+                              */
     }
 
     #[tokio::test]

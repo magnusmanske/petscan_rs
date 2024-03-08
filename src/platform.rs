@@ -1,25 +1,27 @@
-use std::fmt;
-use tokio::sync::Mutex as TokioMutex;
-use futures::future::join_all;
-use tracing::{instrument, debug};
 use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
-use crate::pagelist_entry::{PageListEntry, LinkCount, PageCoordinates, TriState, FileInfo, PageListSort};
+use crate::pagelist_entry::{
+    FileInfo, LinkCount, PageCoordinates, PageListEntry, PageListSort, TriState,
+};
 use crate::render::*;
 use crate::wdfist::*;
-use mysql_async::from_row;
+use futures::future::join_all;
 use mysql_async as my;
-use mysql_async::Value as MyValue;
+use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
+use mysql_async::Value as MyValue;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
+use tokio::sync::Mutex as TokioMutex;
+use tracing::{debug, instrument};
 use wikibase::mediawiki::api::NamespaceID;
 use wikibase::mediawiki::title::Title;
 
@@ -68,11 +70,11 @@ pub enum Combination {
 impl fmt::Display for Combination {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Combination::None => write!(f,"nothing"),
-            Combination::Source(s) => write!(f,"{}",s),
-            Combination::Intersection((a, b)) => write!(f,"({} AND {})",a,b),
-            Combination::Union((a, b)) => write!(f,"({} OR {})",a,b),
-            Combination::Not((a, b)) => write!(f,"({} NOT {})",a,b),
+            Combination::None => write!(f, "nothing"),
+            Combination::Source(s) => write!(f, "{}", s),
+            Combination::Intersection((a, b)) => write!(f, "({} AND {})", a, b),
+            Combination::Union((a, b)) => write!(f, "({} OR {})", a, b),
+            Combination::Not((a, b)) => write!(f, "({} NOT {})", a, b),
         }
     }
 }
@@ -163,7 +165,11 @@ impl Platform {
         };
 
         match self.namespace_case_sensitivity_cache.read() {
-            Ok(ncsc) => if let Some(ret) = ncsc.get(&(wiki.to_owned(), namespace_id)) { return *ret },
+            Ok(ncsc) => {
+                if let Some(ret) = ncsc.get(&(wiki.to_owned(), namespace_id)) {
+                    return *ret;
+                }
+            }
             _ => return false,
         }
         let api = match self.state().get_api_for_wiki(wiki.to_owned()).await {
@@ -210,40 +216,40 @@ impl Platform {
         let mut s_labels = SourceLabels::new();
         let mut s_sitelinks = SourceSitelinks::new();
 
-        let mut futures = vec![] ;
-        let mut available_sources = vec![] ;
+        let mut futures = vec![];
+        let mut available_sources = vec![];
 
-        if s_db.can_run(&self) {
+        if s_db.can_run(self) {
             available_sources.push(s_db.name());
-            futures.push ( s_db.run(&self) ) ;
+            futures.push(s_db.run(self));
         }
-        if s_sparql.can_run(&self) {
+        if s_sparql.can_run(self) {
             available_sources.push(s_sparql.name());
-            futures.push ( s_sparql.run(&self) ) ;
+            futures.push(s_sparql.run(self));
         }
-        if s_manual.can_run(&self) {
+        if s_manual.can_run(self) {
             available_sources.push(s_manual.name());
-            futures.push ( s_manual.run(&self) ) ;
+            futures.push(s_manual.run(self));
         }
-        if s_pagepile.can_run(&self) {
+        if s_pagepile.can_run(self) {
             available_sources.push(s_pagepile.name());
-            futures.push ( s_pagepile.run(&self) ) ;
+            futures.push(s_pagepile.run(self));
         }
-        if s_search.can_run(&self) {
+        if s_search.can_run(self) {
             available_sources.push(s_search.name());
-            futures.push ( s_search.run(&self) ) ;
+            futures.push(s_search.run(self));
         }
-        if s_wikidata.can_run(&self) {
+        if s_wikidata.can_run(self) {
             available_sources.push(s_wikidata.name());
-            futures.push ( s_wikidata.run(&self) ) ;
+            futures.push(s_wikidata.run(self));
         }
-        if futures.is_empty() && s_sitelinks.can_run(&self){
+        if futures.is_empty() && s_sitelinks.can_run(self) {
             available_sources.push(s_sitelinks.name());
-            futures.push ( s_sitelinks.run(&self) ) ;   
+            futures.push(s_sitelinks.run(self));
         }
-        if futures.is_empty() && s_labels.can_run(&self){
+        if futures.is_empty() && s_labels.can_run(self) {
             available_sources.push(s_labels.name());
-            futures.push ( s_labels.run(&self) ) ;   
+            futures.push(s_labels.run(self));
         }
         if futures.is_empty() {
             return Err("No possible data source found in parameters".to_string());
@@ -253,7 +259,7 @@ impl Platform {
 
         let mut tmp_results = join_all(futures).await;
 
-        let mut results: HashMap<String, PageList> = HashMap::new() ;
+        let mut results: HashMap<String, PageList> = HashMap::new();
         let mut names = available_sources.clone();
         while !tmp_results.is_empty() {
             let result = tmp_results.remove(0);
@@ -261,7 +267,7 @@ impl Platform {
                 panic!("Platform::run names is empty");
             }
             let name = names.remove(0);
-            results.insert(name,result?);
+            results.insert(name, result?);
             // if let Ok(r) = result {
             //     results.insert(name,r);
             // }
@@ -270,9 +276,10 @@ impl Platform {
 
         self.wiki_by_source = results
             .iter()
-            .filter_map(|(name, data)| match data.wiki().unwrap_or(None) {
-                Some(wiki) => Some((name.to_string(), wiki)),
-                None => None,
+            .filter_map(|(name, data)| {
+                data.wiki()
+                    .unwrap_or(None)
+                    .map(|wiki| (name.to_string(), wiki))
             })
             .collect();
         Platform::profile("end futures 1", None);
@@ -280,8 +287,10 @@ impl Platform {
         self.combination = self.get_combination(&available_sources);
 
         Platform::profile("before combine_results", None);
-        let serialized_combination = self.serialize_combine_results(&self.combination)? ;
-        let result = self.combine_results(&mut results, serialized_combination).await?;
+        let serialized_combination = Self::serialize_combine_results(&self.combination)?;
+        let result = self
+            .combine_results(&mut results, serialized_combination)
+            .await?;
         drop(results);
 
         self.result = Some(result);
@@ -302,8 +311,8 @@ impl Platform {
                 None => return Err("No result set for WDfist".to_string()),
             }
             //self.result = Some(pagelist);
-            let mut wdfist =
-                WDfist::new(&self, &self.result).ok_or_else(|| "Cannot create WDfist".to_string())?;
+            let mut wdfist = WDfist::new(self, &self.result)
+                .ok_or_else(|| "Cannot create WDfist".to_string())?;
             self.result = None; // Safe space
             self.wdfist_result = Some(wdfist.run().await?);
         }
@@ -327,36 +336,36 @@ impl Platform {
 
         // Filter and post-process
         Platform::profile("before filter_wikidata", Some(result.len()?));
-        self.filter_wikidata(&result).await?;
+        self.filter_wikidata(result).await?;
         Platform::profile("after filter_wikidata", Some(result.len()?));
         if available_sources.to_vec() != vec!["sitelinks".to_string()] {
-            self.process_sitelinks(&result).await?;
+            self.process_sitelinks(result).await?;
             Platform::profile("after process_sitelinks", None);
         }
         if available_sources.to_vec() != vec!["labels".to_string()] {
-            self.process_labels(&result).await?;
+            self.process_labels(result).await?;
             Platform::profile("after process_labels", Some(result.len()?));
         }
 
-        self.convert_to_common_wiki(&result).await?;
+        self.convert_to_common_wiki(result).await?;
         Platform::profile("after convert_to_common_wiki", Some(result.len()?));
 
         if !available_sources.contains(&"categories".to_string()) {
-            self.process_missing_database_filters(&result).await?;
+            self.process_missing_database_filters(result).await?;
             Platform::profile(
                 "after process_missing_database_filters",
                 Some(result.len()?),
             );
         }
-        self.process_by_wikidata_item(&result).await?;
+        self.process_by_wikidata_item(result).await?;
         Platform::profile("after process_by_wikidata_item", Some(result.len()?));
-        self.process_files(&result).await?;
+        self.process_files(result).await?;
         Platform::profile("after process_files", Some(result.len()?));
-        self.process_pages(&result).await?;
+        self.process_pages(result).await?;
         Platform::profile("after process_pages", Some(result.len()?));
-        self.process_namespace_conversion(&result).await?;
+        self.process_namespace_conversion(result).await?;
         Platform::profile("after process_namespace_conversion", Some(result.len()?));
-        self.process_subpages(&result).await?;
+        self.process_subpages(result).await?;
         Platform::profile("after process_subpages", Some(result.len()?));
         self.annotate_with_wikidata_item(result).await?;
         Platform::profile("after annotate_with_wikidata_item [2]", Some(result.len()?));
@@ -365,13 +374,19 @@ impl Platform {
             "wikidata_label_language",
             &self.get_param_default("interface_language", "en"),
         );
-        result.load_missing_metadata(Some(wikidata_label_language), &self).await?;
+        result
+            .load_missing_metadata(Some(wikidata_label_language), self)
+            .await?;
         Platform::profile("after load_missing_metadata", Some(result.len()?));
-        if let Some(regexp) = self.get_param("rxp_filter") { result.regexp_filter(&regexp)?; }
-        if let Some(search) = self.get_param("search_filter") { result.search_filter(self,&search).await?; }
-        self.process_redlinks(&result).await?;
+        if let Some(regexp) = self.get_param("rxp_filter") {
+            result.regexp_filter(&regexp)?;
+        }
+        if let Some(search) = self.get_param("search_filter") {
+            result.search_filter(self, &search).await?;
+        }
+        self.process_redlinks(result).await?;
         Platform::profile("after process_redlinks", Some(result.len()?));
-        self.process_creator(&result).await?;
+        self.process_creator(result).await?;
         Platform::profile("after process_creator", Some(result.len()?));
 
         Ok(())
@@ -385,34 +400,53 @@ impl Platform {
         // Find best wiki to convert to
         match self.get_param_default("common_wiki", "auto").as_str() {
             "auto" => {}
-            "cats" => result.convert_to_wiki(
-                &self
-                    .wiki_by_source
-                    .get("categories")
-                    .ok_or_else(|| "categories wiki requested as output, but not set".to_string())?,
-                &self,
-            ).await?,
-            "pagepile" => result.convert_to_wiki(
-                &self
-                    .wiki_by_source
-                    .get("pagepile")
-                    .ok_or_else(|| "pagepile wiki requested as output, but not set".to_string())?,
-                &self,
-            ).await?,
-            "manual" => result.convert_to_wiki(
-                &self
-                    .wiki_by_source
-                    .get("manual")
-                    .map(|s| s.to_string())
-                    .or_else(|| self.get_param("common_wiki_other"))
-                    .ok_or_else(|| "manual wiki requested as output, but not set".to_string())?,
-                &self,
-            ).await?,
-            "wikidata" => result.convert_to_wiki("wikidatawiki", &self).await?,
-            "other" => result.convert_to_wiki(
-                &self.get_param("common_wiki_other").ok_or_else(|| "Other wiki for output expected, but not given in text field".to_string())?,
-                &self,
-            ).await?,
+            "cats" => {
+                result
+                    .convert_to_wiki(
+                        self.wiki_by_source.get("categories").ok_or_else(|| {
+                            "categories wiki requested as output, but not set".to_string()
+                        })?,
+                        self,
+                    )
+                    .await?
+            }
+            "pagepile" => {
+                result
+                    .convert_to_wiki(
+                        self.wiki_by_source.get("pagepile").ok_or_else(|| {
+                            "pagepile wiki requested as output, but not set".to_string()
+                        })?,
+                        self,
+                    )
+                    .await?
+            }
+            "manual" => {
+                result
+                    .convert_to_wiki(
+                        &self
+                            .wiki_by_source
+                            .get("manual")
+                            .map(|s| s.to_string())
+                            .or_else(|| self.get_param("common_wiki_other"))
+                            .ok_or_else(|| {
+                                "manual wiki requested as output, but not set".to_string()
+                            })?,
+                        self,
+                    )
+                    .await?
+            }
+            "wikidata" => result.convert_to_wiki("wikidatawiki", self).await?,
+            "other" => {
+                result
+                    .convert_to_wiki(
+                        &self.get_param("common_wiki_other").ok_or_else(|| {
+                            "Other wiki for output expected, but not given in text field"
+                                .to_string()
+                        })?,
+                        self,
+                    )
+                    .await?
+            }
             unknown => return Err(format!("Unknown output wiki type '{}'", &unknown)),
         }
         Ok(())
@@ -434,9 +468,7 @@ impl Platform {
         if result.is_empty()? || result.is_wikidata() {
             return Ok(());
         }
-        if !self.has_param("show_redlinks")
-            && self.get_param_blank("wikidata_item") != "without"
-        {
+        if !self.has_param("show_redlinks") && self.get_param_blank("wikidata_item") != "without" {
             return Ok(());
         }
 
@@ -464,25 +496,27 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         let state = self.state();
-        let mut conn = state.get_wiki_db_connection(&"wikidatawiki".to_string()).await?;
+        let mut conn = state.get_wiki_db_connection("wikidatawiki").await?;
 
         for sql in batches {
-            let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
-                .map_err(|e|format!("{:?}",e))?
+            let rows = conn
+                .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+                .await
+                .map_err(|e| format!("{:?}", e))?
                 .map_and_drop(from_row::<Vec<u8>>)
                 .await
-                .map_err(|e|format!("{:?}",e))?;
+                .map_err(|e| format!("{:?}", e))?;
 
             let mut el = match self.existing_labels.write() {
                 Ok(el) => el,
-                Err(e) => return Err(format!("{:?}",e))
+                Err(e) => return Err(format!("{:?}", e)),
             };
             for wbx_text in rows {
-                let label = String::from_utf8_lossy(&wbx_text) ;
+                let label = String::from_utf8_lossy(&wbx_text);
                 el.insert(label.to_string());
             }
         }
-        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
+        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
         Ok(())
     }
 
@@ -520,7 +554,6 @@ impl Platform {
             None => return Err("Platform::process_redlinks: no wiki set in result".to_string()),
         };
 
-
         let mut conn = self
             .state
             .get_wiki_db_connection(&wiki)
@@ -528,9 +561,10 @@ impl Platform {
             .map_err(|e| format!("{:?}", e))?;
 
         for sql in batches {
-            self.process_redlinks_batch(&mut conn,sql,&mut redlink_counter).await?;
+            self.process_redlinks_batch(&mut conn, sql, &mut redlink_counter)
+                .await?;
         }
-        conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
+        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
@@ -551,17 +585,24 @@ impl Platform {
         Ok(())
     }
 
-    async fn process_redlinks_batch(&self,conn:&mut mysql_async::Conn,sql:SQLtuple,redlink_counter: &mut HashMap<Title, LinkCount>) -> Result<(), String> {
-        let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
-            .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(from_row::<(Vec<u8>,i64,usize)>)
+    async fn process_redlinks_batch(
+        &self,
+        conn: &mut mysql_async::Conn,
+        sql: SQLtuple,
+        redlink_counter: &mut HashMap<Title, LinkCount>,
+    ) -> Result<(), String> {
+        let rows = conn
+            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await
-            .map_err(|e|format!("{:?}",e))?;
+            .map_err(|e| format!("{:?}", e))?
+            .map_and_drop(from_row::<(Vec<u8>, i64, usize)>)
+            .await
+            .map_err(|e| format!("{:?}", e))?;
 
-        for (page_title,namespace_id,_count) in rows {
-            let page_title = String::from_utf8_lossy(&page_title).to_string() ;
+        for (page_title, namespace_id, _count) in rows {
+            let page_title = String::from_utf8_lossy(&page_title).to_string();
             let title = Title::new(&page_title, namespace_id);
-            *redlink_counter.entry(title).or_insert_with(||0) += 1 ;
+            *redlink_counter.entry(title).or_insert_with(|| 0) += 1;
         }
         Ok(())
     }
@@ -571,23 +612,23 @@ impl Platform {
         let add = match namespace_conversion.as_str() {
             "topic" => 0,
             "talk" => 1,
-            _ => return Ok(())
-        } ;
+            _ => return Ok(()),
+        };
         // Need tmp to avoid permanent double-lock on entries
         let tmp = result
-        .entries()
-        .read()
-        .map_err(|e| format!("{:?}", e))?
-        .par_iter()
-        .map(|entry| {
-            let mut nsid = entry.title().namespace_id() ;
-            nsid = nsid - (nsid&1) + add; // Change "talk" bit
-            let t = entry.title().pretty();
-            let new_title = Title::new(t, nsid);
-            PageListEntry::new(new_title)
-        })
-        .collect();
-        *(result.entries().write().map_err(|e| format!("{:?}", e))?) = tmp ;
+            .entries()
+            .read()
+            .map_err(|e| format!("{:?}", e))?
+            .par_iter()
+            .map(|entry| {
+                let mut nsid = entry.title().namespace_id();
+                nsid = nsid - (nsid & 1) + add; // Change "talk" bit
+                let t = entry.title().pretty();
+                let new_title = Title::new(t, nsid);
+                PageListEntry::new(new_title)
+            })
+            .collect();
+        *(result.entries().write().map_err(|e| format!("{:?}", e))?) = tmp;
         Ok(())
     }
 
@@ -625,18 +666,22 @@ impl Platform {
                     vec![MyValue::Int(namespace_id), MyValue::Bytes(format!("{}/%", &title).into())],
                 );
 
-                let rows = conn.exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
-                    .map_err(|e|format!("{:?}",e))?
-                    .map_and_drop(from_row::<(Vec<u8>,i64)>)
+                let rows = conn
+                    .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
                     .await
-                    .map_err(|e|format!("{:?}",e))?;
+                    .map_err(|e| format!("{:?}", e))?
+                    .map_and_drop(from_row::<(Vec<u8>, i64)>)
+                    .await
+                    .map_err(|e| format!("{:?}", e))?;
 
-                for (page_title,page_namespace) in rows {
+                for (page_title, page_namespace) in rows {
                     let page_title = String::from_utf8_lossy(&page_title);
-                    result.add_entry(PageListEntry::new(Title::new(&page_title,page_namespace))).unwrap_or(());
+                    result
+                        .add_entry(PageListEntry::new(Title::new(&page_title, page_namespace)))
+                        .unwrap_or(());
                 }
             }
-            conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
+            conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
             // TODO if new pages were added, they should get some of the post_process_result treatment as well
         }
 
@@ -659,14 +704,16 @@ impl Platform {
     }
 
     async fn process_pages(&self, result: &PageList) -> Result<(), String> {
-        let is_kml = self.get_param_blank("format")=="kml" ;
-        let is_wikidata = result.wiki()==Ok(Some("wikidatawiki".to_string())) ;
-        let add_coordinates = self.has_param("add_coordinates")||is_kml;
-        let add_image = self.has_param("add_image") || is_kml ;
-        let add_defaultsort = self.has_param("add_defaultsort")||self.get_param_blank("sortby")=="defaultsort";
+        let is_kml = self.get_param_blank("format") == "kml";
+        let is_wikidata = result.wiki() == Ok(Some("wikidatawiki".to_string()));
+        let add_coordinates = self.has_param("add_coordinates") || is_kml;
+        let add_image = self.has_param("add_image") || is_kml;
+        let add_defaultsort =
+            self.has_param("add_defaultsort") || self.get_param_blank("sortby") == "defaultsort";
         let add_disambiguation = self.has_param("add_disambiguation");
         let add_incoming_links = self.get_param_blank("sortby") == "incoming_links";
-        let add_sitelinks = self.get_param_blank("sortby") == "sitelinks" && !result.has_sitelink_counts()?;
+        let add_sitelinks =
+            self.get_param_blank("sortby") == "sitelinks" && !result.has_sitelink_counts()?;
         if !add_coordinates
             && !add_image
             && !add_defaultsort
@@ -746,12 +793,15 @@ impl Platform {
             }
         };
 
-        let col_title : usize = 0 ;
-        let col_ns : usize = 1 ;
-        result.run_batch_queries(&self.state(), batches).await?
+        let col_title: usize = 0;
+        let col_ns: usize = 1;
+        result
+            .run_batch_queries(&self.state(), batches)
+            .await?
             .iter()
             .filter_map(|row| {
-                result.entry_from_row(row, col_title, col_ns)
+                result
+                    .entry_from_row(row, col_title, col_ns)
                     .map(|entry| (row, entry))
             })
             .filter_map(|(row, entry)| {
@@ -768,9 +818,9 @@ impl Platform {
     }
 
     async fn file_usage(&self, result: &PageList, file_usage_data_ns0: bool) -> Result<(), String> {
-        let mut batch_size = PAGE_BATCH_SIZE ;
+        let mut batch_size = PAGE_BATCH_SIZE;
         loop {
-            if batch_size==0 {
+            if batch_size == 0 {
                 return Err("file_usage: Too much file usage to report back from MySQL".into());
             }
             let batches: Vec<SQLtuple> = result
@@ -786,26 +836,30 @@ impl Platform {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-            let the_f = |row: my::Row, entry: &mut PageListEntry| if let Some(gil_group) = PageList::string_from_row(&row, 2) {
-                let fi = FileInfo::new_from_gil_group(&gil_group);
-                entry.set_file_info(Some(fi));
-            } ;
-            let col_title : usize = 0 ;
-            let col_ns : usize = 1 ;
+            let the_f = |row: my::Row, entry: &mut PageListEntry| {
+                if let Some(gil_group) = PageList::string_from_row(&row, 2) {
+                    let fi = FileInfo::new_from_gil_group(&gil_group);
+                    entry.set_file_info(Some(fi));
+                }
+            };
+            let col_title: usize = 0;
+            let col_ns: usize = 1;
             let batch_results = match result.run_batch_queries(&self.state(), batches).await {
                 Ok(res) => res,
                 Err(e) => {
-                    if e.contains("packet too large") { // Happens for heavily used files, try again with half batch size
-                        batch_size = std::cmp::min(batch_size,result.len().unwrap())/2;
+                    if e.contains("packet too large") {
+                        // Happens for heavily used files, try again with half batch size
+                        batch_size = std::cmp::min(batch_size, result.len().unwrap()) / 2;
                         continue;
                     }
                     return Err(e); // Some other error
-                },
+                }
             };
             batch_results
                 .iter()
                 .filter_map(|row| {
-                    result.entry_from_row(row, col_title, col_ns)
+                    result
+                        .entry_from_row(row, col_title, col_ns)
                         .map(|entry| (row, entry))
                 })
                 .filter_map(|(row, entry)| {
@@ -821,7 +875,6 @@ impl Platform {
             return Ok(());
         }
     }
-    
 
     async fn process_files(&self, result: &PageList) -> Result<(), String> {
         let giu = self.has_param("giu");
@@ -848,52 +901,55 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
             let the_f = |row: my::Row, entry: &mut PageListEntry| {
-                    let (
-                        _img_name,
-                        _namespace_id,
-                        img_size,
-                        img_width,
-                        img_height,
-                        img_media_type,
-                        img_major_mime,
-                        img_minor_mime,
-                        img_user_text,
-                        img_timestamp,
-                        img_sha1,
-                    ) = my::from_row::<(
-                        String,
-                        usize,
-                        usize,
-                        usize,
-                        usize,
-                        String,
-                        String,
-                        String,
-                        String,
-                        String,
-                        String,
-                    )>(row);
-                    let mut file_info = match entry.get_file_info() {
-                        Some(fi) => fi,
-                        None => FileInfo::new(),
-                    };
-                    file_info.img_size = Some(img_size);
-                    file_info.img_width = Some(img_width);
-                    file_info.img_height = Some(img_height);
-                    file_info.img_media_type = Some(img_media_type);
-                    file_info.img_major_mime = Some(img_major_mime);
-                    file_info.img_minor_mime = Some(img_minor_mime);
-                    file_info.img_user_text = Some(img_user_text);
-                    file_info.img_timestamp = Some(img_timestamp);
-                    file_info.img_sha1 = Some(img_sha1);
-                    entry.set_file_info(Some(file_info));
-                } ;
-            let col_title : usize = 0 ;
-            let col_ns : usize = 1 ;
-            result.run_batch_queries(&self.state(), batches).await?
+                let (
+                    _img_name,
+                    _namespace_id,
+                    img_size,
+                    img_width,
+                    img_height,
+                    img_media_type,
+                    img_major_mime,
+                    img_minor_mime,
+                    img_user_text,
+                    img_timestamp,
+                    img_sha1,
+                ) = my::from_row::<(
+                    String,
+                    usize,
+                    usize,
+                    usize,
+                    usize,
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                    String,
+                )>(row);
+                let mut file_info = match entry.get_file_info() {
+                    Some(fi) => fi,
+                    None => FileInfo::new(),
+                };
+                file_info.img_size = Some(img_size);
+                file_info.img_width = Some(img_width);
+                file_info.img_height = Some(img_height);
+                file_info.img_media_type = Some(img_media_type);
+                file_info.img_major_mime = Some(img_major_mime);
+                file_info.img_minor_mime = Some(img_minor_mime);
+                file_info.img_user_text = Some(img_user_text);
+                file_info.img_timestamp = Some(img_timestamp);
+                file_info.img_sha1 = Some(img_sha1);
+                entry.set_file_info(Some(file_info));
+            };
+            let col_title: usize = 0;
+            let col_ns: usize = 1;
+            result
+                .run_batch_queries(&self.state(), batches)
+                .await?
                 .iter()
                 .filter_map(|row| {
-                    result.entry_from_row(row, col_title, col_ns)
+                    result
+                        .entry_from_row(row, col_title, col_ns)
                         .map(|entry| (row, entry))
                 })
                 .filter_map(|(row, entry)| {
@@ -952,58 +1008,60 @@ impl Platform {
 
         for sql in batches {
             // Run query
-            let mut conn = self.state
-                .get_wiki_db_connection(&"wikidatawiki".to_string())
+            let mut conn = self
+                .state
+                .get_wiki_db_connection("wikidatawiki")
                 .await
                 .map_err(|e| format!("{:?}", e))?;
             let mut result = conn
-                .exec_iter(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await
-                .map_err(|e|format!("{:?}",e))?
+                .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+                .await
+                .map_err(|e| format!("{:?}", e))?
                 .collect_and_drop()
                 .await
-                .map_err(|e|format!("{:?}",e))?;
-            conn.disconnect().await.map_err(|e|format!("{:?}",e))?;
+                .map_err(|e| format!("{:?}", e))?;
+            conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
             rows.lock().await.append(&mut result);
         }
 
         // Rows to entries
-        rows.lock().await
-            .iter()
-            .for_each(|row| {
-                let full_page_title = match row.get(0) {
-                    Some(title) => match title {
-                        my::Value::Bytes(uv) => match String::from_utf8(uv) {
-                            Ok(s) => s,
-                            Err(_) => return,
-                        },
-                        _ => return,
+        rows.lock().await.iter().for_each(|row| {
+            let full_page_title = match row.get(0) {
+                /* trunk-ignore(clippy/collapsible_match) */
+                Some(title) => match title {
+                    my::Value::Bytes(uv) => match String::from_utf8(uv) {
+                        Ok(s) => s,
+                        Err(_) => return,
                     },
-                    None => return,
-                };
-                let ips_item_id = match row.get(1) {
-                    Some(title) => match title {
-                        my::Value::Int(i) => i,
-                        _ => return,
-                    },
-                    None => return,
-                };
-                let title = Title::new_from_full(&full_page_title, &api);
-                let tmp_entry = PageListEntry::new(title);
-                let ru = match result.entries().read() {
-                    Ok(ru) => ru,
-                    Err(_e) => return // TODO error log?
-                };
-                let mut entry = match ru.get(&tmp_entry) {
-                    Some(e) => (*e).clone(),
-                    None => return,
-                };
-                drop(ru);
+                    _ => return,
+                },
+                None => return,
+            };
+            let ips_item_id = match row.get(1) {
+                /* trunk-ignore(clippy/collapsible_match) */
+                Some(title) => match title {
+                    my::Value::Int(i) => i,
+                    _ => return,
+                },
+                None => return,
+            };
+            let title = Title::new_from_full(&full_page_title, &api);
+            let tmp_entry = PageListEntry::new(title);
+            let ru = match result.entries().read() {
+                Ok(ru) => ru,
+                Err(_e) => return, // TODO error log?
+            };
+            let mut entry = match ru.get(&tmp_entry) {
+                Some(e) => (*e).clone(),
+                None => return,
+            };
+            drop(ru);
 
-                let q = "Q".to_string() + &ips_item_id.to_string();
-                entry.set_wikidata_item(Some(q));
+            let q = "Q".to_string() + &ips_item_id.to_string();
+            entry.set_wikidata_item(Some(q));
 
-                result.add_entry(entry).unwrap_or(());
-            });
+            result.add_entry(entry).unwrap_or(());
+        });
         Ok(())
 
         /*
@@ -1053,7 +1111,9 @@ impl Platform {
     /// Adds page properties that might be missing if none of the original sources was "categories"
     async fn process_missing_database_filters(&self, result: &PageList) -> Result<(), String> {
         let mut params = SourceDatabaseParameters::db_params(self).await;
-        params.set_wiki(Some(result.wiki()?.ok_or_else(|| "Platform::process_missing_database_filters: result has no wiki".to_string())?));
+        params.set_wiki(Some(result.wiki()?.ok_or_else(|| {
+            "Platform::process_missing_database_filters: result has no wiki".to_string()
+        })?));
         let mut db = SourceDatabase::new(params);
         let new_result = db.get_pages(&self.state, Some(result)).await?;
         result.set_from(new_result)?;
@@ -1065,7 +1125,7 @@ impl Platform {
         if sql.1.is_empty() {
             return Ok(());
         }
-        result.convert_to_wiki("wikidatawiki", &self).await?;
+        result.convert_to_wiki("wikidatawiki", self).await?;
         if result.is_empty()? {
             return Ok(());
         }
@@ -1076,7 +1136,7 @@ impl Platform {
             .to_sql_batches(PAGE_BATCH_SIZE)?
             .par_iter_mut()
             .map(|sql_batch| {
-                let question_marks = Platform::get_placeholders(sql.1.len()) ;
+                let question_marks = Platform::get_placeholders(sql.1.len());
                 sql_batch.0 = sql.0.to_owned() + &question_marks + ")";
                 sql_batch.1.splice(..0, sql.1.to_owned());
                 sql_batch.to_owned()
@@ -1088,7 +1148,8 @@ impl Platform {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
         };
-        result.run_batch_queries(&self.state(), batches)
+        result
+            .run_batch_queries(&self.state(), batches)
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
@@ -1137,7 +1198,7 @@ impl Platform {
         ret.0 += " WHERE t2.wbit_item_id=t1.wbit_item_id AND wbtl_id=t2.wbit_term_in_lang_id";
         self.get_label_sql_helper_new(ret, key);
         if has_languages || has_pattern {
-            let mut tmp = Self::prep_quote(&languages);
+            let mut tmp = Self::prep_quote(languages);
             ret.0 += " AND wbtl_text_in_lang_id=wbxl_id";
             if !tmp.1.is_empty() {
                 if tmp.1.len() == 1 {
@@ -1210,7 +1271,7 @@ impl Platform {
         if self.get_label_sql_new(&0).is_none() {
             return Ok(());
         }
-        result.convert_to_wiki("wikidatawiki", &self).await?;
+        result.convert_to_wiki("wikidatawiki", self).await?;
         if result.is_empty()? {
             return Ok(());
         }
@@ -1242,8 +1303,9 @@ impl Platform {
         let the_f = |row: my::Row| {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
-        } ;
-        result.run_batch_queries(&self.state(), batches)
+        };
+        result
+            .run_batch_queries(&self.state(), batches)
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
@@ -1279,7 +1341,7 @@ impl Platform {
             return Ok(());
         }
         let old_wiki = result.wiki()?.to_owned();
-        result.convert_to_wiki("wikidatawiki", &self).await?;
+        result.convert_to_wiki("wikidatawiki", self).await?;
         if result.is_empty()? {
             return Ok(());
         }
@@ -1312,8 +1374,12 @@ impl Platform {
         sql.0 += " AND ";
 
         let mut having: Vec<String> = vec![];
-        if let Ok(s) = sitelinks_min.parse::<usize>() { having.push(format!("sitelink_count>={}", s)) }
-        if let Ok(s) = sitelinks_max.parse::<usize>() { having.push(format!("sitelink_count<={}", s)) }
+        if let Ok(s) = sitelinks_min.parse::<usize>() {
+            having.push(format!("sitelink_count>={}", s))
+        }
+        if let Ok(s) = sitelinks_max.parse::<usize>() {
+            having.push(format!("sitelink_count<={}", s))
+        }
 
         let mut sql_post = String::new();
         if use_min_max {
@@ -1340,15 +1406,18 @@ impl Platform {
         let the_f = |row: my::Row| {
             let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
             Some(PageListEntry::new(Title::new(&page_title, 0)))
-        } ;
+        };
 
-        result.run_batch_queries(&state, batches)
+        result
+            .run_batch_queries(&state, batches)
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
             .for_each(|entry| result.add_entry(entry).unwrap_or(()));
 
-        if let Some(wiki) = old_wiki { result.convert_to_wiki(&wiki, &self).await? }
+        if let Some(wiki) = old_wiki {
+            result.convert_to_wiki(&wiki, self).await?
+        }
         Ok(())
     }
 
@@ -1369,10 +1438,12 @@ impl Platform {
             "before filter_wikidata:convert_to_wiki",
             Some(result.len()?),
         );
-        result.convert_to_wiki("wikidatawiki", &self).await?;
+        result.convert_to_wiki("wikidatawiki", self).await?;
         Platform::profile("after filter_wikidata:convert_to_wiki", Some(result.len()?));
         if result.is_empty()? {
-            if let Some(wiki) = original_wiki { result.convert_to_wiki(&wiki, &self).await? }
+            if let Some(wiki) = original_wiki {
+                result.convert_to_wiki(&wiki, self).await?
+            }
             return Ok(());
         }
         // For all/any/none
@@ -1442,23 +1513,26 @@ impl Platform {
         let the_f = |row: my::Row| {
             let pp_value: String = my::from_row(row);
             Some(PageListEntry::new(Title::new(&pp_value, 0)))
-        } ;
-        result.run_batch_queries(&state, batches)
+        };
+        result
+            .run_batch_queries(&state, batches)
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
             .for_each(|entry| result.add_entry(entry).unwrap_or(()));
 
-        if let Some(wiki) = original_wiki { result.convert_to_wiki(&wiki, &self).await? }
+        if let Some(wiki) = original_wiki {
+            result.convert_to_wiki(&wiki, self).await?
+        }
         Ok(())
     }
 
     pub fn entry_from_entity(entity: &str) -> Option<PageListEntry> {
         // TODO media-info?
         match entity.chars().next() {
-            Some('Q') => Some(PageListEntry::new(Title::new(&entity.to_string(), 0))),
-            Some('P') => Some(PageListEntry::new(Title::new(&entity.to_string(), 120))),
-            Some('L') => Some(PageListEntry::new(Title::new(&entity.to_string(), 146))),
+            Some('Q') => Some(PageListEntry::new(Title::new(entity, 0))),
+            Some('P') => Some(PageListEntry::new(Title::new(entity, 120))),
+            Some('L') => Some(PageListEntry::new(Title::new(entity, 146))),
             _ => None,
         }
     }
@@ -1471,24 +1545,20 @@ impl Platform {
         let language = self.get_param_default("lang", "en"); // Fallback
         let language = self
             .get_param_default("language", &language)
-            .replace("_", "-");
+            .replace('_', "-");
         let project = self.get_param_default("project", "wikipedia");
         self.get_wiki_for_language_project(&language, &project)
-        .and_then(|wiki|Some(self.state.fix_wiki_name(&wiki)))
+            .map(|wiki| self.state.fix_wiki_name(&wiki))
     }
 
-    pub fn get_wiki_for_language_project(
-        &self,
-        language: &str,
-        project: &str,
-    ) -> Option<String> {
+    pub fn get_wiki_for_language_project(&self, language: &str, project: &str) -> Option<String> {
         match (language, project) {
             (language, "wikipedia") => Some(language.to_owned() + "wiki"),
             ("commons", _) => Some("commonswiki".to_string()),
             ("wikidata", _) => Some("wikidatawiki".to_string()),
             (_, "wikidata") => Some("wikidatawiki".to_string()),
             (l, p) => {
-                let url = format!("https://{}.{}.org",&l,&p);
+                let url = format!("https://{}.{}.org", &l, &p);
                 self.state.get_wiki_for_server_url(&url)
             }
         }
@@ -1525,14 +1595,14 @@ impl Platform {
         self.apply_results_limit(&mut pages);
 
         match self.get_param_blank("format").as_str() {
-            "wiki" => RenderWiki::new().response(&self, &wiki, pages).await,
-            "csv" => RenderTSV::new(",").response(&self, &wiki, pages).await,
-            "tsv" => RenderTSV::new("\t").response(&self, &wiki, pages).await,
-            "json" => RenderJSON::new().response(&self, &wiki, pages).await,
-            "pagepile" => RenderPagePile::new().response(&self, &wiki, pages).await,
-            "kml" => RenderKML::new().response(&self, &wiki, pages).await,
-            "plain" => RenderPlainText::new().response(&self, &wiki, pages).await,
-            _ => RenderHTML::new().response(&self, &wiki, pages).await,
+            "wiki" => RenderWiki::new().response(self, &wiki, pages).await,
+            "csv" => RenderTSV::new(",").response(self, &wiki, pages).await,
+            "tsv" => RenderTSV::new("\t").response(self, &wiki, pages).await,
+            "json" => RenderJSON::new().response(self, &wiki, pages).await,
+            "pagepile" => RenderPagePile::new().response(self, &wiki, pages).await,
+            "kml" => RenderKML::new().response(self, &wiki, pages).await,
+            "plain" => RenderPlainText::new().response(self, &wiki, pages).await,
+            _ => RenderHTML::new().response(self, &wiki, pages).await,
         }
     }
 
@@ -1542,7 +1612,7 @@ impl Platform {
                 .split(separator)
                 .map(|s| s.trim().trim_matches('\u{200E}').trim_matches('\u{200F}')) // See https://doc.rust-lang.org/reference/whitespace.html
                 .filter(|s| !s.is_empty())
-                .map(|s| Title::spaces_to_underscores(&s.to_string()))
+                .map(Title::spaces_to_underscores)
                 .collect(),
             None => vec![],
         }
@@ -1587,7 +1657,7 @@ impl Platform {
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| s[1..].to_string())
-            .map(|s|MyValue::Bytes(s.into()))
+            .map(|s| MyValue::Bytes(s.into()))
             .collect();
         (Platform::get_placeholders(escaped.len()), escaped)
     }
@@ -1616,7 +1686,7 @@ impl Platform {
         }
         if !types.is_empty() {
             let mut tmp = Self::prep_quote(&types);
-            ret.0 += &(" AND ".to_owned() + part2 + &" IN (".to_owned() + &tmp.0 + ")");
+            ret.0 += &(" AND ".to_owned() + part2 + " IN (" + &tmp.0 + ")");
             ret.1.append(&mut tmp.1);
         }
     }
@@ -1648,7 +1718,7 @@ impl Platform {
 
         yes.iter().for_each(|s| {
             if s != "%" {
-                ret.0 += &(" AND wbx_text LIKE ?".to_owned());
+                ret.0 += " AND wbx_text LIKE ?";
                 ret.1.push(MyValue::Bytes(s.to_owned().into()));
             }
             if !langs_yes.is_empty() {
@@ -1669,7 +1739,7 @@ impl Platform {
                     ret.0 += " OR "
                 }
                 if s != "%" {
-                    ret.0 += &(" ( wbx_text LIKE ?".to_owned());
+                    ret.0 += " ( wbx_text LIKE ?";
                     ret.1.push(MyValue::Bytes(s.to_owned().into()));
                 }
                 if !langs_any.is_empty() {
@@ -1698,7 +1768,7 @@ impl Platform {
                 AND wbt_item_terms1.wbit_item_id=wbt_item_terms2.wbit_item_id 
                 AND wbt_type2.wby_name='item'";
             if s != "%" {
-                ret.0 += &(" AND wbt_text2.wbx_text LIKE ?".to_owned());
+                ret.0 += " AND wbt_text2.wbx_text LIKE ?";
                 ret.1.push(MyValue::Bytes(s.to_owned().into()));
             }
             if !langs_no.is_empty() {
@@ -1735,7 +1805,7 @@ impl Platform {
             return Combination::None;
         }
 
-        let first_part = match parts.get(0) {
+        let first_part = match parts.first() {
             Some(part) => part.to_owned(),
             None => String::new(),
         };
@@ -1821,20 +1891,17 @@ impl Platform {
     }
 
     fn serialize_combine_results(
-        &self,
         combination: &Combination,
-    ) -> Result<Vec<CombinationSequential>,String> {
+    ) -> Result<Vec<CombinationSequential>, String> {
         match combination {
-            Combination::Source(s) => {
-                Ok(vec![CombinationSequential::Source(s.to_string())])
-            },
+            Combination::Source(s) => Ok(vec![CombinationSequential::Source(s.to_string())]),
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, c) => self.serialize_combine_results(c),
-                (c, Combination::None) => self.serialize_combine_results(c),
+                (Combination::None, c) => Self::serialize_combine_results(c),
+                (c, Combination::None) => Self::serialize_combine_results(c),
                 (c, d) => {
-                    let mut ret = vec![] ;
-                    ret.append(&mut self.serialize_combine_results(c)?);
-                    ret.append(&mut self.serialize_combine_results(d)?);
+                    let mut ret = vec![];
+                    ret.append(&mut Self::serialize_combine_results(c)?);
+                    ret.append(&mut Self::serialize_combine_results(d)?);
                     ret.push(CombinationSequential::Union);
                     Ok(ret)
                 }
@@ -1847,20 +1914,20 @@ impl Platform {
                     Err("Intersection with Combination::None found".to_string())
                 }
                 (c, d) => {
-                    let mut ret = vec![] ;
-                    ret.append(&mut self.serialize_combine_results(c)?);
-                    ret.append(&mut self.serialize_combine_results(d)?);
+                    let mut ret = vec![];
+                    ret.append(&mut Self::serialize_combine_results(c)?);
+                    ret.append(&mut Self::serialize_combine_results(d)?);
                     ret.push(CombinationSequential::Intersection);
                     Ok(ret)
                 }
             },
             Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
                 (Combination::None, _c) => Err("Not with Combination::None found".to_string()),
-                (c, Combination::None) => self.serialize_combine_results(c),
+                (c, Combination::None) => Self::serialize_combine_results(c),
                 (c, d) => {
-                    let mut ret = vec![] ;
-                    ret.append(&mut self.serialize_combine_results(c)?);
-                    ret.append(&mut self.serialize_combine_results(d)?);
+                    let mut ret = vec![];
+                    ret.append(&mut Self::serialize_combine_results(c)?);
+                    ret.append(&mut Self::serialize_combine_results(d)?);
                     ret.push(CombinationSequential::Not);
                     Ok(ret)
                 }
@@ -1874,48 +1941,60 @@ impl Platform {
         results: &mut HashMap<String, PageList>,
         combination: Vec<CombinationSequential>,
     ) -> Result<PageList, String> {
-        let mut registers : Vec<PageList> = vec![] ;
+        let mut registers: Vec<PageList> = vec![];
         for command in combination {
             match command {
-                CombinationSequential::Source(source_key) => {
-                    match results.remove(&source_key) {
-                        Some(source) => {
-                            registers.push ( source ) ;
-                        },
-                        None => return Err(format!("No result for source {}", &source_key)),
+                CombinationSequential::Source(source_key) => match results.remove(&source_key) {
+                    Some(source) => {
+                        registers.push(source);
                     }
-                }
+                    None => return Err(format!("No result for source {}", &source_key)),
+                },
                 CombinationSequential::Union => {
                     if registers.len() < 2 {
                         return Err("combine_results: Not enough registers for Union".to_string());
                     }
-                    let r2 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Union r1".to_string())? ;
-                    let r1 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Union r2".to_string())? ;
-                    r1.union(&r2, Some(&self)).await?;
+                    let r2 = registers.pop().ok_or_else(|| {
+                        "combine_results: CombinationSequential::Union r1".to_string()
+                    })?;
+                    let r1 = registers.pop().ok_or_else(|| {
+                        "combine_results: CombinationSequential::Union r2".to_string()
+                    })?;
+                    r1.union(&r2, Some(self)).await?;
                     registers.push(r1)
                 }
                 CombinationSequential::Intersection => {
                     if registers.len() < 2 {
                         return Err("combine_results: Not enough registers for Union".to_string());
                     }
-                    let r2 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Intersection r1".to_string())? ;
-                    let r1 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Intersection r2".to_string())? ;
-                    r1.intersection(&r2, Some(&self)).await?;
+                    let r2 = registers.pop().ok_or_else(|| {
+                        "combine_results: CombinationSequential::Intersection r1".to_string()
+                    })?;
+                    let r1 = registers.pop().ok_or_else(|| {
+                        "combine_results: CombinationSequential::Intersection r2".to_string()
+                    })?;
+                    r1.intersection(&r2, Some(self)).await?;
                     registers.push(r1)
                 }
                 CombinationSequential::Not => {
                     if registers.len() < 2 {
                         return Err("combine_results: Not enough registers for Union".to_string());
                     }
-                    let r2 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Not r1".to_string())? ;
-                    let r1 = registers.pop().ok_or_else(|| "combine_results: CombinationSequential::Not r2".to_string())? ;
-                    r1.difference(&r2, Some(&self)).await?;
+                    let r2 = registers.pop().ok_or_else(|| {
+                        "combine_results: CombinationSequential::Not r1".to_string()
+                    })?;
+                    let r1 = registers.pop().ok_or_else(|| {
+                        "combine_results: CombinationSequential::Not r2".to_string()
+                    })?;
+                    r1.difference(&r2, Some(self)).await?;
                     registers.push(r1)
                 }
             }
         }
         if registers.len() == 1 {
-            return registers.pop().ok_or_else(|| "combine_results registers.len()".to_string()) ;
+            return registers
+                .pop()
+                .ok_or_else(|| "combine_results registers.len()".to_string());
         }
         Err(format!("combine_results:{} registers set", registers.len()))
     }
@@ -1952,12 +2031,12 @@ mod tests {
 
     async fn get_state() -> Arc<AppState> {
         get_new_state().await // TODO use static
-        /*
-        lazy_static! {
-            static ref STATE: Arc<AppState> = get_new_state();
-        }
-        STATE.clone()
-        */
+                              /*
+                              lazy_static! {
+                                  static ref STATE: Arc<AppState> = get_new_state();
+                              }
+                              STATE.clone()
+                              */
     }
 
     async fn run_psid_ext(psid: usize, addendum: &str) -> Result<Platform, String> {
@@ -1978,7 +2057,12 @@ mod tests {
         run_psid_ext(psid, "").await.unwrap()
     }
 
-    async fn check_results_for_psid_ext(psid: usize, addendum: &str, wiki: &str, expected: Vec<Title>) {
+    async fn check_results_for_psid_ext(
+        psid: usize,
+        addendum: &str,
+        wiki: &str,
+        expected: Vec<Title>,
+    ) {
         let mut platform = run_psid_ext(psid, addendum).await.unwrap();
         let s1 = platform.get_param_blank("sortby");
         let s2 = platform.get_param_blank("sortorder");
@@ -1989,10 +2073,7 @@ mod tests {
 
         // Sort/crop results
         let mut entries = result
-            .drain_into_sorted_vec(PageListSort::new_from_params(
-                &s1,
-                s2 == "descending",
-            ))
+            .drain_into_sorted_vec(PageListSort::new_from_params(&s1, s2 == "descending"))
             .unwrap();
         platform.result = Some(result);
         platform.apply_results_limit(&mut entries);
@@ -2059,7 +2140,8 @@ mod tests {
             10225056,
             "wikidatawiki",
             vec![Title::new("Q13520818", 0), Title::new("Q10995651", 0)],
-        ).await;
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -2185,7 +2267,8 @@ mod tests {
             "&regexp_filter=.*Manske",
             "wikidatawiki",
             vec![Title::new("Q13520818", 0)],
-        ).await;
+        )
+        .await;
 
         // New parameter
         check_results_for_psid_ext(
@@ -2193,7 +2276,8 @@ mod tests {
             "&rxp_filter=.*Manske",
             "wikidatawiki",
             vec![Title::new("Q13520818", 0)],
-        ).await;
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -2203,25 +2287,29 @@ mod tests {
             "&rxp_filter=.*Manske",
             "wikidatawiki",
             vec![Title::new("Q13520818", 0)],
-        ).await;
+        )
+        .await;
         check_results_for_psid_ext(
             10140344,
             "&rxp_filter=Graaf.*",
             "wikidatawiki",
             vec![Title::new("Q12345", 0)],
-        ).await;
+        )
+        .await;
         check_results_for_psid_ext(
             10140616,
             "&rxp_filter=&rxp_filter=Jimbo.*",
             "enwiki",
             vec![Title::new("Jimbo Wales", 0)],
-        ).await;
+        )
+        .await;
         check_results_for_psid_ext(
             10140616,
             "&rxp_filter=&rxp_filter=.*Sanger",
             "enwiki",
             vec![Title::new("Larry Sanger", 0)],
-        ).await;
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -2263,7 +2351,8 @@ mod tests {
         check_results_for_psid(
             18604332,
             "enwiki",
-            vec![Title::new("Earth", 0),Title::new("Ayn Rand", 0)],
-        ).await;
+            vec![Title::new("Earth", 0), Title::new("Ayn Rand", 0)],
+        )
+        .await;
     }
 }

@@ -1,8 +1,8 @@
-use async_trait::async_trait;
 use crate::app_state::AppState;
 use crate::form_parameters::FormParameters;
 use crate::pagelist_entry::{LinkCount, PageListEntry};
 use crate::platform::*;
+use async_trait::async_trait;
 use chrono::prelude::*;
 use htmlescape::encode_minimal;
 use serde_json::Value;
@@ -57,7 +57,8 @@ impl RenderParams {
             thumbnails_in_wiki_output: platform.has_param("thumbnails_in_wiki_output"),
             wdi: platform.get_param_default("wikidata_item", "no"),
             add_coordinates: platform.has_param("add_coordinates"),
-            add_image: platform.has_param("add_image")||platform.get_param_blank("format")=="kml",
+            add_image: platform.has_param("add_image")
+                || platform.get_param_blank("format") == "kml",
             add_defaultsort: platform.has_param("add_defaultsort"),
             add_disambiguation: platform.has_param("add_disambiguation"),
             add_incoming_links: platform.get_param_blank("sortby") == "incoming_links",
@@ -156,7 +157,7 @@ pub trait Render {
 
     fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
     fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
-    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String;
+    fn render_user_name(&self, _user: &str, _params: &RenderParams) -> String;
     fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String;
     fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
     fn render_cell_checkbox(
@@ -172,7 +173,13 @@ pub trait Render {
             Some(fi) => {
                 let mut rows: Vec<String> = vec![];
                 for fu in &fi.file_usage {
-                    let txt = format!("{}:{}:{}:{}",fu.wiki(),fu.title().namespace_id(),fu.namespace_name(),fu.title().pretty());
+                    let txt = format!(
+                        "{}:{}:{}:{}",
+                        fu.wiki(),
+                        fu.title().namespace_id(),
+                        fu.namespace_name(),
+                        fu.title().pretty()
+                    );
                     rows.push(txt);
                 }
                 rows.join("|")
@@ -188,15 +195,15 @@ pub trait Render {
     }
 
     fn opt_usize(&self, o: &Option<usize>) -> String {
-        o.map(|x| x.to_string()).unwrap_or_else(String::new)
+        o.map(|x| x.to_string()).unwrap_or_default()
     }
 
     fn opt_u32(&self, o: &Option<u32>) -> String {
-        o.map(|x| x.to_string()).unwrap_or_else(String::new)
+        o.map(|x| x.to_string()).unwrap_or_default()
     }
 
     fn opt_linkcount(&self, o: &Option<LinkCount>) -> String {
-        o.map(|x| x.to_string()).unwrap_or_else(String::new)
+        o.map(|x| x.to_string()).unwrap_or_default()
     }
 
     fn opt_bool(&self, o: &Option<bool>) -> String {
@@ -214,7 +221,7 @@ pub trait Render {
     }
 
     fn opt_string(&self, o: &Option<String>) -> String {
-        o.as_ref().map(|x| x.to_string()).unwrap_or_else(String::new)
+        o.as_ref().map(|x| x.to_string()).unwrap_or_default()
     }
 
     fn row_from_entry(
@@ -265,7 +272,7 @@ pub trait Render {
                     None => String::new(),
                 },
                 "img_user_text" => match &entry.get_file_info() {
-                    Some(fi) => self.render_user_name(&self.opt_string(&fi.img_user_text), &params),
+                    Some(fi) => self.render_user_name(&self.opt_string(&fi.img_user_text), params),
                     None => String::new(),
                 },
                 "img_timestamp" => match &entry.get_file_info() {
@@ -287,7 +294,7 @@ pub trait Render {
                     None => String::new(),
                 },
                 "coordinates" => self.render_coordinates(entry, params),
-                "fileusage" => self.render_cell_fileusage(&entry, &params),
+                "fileusage" => self.render_cell_fileusage(entry, params),
 
                 _ => "<".to_string() + k + ">",
             };
@@ -366,7 +373,7 @@ impl Render for RenderWiki {
         for entry in entries {
             params.row_number += 1;
             rows.push("|-".to_string());
-            let row = self.row_from_entry(&entry, &header, &params, &platform);
+            let row = self.row_from_entry(&entry, &header, &params, platform);
             let row = "| ".to_string() + &row.join(" || ");
             rows.push(row);
         }
@@ -380,38 +387,38 @@ impl Render for RenderWiki {
     }
 
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
-        if entry.title().namespace_id() == 6  {
+        if entry.title().namespace_id() == 6 {
             if params.thumbnails_in_wiki_output {
                 match entry.title().full_pretty(&params.api) {
-                    Some(file) => format!("[[{}|120px|]]",&file),
-                    None => format!("[[File:{}|120px|]]",entry.title().pretty()),
+                    Some(file) => format!("[[{}|120px|]]", &file),
+                    None => format!("[[File:{}|120px|]]", entry.title().pretty()),
                 }
             } else {
                 match entry.title().full_pretty(&params.api) {
-                    Some(file) => format!("[[:{}|]]",&file),
-                    None => format!("[[:File:{}|]]",entry.title().pretty()),
+                    Some(file) => format!("[[:{}|]]", &file),
+                    None => format!("[[:File:{}|]]", entry.title().pretty()),
                 }
             }
         } else {
-            self.render_wikilink(&entry, &params)
+            self.render_wikilink(entry, params)
         }
     }
 
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
         match entry.get_wikidata_item() {
-            Some(q) => format!("[[:d:{}|]]",q),
+            Some(q) => format!("[[:d:{}|]]", q),
             None => String::new(),
         }
     }
 
-    fn render_user_name(&self, user: &String, _params: &RenderParams) -> String {
-        format!("[[User:{}|]]",user)
+    fn render_user_name(&self, user: &str, _params: &RenderParams) -> String {
+        format!("[[User:{user}|]]")
     }
 
     fn render_cell_image(&self, image: &Option<String>, _params: &RenderParams) -> String {
         match image {
-            Some(img) => format!("[[File:{}|120px|]]",img),
-            None => String::new()
+            Some(img) => format!("[[File:{}|120px|]]", img),
+            None => String::new(),
         }
     }
 
@@ -428,8 +435,8 @@ impl RenderWiki {
     fn render_wikilink(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         if params.is_wikidata {
             match &entry.get_wikidata_label() {
-                Some(label) => format!("[[{}|{}]]", &entry.title().pretty(),label),
-                None => format!("[[{}]]",entry.title().pretty())
+                Some(label) => format!("[[{}|{}]]", &entry.title().pretty(), label),
+                None => format!("[[{}]]", entry.title().pretty()),
             }
         } else {
             let mut ret = "[[".to_string();
@@ -501,7 +508,7 @@ impl Render for RenderTSV {
 
         for entry in entries {
             params.row_number += 1;
-            let row = self.row_from_entry(&entry, &header, &params, &platform);
+            let row = self.row_from_entry(&entry, &header, &params, platform);
             let row: Vec<String> = row.iter().map(|s| self.escape_cell(s)).collect();
             let row = row.join(&self.separator);
             rows.push(row);
@@ -528,7 +535,7 @@ impl Render for RenderTSV {
         }
     }
 
-    fn render_user_name(&self, user: &String, _params: &RenderParams) -> String {
+    fn render_user_name(&self, user: &str, _params: &RenderParams) -> String {
         user.to_string()
     }
 
@@ -543,7 +550,7 @@ impl Render for RenderTSV {
         entry
             .title()
             .namespace_name(&params.api)
-            .unwrap_or(&"UNKNOWN_NAMESPACE".to_string())
+            .unwrap_or("UNKNOWN_NAMESPACE")
             .to_string()
     }
 }
@@ -557,9 +564,9 @@ impl RenderTSV {
 
     fn escape_cell(&self, s: &str) -> String {
         if self.separator == "," {
-            format!("\"{}\"",s.replace("\"", "\\\""))
+            format!("\"{}\"", s.replace('\"', "\\\""))
         } else {
-            s.replace("\t", " ")
+            s.replace('\t', " ")
         }
     }
 }
@@ -656,7 +663,7 @@ impl Render for RenderHTML {
         entries.drain(..).for_each(|entry| {
             if params.row_number < MAX_HTML_RESULTS {
                 params.row_number += 1;
-                let row = self.row_from_entry(&entry, &header, &params, &platform);
+                let row = self.row_from_entry(&entry, &header, &params, platform);
                 let row = self.render_html_row(&row, &header);
                 output += &row;
             }
@@ -699,7 +706,7 @@ impl Render for RenderHTML {
 
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         self.render_wikilink(
-            &entry.title(),
+            entry.title(),
             &params.wiki,
             &entry.get_wikidata_label(),
             params,
@@ -712,7 +719,7 @@ impl Render for RenderHTML {
         match entry.get_wikidata_item() {
             Some(q) => self.render_wikilink(
                 &Title::new(&q, 0),
-                &"wikidatawiki".to_string(),
+                "wikidatawiki",
                 &None,
                 params,
                 false,
@@ -722,7 +729,7 @@ impl Render for RenderHTML {
             None => String::new(),
         }
     }
-    fn render_user_name(&self, user: &String, params: &RenderParams) -> String {
+    fn render_user_name(&self, user: &str, params: &RenderParams) -> String {
         let title = Title::new(user, 2);
         self.render_wikilink(&title, &params.wiki, &None, params, false, &None, false)
     }
@@ -821,7 +828,8 @@ impl Render for RenderHTML {
         let mut q = String::new();
         let checked: &str;
         if params.autolist_creator_mode {
-            if platform.label_exists(&entry.title().pretty().to_string()) || entry.title().pretty().contains('(') {
+            if platform.label_exists(entry.title().pretty()) || entry.title().pretty().contains('(')
+            {
                 checked = "";
             } else {
                 checked = "checked";
@@ -864,9 +872,10 @@ impl RenderHTML {
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('"', "&quot;")
-            .replace("'", "&#39;")
+            .replace('\'', "&#39;")
     }
 
+    /* trunk-ignore(clippy/too_many_arguments) */
     fn render_wikilink(
         &self,
         title: &Title,
@@ -961,7 +970,9 @@ impl RenderHTML {
                 "timestamp" => "<th class='text-nowrap' tt='h_touched'></th>".to_string(),
                 "wikidata_item" => "<th tt='h_wikidata'></th>".to_string(),
                 "coordinates" => "<th tt='h_coordinates'></th>".to_string(),
-                "defaultsort" => "<th tt='h_defaultsort' style='white-space: nowrap;'></th>".to_string(),
+                "defaultsort" => {
+                    "<th tt='h_defaultsort' style='white-space: nowrap;'></th>".to_string()
+                }
                 "disambiguation" => "<th tt='h_disambiguation'></th>".to_string(),
                 "incoming_links" => "<th tt='h_incoming_links'></th>".to_string(),
                 "sitelinks" => "<th tt='h_sitelinks'></th>".to_string(),
@@ -975,7 +986,7 @@ impl RenderHTML {
                     }
                 }
             };
-            ret += &(&x.to_owned()).to_string();
+            ret += &x.to_string();
         }
         ret += "</tr></thead>";
         ret
@@ -1074,7 +1085,7 @@ impl Render for RenderJSON {
     fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
         "N/A".to_string()
     }
-    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String {
+    fn render_user_name(&self, _user: &str, _params: &RenderParams) -> String {
         "N/A".to_string()
     }
     fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
@@ -1119,14 +1130,14 @@ impl RenderJSON {
                     "id":entry.page_id.unwrap_or(0),
                     "namespace":entry.title().namespace_id(),
                     "len":entry.page_bytes.unwrap_or(0),
-                    "touched":entry.get_page_timestamp().unwrap_or_else(String::new),
+                    "touched":entry.get_page_timestamp().unwrap_or_default(),
                     "nstext":params.api.get_canonical_namespace_name(entry.title().namespace_id()).unwrap_or("")
                 });
                 if let Some(q) = entry.get_wikidata_item() {
                     o["q"] = json!(q);
                     o["metadata"]["wikidata"] = json!(q);
                 }
-                self.add_metadata(&mut o, &entry, header);
+                self.add_metadata(&mut o, entry, header);
                 if params.file_data {
                     match &o["metadata"].get("fileusage") {
                         Some(_) => o["gil"] = o["metadata"]["fileusage"].to_owned(),
@@ -1172,7 +1183,9 @@ impl RenderJSON {
         // Namespaces
         if let Some(namespaces) = params.api.get_site_info()["query"]["namespaces"].as_object() {
             for (k, v) in namespaces {
-                if let Some(ns_local_name) = v["*"].as_str() { ret["namespaces"][k] = json!(ns_local_name) }
+                if let Some(ns_local_name) = v["*"].as_str() {
+                    ret["namespaces"][k] = json!(ns_local_name)
+                }
             }
         }
 
@@ -1190,14 +1203,16 @@ impl RenderJSON {
                         "page_id" : entry.page_id.unwrap_or(0),
                         "page_namespace" : entry.title().namespace_id(),
                         "page_title" : entry.title().with_underscores(),
-                        "page_latest" : entry.get_page_timestamp().unwrap_or_else(String::new),
+                        "page_latest" : entry.get_page_timestamp().unwrap_or_default(),
                         "page_len" : entry.page_bytes.unwrap_or(0),
                         //"meta" : {}
                     });
                     if params.giu || params.file_usage {
-                        if let Some(fu) = self.get_file_usage(&entry) { o["giu"] = fu }
+                        if let Some(fu) = self.get_file_usage(entry) {
+                            o["giu"] = fu
+                        }
                     }
-                    self.add_metadata(&mut o, &entry, header);
+                    self.add_metadata(&mut o, entry, header);
                     o
                 })
                 .collect();
@@ -1283,14 +1298,16 @@ impl RenderJSON {
                 "disambiguation" => Some(entry.disambiguation.as_json()),
                 "incoming_links" => entry.incoming_links.as_ref().map(|s| json!(s)),
                 "sitelinks" => entry.sitelink_count.as_ref().map(|s| json!(s)),
-                "coordinates" => match &entry.get_coordinates() {
-                    Some(coord) => Some(json!(format!("{}/{}", coord.lat, coord.lon))),
-                    None => None,
-                },
+                "coordinates" => entry
+                    .get_coordinates()
+                    .as_ref()
+                    .map(|coord| json!(format!("{}/{}", coord.lat, coord.lon))),
                 "fileusage" => self.get_file_usage_as_string(entry),
                 other => self.get_file_info_value(entry, other),
             };
-            if let Some(v) = value { o["metadata"][head] = v }
+            if let Some(v) = value {
+                o["metadata"][head] = v
+            }
         });
     }
 }
@@ -1316,7 +1333,7 @@ impl Render for RenderPagePile {
             .collect::<Vec<String>>()
             .join("\n");
         let mut params: HashMap<String, String> =
-            vec![("action", "create_pile_with_data"), ("wiki", wiki)]
+            [("action", "create_pile_with_data"), ("wiki", wiki)]
                 .iter()
                 .map(|x| (x.0.to_string(), x.1.to_string()))
                 .collect();
@@ -1361,7 +1378,7 @@ impl Render for RenderPagePile {
     fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
         String::new()
     }
-    fn render_user_name(&self, _user: &String, _params: &RenderParams) -> String {
+    fn render_user_name(&self, _user: &str, _params: &RenderParams) -> String {
         String::new()
     }
     fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
@@ -1377,7 +1394,6 @@ impl RenderPagePile {
         Box::new(Self {})
     }
 }
-
 
 //________________________________________________________________________________________________________________________
 
@@ -1399,7 +1415,7 @@ impl Render for RenderKML {
         };
         let mut kml = String::new();
         kml += r#"<?xml version="1.0" encoding="UTF-8"?>
-        <kml xmlns="http://www.opengis.net/kml/2.2"><Document>"# ;
+        <kml xmlns="http://www.opengis.net/kml/2.2"><Document>"#;
 
         for entry in entries {
             if let Some(coords) = &entry.get_coordinates() {
@@ -1407,28 +1423,37 @@ impl Render for RenderKML {
                 let label = if let "wikidatawiki" = wiki {
                     match entry.get_wikidata_label() {
                         Some(s) => s,
-                        None => title.pretty().to_string()
+                        None => title.pretty().to_string(),
                     }
                 } else {
                     title.pretty().to_string()
-                } ;
-                kml += r#"<Placemark>"# ;
-                kml += format!("<name>{}</name>",self.escape_xml(&label)).as_str() ;
+                };
+                kml += r#"<Placemark>"#;
+                kml += format!("<name>{}</name>", self.escape_xml(&label)).as_str();
                 if let Some(desc) = entry.get_wikidata_description() {
-                    kml += format!("<description>{}</description>",self.escape_xml(&desc)).as_str() ;
+                    kml +=
+                        format!("<description>{}</description>", self.escape_xml(&desc)).as_str();
                 }
 
                 kml += "<ExtendedData>";
                 if let Some(q) = entry.get_wikidata_item() {
-                    kml += format!("<Data name=\"q\"><value>{}</value></Data>",self.escape_xml(&q)).as_str() ;
+                    kml += format!(
+                        "<Data name=\"q\"><value>{}</value></Data>",
+                        self.escape_xml(&q)
+                    )
+                    .as_str();
                 }
 
                 let full_title = match title.full_with_underscores(&params.api) {
                     Some(ft) => ft,
                     None => format!("{:?}", title),
                 };
-                let url = format!("{}/wiki/{}",&server,&self.escape_attribute(&full_title));
-                kml += format!("<Data name=\"url\"><value>{}</value></Data>",self.escape_xml(&url)).as_str();
+                let url = format!("{}/wiki/{}", &server, &self.escape_attribute(&full_title));
+                kml += format!(
+                    "<Data name=\"url\"><value>{}</value></Data>",
+                    self.escape_xml(&url)
+                )
+                .as_str();
 
                 if let Some(img) = entry.get_page_image() {
                     let file = self.escape_attribute(&img);
@@ -1436,17 +1461,25 @@ impl Render for RenderKML {
                         "{}/wiki/Special:Redirect/file/{}?width={}",
                         &server, &file, 120
                     );
-                    kml += format!("<Data name=\"image\"><value>{}</value></Data>",self.escape_xml(&src)).as_str();
+                    kml += format!(
+                        "<Data name=\"image\"><value>{}</value></Data>",
+                        self.escape_xml(&src)
+                    )
+                    .as_str();
                 }
 
                 kml += "</ExtendedData>";
 
-                kml += format!("<Point><coordinates>{}, {}, 0.</coordinates></Point>",coords.lon,coords.lat).as_str();
-                kml += r#"</Placemark>"# ;
+                kml += format!(
+                    "<Point><coordinates>{}, {}, 0.</coordinates></Point>",
+                    coords.lon, coords.lat
+                )
+                .as_str();
+                kml += r#"</Placemark>"#;
             }
         }
 
-        kml += r#"</Document></kml>"# ;
+        kml += r#"</Document></kml>"#;
 
         Ok(MyResponse {
             s: kml,
@@ -1460,19 +1493,19 @@ impl Render for RenderKML {
 
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
         match entry.get_wikidata_item() {
-            Some(q) => format!("[[:d:{}|]]",q),
+            Some(q) => format!("[[:d:{}|]]", q),
             None => String::new(),
         }
     }
 
-    fn render_user_name(&self, user: &String, _params: &RenderParams) -> String {
-        format!("[[User:{}|]]",user)
+    fn render_user_name(&self, user: &str, _params: &RenderParams) -> String {
+        format!("[[User:{user}|]]")
     }
 
     fn render_cell_image(&self, image: &Option<String>, _params: &RenderParams) -> String {
         match image {
-            Some(img) => format!("[[File:{}|120px|]]",img),
-            None => String::new()
+            Some(img) => format!("[[File:{}|120px|]]", img),
+            None => String::new(),
         }
     }
 
@@ -1486,13 +1519,12 @@ impl RenderKML {
         Box::new(Self {})
     }
 
-    fn escape_xml(&self, s:&str) -> String{
-        s
-            .replace("<","&lt;")
-            .replace(">","&gt;")
-            .replace('"',"&quot;")
-            .replace("'","&apos;")
-            .replace("&","&amp;")
+    fn escape_xml(&self, s: &str) -> String {
+        s.replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
+            .replace('&', "&amp;")
     }
 
     fn escape_attribute(&self, s: &str) -> String {
@@ -1500,10 +1532,9 @@ impl RenderKML {
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('"', "&quot;")
-            .replace("'", "&#39;")
+            .replace('\'', "&#39;")
     }
 }
-
 
 //________________________________________________________________________________________________________________________
 
@@ -1521,7 +1552,7 @@ impl Render for RenderPlainText {
         let params = RenderParams::new(platform, wiki).await?;
         let output = entries
             .iter()
-            .filter_map(|entry|entry.title().full_pretty(&params.api))
+            .filter_map(|entry| entry.title().full_pretty(&params.api))
             .collect::<Vec<String>>()
             .join("\n");
         Ok(MyResponse {
@@ -1536,19 +1567,19 @@ impl Render for RenderPlainText {
 
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
         match entry.get_wikidata_item() {
-            Some(q) => format!("[[:d:{}|]]",q),
+            Some(q) => format!("[[:d:{}|]]", q),
             None => String::new(),
         }
     }
 
-    fn render_user_name(&self, user: &String, _params: &RenderParams) -> String {
-        format!("[[User:{}|]]",user)
+    fn render_user_name(&self, user: &str, _params: &RenderParams) -> String {
+        format!("[[User:{user}|]]")
     }
 
     fn render_cell_image(&self, image: &Option<String>, _params: &RenderParams) -> String {
         match image {
-            Some(img) => format!("[[File:{}|120px|]]",img),
-            None => String::new()
+            Some(img) => format!("[[File:{}|120px|]]", img),
+            None => String::new(),
         }
     }
 
