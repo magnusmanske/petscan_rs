@@ -22,7 +22,7 @@ time = "^0.3"
 percent-encoding = "*"
 async-trait = "*"
 wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
-tokio = { version = "^1", features = ["macros","fs","sync"] }
+tokio = { version = "^1", features = ["macros", "fs", "sync"] }
 tokio-util = "*"
 hyper = { version = "^1", features = ["full"] }
 http-body-util = "0.1"
@@ -36,4 +36,4 @@ lto = "fat"
 codegen-units = 1
 #target-cpu = "native"
 panic = "abort"
-strip = "debuginfo"
+#strip = "debuginfo"
