@@ -9,7 +9,7 @@ $seconds = 30 ;
 function restart_petscan () {
 	$cmd = 'sudo killall petscan_rs' ;
 	exec ( $cmd ) ;
-	print "Restarted PetScan\n" ;
+	print_r("Restarted PetScan\n");
 }
 
 while ( 1 ) {
