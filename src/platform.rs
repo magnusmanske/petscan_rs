@@ -1,12 +1,26 @@
 use crate::app_state::AppState;
 use crate::datasource::*;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
+use crate::datasource_labels::SourceLabels;
+use crate::datasource_manual::SourceManual;
+use crate::datasource_pagepile::SourcePagePile;
+use crate::datasource_search::SourceSearch;
+use crate::datasource_sitelinks::SourceSitelinks;
+use crate::datasource_sparql::SourceSparql;
+use crate::datasource_wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
 use crate::pagelist_entry::{
     FileInfo, LinkCount, PageCoordinates, PageListEntry, PageListSort, TriState,
 };
 use crate::render::*;
+use crate::render_html::RenderHTML;
+use crate::render_json::RenderJSON;
+use crate::render_kml::RenderKML;
+use crate::render_pagepile::RenderPagePile;
+use crate::render_plaintext::RenderPlainText;
+use crate::render_tsv::RenderTSV;
+use crate::render_wikitext::RenderWiki;
 use crate::wdfist::*;
 use futures::future::join_all;
 use mysql_async as my;
@@ -485,6 +499,7 @@ impl Platform {
                 for element in sql_batch.1.iter_mut() {
                     *element = match element {
                         MyValue::Bytes(x) => {
+                            let x = &x;
                             let u2s = Title::underscores_to_spaces(&String::from_utf8_lossy(x)) ;
                             MyValue::Bytes(u2s.into())
                         }

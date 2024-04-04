@@ -760,7 +760,7 @@ impl SourceDatabase {
         let mut after: String = self.params.after.clone();
         let mut is_before_after_done: bool = false;
         if let Some(max_age) = self.params.max_age {
-            let utc = Utc::now().sub(Duration::hours(max_age));
+            let utc = Utc::now().sub(Duration::try_hours(max_age).unwrap_or_default());
             before = String::new();
             after = utc.format("%Y%m%d%H%M%S").to_string();
         }

@@ -95,16 +95,6 @@ impl FormParameters {
         self.ns = Self::ns_from_params(&self.params);
     }
 
-    /*
-    pub fn to_string(&self) -> String {
-        self.params
-            .iter()
-            .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
-            .collect::<Vec<String>>()
-            .join("&")
-    }
-    */
-
     pub fn to_string_no_doit(&self) -> String {
         self.params
             .iter()
@@ -148,6 +138,7 @@ impl FormParameters {
         }
     }
 
+    /// Legacy parameter support
     fn legacy_parameters(&mut self) {
         self.fallback("language", "lang");
         self.fallback("categories", "cats");
@@ -198,5 +189,158 @@ impl FormParameters {
         if self.has_param("wikidata_no_item") {
             self.set_param("wikidata_item", "without");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_legacy_parameters() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("manual_list_wiki", "enwiki");
+        form_params.legacy_parameters();
+        assert_eq!(
+            form_params.params.get("common_wiki_other"),
+            Some(&"enwiki".to_string())
+        );
+        assert_eq!(
+            form_params.params.get("manual_list_wiki"),
+            Some(&"".to_string())
+        );
+    }
+
+    #[test]
+    fn test_has_param_with_value() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("test", "value");
+        assert_eq!(form_params.has_param_with_value("test"), true);
+        assert_eq!(form_params.has_param_with_value("test2"), false);
+    }
+
+    #[test]
+    fn test_to_string_no_doit() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("test", "value");
+        form_params.set_param("doit", "1");
+        assert_eq!(form_params.to_string_no_doit(), "test=value".to_string());
+    }
+
+    #[test]
+    fn test_rebase() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("test", "value");
+        let mut form_params2 = FormParameters::new();
+        form_params2.set_param("test2", "value2");
+        form_params2.rebase(&form_params);
+        assert_eq!(form_params2.params.get("test"), Some(&"value".to_string()));
+        assert_eq!(
+            form_params2.params.get("test2"),
+            Some(&"value2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_outcome_from_query() {
+        let form_params = FormParameters::outcome_from_query("test=value&test2=value2");
+        assert_eq!(form_params.is_ok(), true);
+        let form_params = form_params.unwrap();
+        assert_eq!(form_params.params.get("test"), Some(&"value".to_string()));
+        assert_eq!(form_params.params.get("test2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_has_param() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("test", "value");
+        assert_eq!(form_params.has_param("test"), true);
+        assert_eq!(form_params.has_param("test2"), false);
+    }
+
+    #[test]
+    fn test_set_param() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("test", "value");
+        assert_eq!(form_params.params.get("test"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_ns_from_params() {
+        let mut params = HashMap::new();
+        params.insert("ns[0]".to_string(), "1".to_string());
+        params.insert("ns[1]".to_string(), "1".to_string());
+        params.insert("ns[2]".to_string(), "1".to_string());
+        let form_params = FormParameters::new_from_pairs(params);
+        assert_eq!(form_params.ns.contains(&0), true);
+        assert_eq!(form_params.ns.contains(&1), true);
+        assert_eq!(form_params.ns.contains(&2), true);
+    }
+
+    #[test]
+    fn test_percent_encode() {
+        assert_eq!(
+            FormParameters::percent_encode("test value"),
+            "test%20value".to_string()
+        );
+    }
+
+    #[test]
+    fn test_fallback() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("test", "value");
+        form_params.fallback("test2", "test");
+        assert_eq!(form_params.params.get("test2"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_new_from_pairs() {
+        let mut params = HashMap::new();
+        params.insert("test".to_string(), "value".to_string());
+        let form_params = FormParameters::new_from_pairs(params);
+        assert_eq!(form_params.params.get("test"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_new() {
+        let form_params = FormParameters::new();
+        assert_eq!(form_params.params.len(), 0);
+    }
+
+    #[test]
+    fn test_to_string() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("test", "value");
+        assert_eq!(form_params.to_string(), "test=value".to_string());
+    }
+
+    #[test]
+    fn test_rebase_empty() {
+        let mut form_params = FormParameters::new();
+        let form_params2 = FormParameters::new();
+        form_params.rebase(&form_params2);
+        assert_eq!(form_params.params.len(), 0);
+    }
+
+    #[test]
+    fn test_rebase_no_overwrite() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("test", "value");
+        let mut form_params2 = FormParameters::new();
+        form_params2.set_param("test", "value2");
+        form_params.rebase(&form_params2);
+        assert_eq!(form_params.params.get("test"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_rebase_overwrite() {
+        let mut form_params = FormParameters::new();
+        form_params.set_param("test", "value");
+        let mut form_params2 = FormParameters::new();
+        form_params2.set_param("test", "value2");
+        form_params2.set_param("test2", "value3");
+        form_params.rebase(&form_params2);
+        assert_eq!(form_params.params.get("test"), Some(&"value".to_string()));
+        assert_eq!(form_params.params.get("test2"), Some(&"value3".to_string()));
     }
 }
