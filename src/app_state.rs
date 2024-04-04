@@ -18,7 +18,7 @@ use wikibase::mediawiki::api::Api;
 
 pub type DbUserPass = (String, String);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AppState {
     db_pool: Arc<Mutex<Vec<DbUserPass>>>,
     config: Value,
