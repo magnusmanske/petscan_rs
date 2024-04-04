@@ -25,23 +25,7 @@ impl DataSource for SourcePagePile {
         let pagepile = platform
             .get_param("pagepile")
             .ok_or_else(|| "Missing parameter \'pagepile\'".to_string())?;
-        let timeout = time::Duration::from_secs(240);
-        let builder = reqwest::ClientBuilder::new().timeout(timeout);
-        let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
-            .await
-            .map_err(|e| e.to_string())?;
-        let params = api.params_into(&[
-            ("id", &pagepile.to_string()),
-            ("action", "get_data"),
-            ("format", "json"),
-            ("doit", "1"),
-        ]);
-        let text = api
-            .query_raw("https://tools.wmflabs.org/pagepile/api.php", &params, "GET")
-            .await
-            .map_err(|e| format!("PagePile: {:?}", e))?;
-        let v: Value =
-            serde_json::from_str(&text).map_err(|e| format!("PagePile JSON: {:?}", e))?;
+        let v = self.get_pagepile_json(&pagepile).await?;
         let wiki = v["wiki"]
             .as_str()
             .ok_or(format!("PagePile {} does not specify a wiki", &pagepile))?;
@@ -67,5 +51,26 @@ impl DataSource for SourcePagePile {
 impl SourcePagePile {
     pub fn new() -> Self {
         Self {}
+    }
+
+    async fn get_pagepile_json(&self, pagepile: &str) -> Result<Value, String> {
+        let timeout = time::Duration::from_secs(240);
+        let builder = reqwest::ClientBuilder::new().timeout(timeout);
+        let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
+            .await
+            .map_err(|e| e.to_string())?;
+        let params = api.params_into(&[
+            ("id", pagepile),
+            ("action", "get_data"),
+            ("format", "json"),
+            ("doit", "1"),
+        ]);
+        let text = api
+            .query_raw("https://tools.wmflabs.org/pagepile/api.php", &params, "GET")
+            .await
+            .map_err(|e| format!("PagePile: {:?}", e))?;
+        let v: Value =
+            serde_json::from_str(&text).map_err(|e| format!("PagePile JSON: {:?}", e))?;
+        Ok(v)
     }
 }

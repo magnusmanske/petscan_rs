@@ -19,6 +19,17 @@ impl DataSource for SourceWikidata {
     }
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+        let sql = self.generate_sql_query(platform)?;
+        self.run_sql_query(&sql, platform).await
+    }
+}
+
+impl SourceWikidata {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    fn generate_sql_query(&self, platform: &Platform) -> Result<String, String> {
         let no_statements = platform.has_param("wpiu_no_statements");
         let sites = platform
             .get_param("wikidata_source_sites")
@@ -40,14 +51,17 @@ impl DataSource for SourceWikidata {
         if no_statements {
             sql += " AND page_namespace=0 AND ips_item_id=substr(page_title,2)*1 AND page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0" ;
         }
+        Ok(sql)
+    }
 
+    async fn run_sql_query(&self, sql: &str, platform: &Platform) -> Result<PageList, String> {
         // Perform DB query
         let mut conn = platform
             .state()
             .get_wiki_db_connection("wikidatawiki")
             .await?;
         let rows = conn
-            .exec_iter(sql.as_str(), ())
+            .exec_iter(sql, ())
             .await
             .map_err(|e| format!("{:?}", e))?
             .map_and_drop(from_row::<usize>)
@@ -62,11 +76,5 @@ impl DataSource for SourceWikidata {
             }
         }
         Ok(ret)
-    }
-}
-
-impl SourceWikidata {
-    pub fn new() -> Self {
-        Self {}
     }
 }
