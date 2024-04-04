@@ -2154,7 +2154,11 @@ mod tests {
         check_results_for_psid(
             10225056,
             "wikidatawiki",
-            vec![Title::new("Q13520818", 0), Title::new("Q10995651", 0)],
+            vec![
+                Title::new("Q13520818", 0),
+                Title::new("Q10995651", 0),
+                Title::new("Q20084080", 0),
+            ],
         )
         .await;
     }
@@ -2207,7 +2211,7 @@ mod tests {
         assert!(entry.get_page_timestamp().is_some());
         assert_eq!(
             entry.get_page_image(),
-            Some("KingsCollegeChapelWest.jpg".to_string())
+            Some("Kings_College_(233225593).jpeg".to_string())
         );
         assert_eq!(entry.disambiguation, TriState::No);
         assert!(entry.incoming_links.is_some());
@@ -2327,10 +2331,11 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
-    async fn test_en_categories_sparql_common_wiki_other() {
-        check_results_for_psid(15960820, "frwiki", vec![Title::new("Magnus Manske", 0)]).await;
-    }
+    // Deactivated: connection to frwiki_p required
+    // #[tokio::test]
+    // async fn test_en_categories_sparql_common_wiki_other() {
+    //     check_results_for_psid(15960820, "frwiki", vec![Title::new("Magnus Manske", 0)]).await;
+    // }
 
     fn entries_from_result(result: PageList) -> Vec<PageListEntry> {
         result
@@ -2342,13 +2347,14 @@ mod tests {
             .collect::<Vec<PageListEntry>>()
     }
 
-    #[tokio::test]
-    async fn test_trim_extended_whitespace() {
-        let platform = run_psid(15015735).await; // The categories contain a left-to-right mark
-        let result = platform.result.unwrap();
-        let entries = entries_from_result(result);
-        assert!(entries.len() > 20);
-    }
+    // Deactivated: connection to enwikiquote_p required
+    // #[tokio::test]
+    // async fn test_trim_extended_whitespace() {
+    //     let platform = run_psid(15015735).await; // The categories contain a left-to-right mark
+    //     let result = platform.result.unwrap();
+    //     let entries = entries_from_result(result);
+    //     assert!(entries.len() > 20);
+    // }
 
     #[tokio::test]
     async fn test_template_talk_pages() {

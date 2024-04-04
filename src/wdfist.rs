@@ -174,48 +174,8 @@ impl WDfist {
         let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
         let wiki2title_q = self.get_language_links().await?;
         for (wiki, title_q) in wiki2title_q {
-            // Prepare batches
-            let page2q: HashMap<String, String> = title_q
-                .par_iter()
-                .map(|(title, q)| (title.to_string(), q.to_string()))
-                .collect();
-            let titles: Vec<String> = page2q
-                .par_iter()
-                .map(|(title, _q)| title.to_string())
-                .collect();
-            let mut batches: Vec<SQLtuple> = vec![];
-            titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-                let mut sql = Platform::prep_quote(chunk);
-                sql.0 = format!("SELECT DISTINCT gil_page_title AS page,gil_to AS image FROM page,globalimagelinks WHERE gil_wiki='{}' AND gil_page_title IN ({})",wiki,&sql.0) ;
-                sql.0 += " AND gil_page_namespace_id=0 AND page_namespace=6 and page_title=gil_to AND page_is_redirect=0" ;
-                sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks where page_id=cl_from and cl_to='Crop_for_Wikidata')" ; // To-be-cropped
-                batches.push(sql);
-            });
-
-            // Run batches
-            let rows = PageList::new_from_wiki("commonswiki")
-                .run_batch_queries(&self.state, batches)
-                .await
-                .map_err(|e| format!("{:?}", e))?;
-
-            // Collect pages and items, per wiki
-            let page_file: Vec<(String, String)> = rows
-                .par_iter()
-                .map(|row| my::from_row::<(String, String)>(row.to_owned()))
-                .collect();
-            let mut page_file = self
-                .filter_page_images(&wiki, page_file)
-                .await
-                .map_err(|e| format!("{:?}", e))?
-                .par_iter()
-                .filter_map(|(page, file)| {
-                    page2q.get(page).map(|q| (q.to_string(), file.to_string()))
-                })
-                .collect();
-            add_item_file
-                .lock()
-                .map_err(|e| format!("{:?}", e))?
-                .append(&mut page_file);
+            self.follow_language_links_wiki2title_q(title_q, wiki, &add_item_file)
+                .await?;
         }
 
         // Add files
@@ -225,6 +185,50 @@ impl WDfist {
             .iter()
             .for_each(|(q, file)| self.add_file_to_item(q, file));
 
+        Ok(())
+    }
+
+    async fn follow_language_links_wiki2title_q(
+        &mut self,
+        title_q: Vec<(String, String)>,
+        wiki: String,
+        add_item_file: &Mutex<Vec<(String, String)>>,
+    ) -> Result<(), String> {
+        let page2q: HashMap<String, String> = title_q
+            .par_iter()
+            .map(|(title, q)| (title.to_string(), q.to_string()))
+            .collect();
+        let titles: Vec<String> = page2q
+            .par_iter()
+            .map(|(title, _q)| title.to_string())
+            .collect();
+        let mut batches: Vec<SQLtuple> = vec![];
+        titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+            let mut sql = Platform::prep_quote(chunk);
+            sql.0 = format!("SELECT DISTINCT gil_page_title AS page,gil_to AS image FROM page,globalimagelinks WHERE gil_wiki='{}' AND gil_page_title IN ({})",wiki,&sql.0) ;
+            sql.0 += " AND gil_page_namespace_id=0 AND page_namespace=6 and page_title=gil_to AND page_is_redirect=0" ;
+            sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks where page_id=cl_from and cl_to='Crop_for_Wikidata')" ; // To-be-cropped
+            batches.push(sql);
+        });
+        let rows = PageList::new_from_wiki("commonswiki")
+            .run_batch_queries(&self.state, batches)
+            .await
+            .map_err(|e| format!("{:?}", e))?;
+        let page_file: Vec<(String, String)> = rows
+            .par_iter()
+            .map(|row| my::from_row::<(String, String)>(row.to_owned()))
+            .collect();
+        let mut page_file = self
+            .filter_page_images(&wiki, page_file)
+            .await
+            .map_err(|e| format!("{:?}", e))?
+            .par_iter()
+            .filter_map(|(page, file)| page2q.get(page).map(|q| (q.to_string(), file.to_string())))
+            .collect();
+        add_item_file
+            .lock()
+            .map_err(|e| format!("{:?}", e))?
+            .append(&mut page_file);
         Ok(())
     }
 
@@ -248,36 +252,8 @@ impl WDfist {
             .collect();
 
         // Get nearby files
-        let api = Api::new("https://commons.wikimedia.org/w/api.php")
-            .await
-            .map_err(|e| format!("{:?}", e))?;
-        //let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
-
-        let params: Vec<_> = page_coords
-            .iter()
-            .map(|(_q, lat, lon)| {
-                api.params_into(&[
-                    ("action", "query"),
-                    ("list", "geosearch"),
-                    ("gscoord", format!("{}|{}", lat, lon).as_str()),
-                    (
-                        "gsradius",
-                        format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
-                    ),
-                    ("gslimit", "50"),
-                    ("gsnamespace", "6"),
-                ])
-            })
-            .collect();
-
-        /*
-        let futures : Vec<_> = params
-            .iter()
-            .map(|params|api.get_query_api_json(&params))
-            .collect();
-
-        let results = join_all(futures).await;
-        */
+        let api = self.get_commons_api().await?;
+        let params = self.follow_coords_get_params(&page_coords, &api);
 
         let mut results: Vec<_> = vec![];
         for param in params {
@@ -287,6 +263,19 @@ impl WDfist {
             }
         }
 
+        let add_item_file = self.follow_coords_get_item_files(results, page_coords);
+        add_item_file
+            .iter()
+            .for_each(|(q, file)| self.add_file_to_item(q, file));
+
+        Ok(())
+    }
+
+    fn follow_coords_get_item_files(
+        &mut self,
+        results: Vec<Value>,
+        page_coords: Vec<(String, f64, f64)>,
+    ) -> Vec<(String, String)> {
         let add_item_file: Vec<(String, String)> = results
             .iter()
             .zip(page_coords)
@@ -311,13 +300,7 @@ impl WDfist {
             })
             .flatten()
             .collect();
-
-        // Add files
         add_item_file
-            .iter()
-            .for_each(|(q, file)| self.add_file_to_item(q, file));
-
-        Ok(())
     }
 
     // Remove leading "File:"
@@ -342,6 +325,26 @@ impl WDfist {
     }
 
     async fn follow_search_commons(&mut self) -> Result<(), String> {
+        let batches = self.follow_search_commons_prepare_batches();
+        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
+        let item2label = self.follow_search_commons_get_item2label(rows);
+
+        // Get search results
+        let api = self.get_commons_api().await?;
+        let params = self.follow_search_commons_get_params(&item2label, &api);
+        let results = self.follow_search_commons_get_results(params, api).await;
+        let add_item_file = self.get_add_item_files(results, item2label);
+
+        // Add files
+        add_item_file
+            .iter()
+            .for_each(|(q, file)| self.add_file_to_item(q, file));
+
+        Ok(())
+    }
+
+    fn follow_search_commons_prepare_batches(&mut self) -> Vec<(String, Vec<MyValue>)> {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -349,22 +352,14 @@ impl WDfist {
             sql.0 = format!("SELECT concat('Q',wbit_item_id) AS term_full_entity_id, wbx_text as term_text FROM wbt_item_terms INNER JOIN wbt_term_in_lang ON wbit_term_in_lang_id = wbtl_id INNER JOIN wbt_type ON wbtl_type_id = wby_id AND wby_name='label' INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language='en' WHERE wbit_item_id IN ({})",&sql.0) ;
             batches.push(sql);
         });
+        batches
+    }
 
-        // Run batches
-        let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
-
-        // Process results
-        let item2label: Vec<(String, String)> = rows
-            .par_iter()
-            .map(|row| my::from_row::<(String, String)>(row.to_owned()))
-            .collect();
-
-        // Get search results
-        let api = Api::new("https://commons.wikimedia.org/w/api.php")
-            .await
-            .map_err(|e| format!("{:?}", e))?;
-
+    fn follow_search_commons_get_params(
+        &mut self,
+        item2label: &[(String, String)],
+        api: &Api,
+    ) -> Vec<HashMap<String, String>> {
         let params: Vec<_> = item2label
             .iter()
             .map(|(_q, label)| {
@@ -376,24 +371,14 @@ impl WDfist {
                 ])
             })
             .collect();
+        params
+    }
 
-        /*
-        let futures : Vec<_> = params
-            .iter()
-            .map(|params|api.get_query_api_json(&params))
-            .collect();
-
-        let results = join_all(futures).await;
-        */
-
-        let mut results: Vec<_> = vec![];
-        for param in params {
-            match api.get_query_api_json(&param).await {
-                Ok(x) => results.push(x),
-                _ => results.push(json!({})), // Ignore
-            }
-        }
-
+    fn get_add_item_files(
+        &mut self,
+        results: Vec<Value>,
+        item2label: Vec<(String, String)>,
+    ) -> Vec<(String, String)> {
         let add_item_file: Vec<(String, String)> = results
             .iter()
             .zip(item2label)
@@ -423,13 +408,7 @@ impl WDfist {
             })
             .flatten()
             .collect();
-
-        // Add files
         add_item_file
-            .iter()
-            .for_each(|(q, file)| self.add_file_to_item(q, file));
-
-        Ok(())
     }
 
     fn follow_commons_cats(&mut self) -> Result<(), String> {
@@ -481,11 +460,7 @@ impl WDfist {
     }
 
     async fn seed_ignore_files_from_ignore_database(&mut self) -> Result<(), String> {
-        let state = self.state.clone();
-        let tool_db_user_pass = state.get_tool_db_user_pass().lock().await;
-        let mut conn = state
-            .get_tool_db_connection(tool_db_user_pass.clone())
-            .await?;
+        let mut conn = self.get_db_conn().await?;
 
         let sql = format!("SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={}",MIN_IGNORE_DB_FILE_COUNT);
 
@@ -543,6 +518,27 @@ impl WDfist {
             return Ok(());
         }
 
+        let batches = self.filter_files_from_ignore_database_prepare_batches();
+        let mut conn = self.get_db_conn().await?;
+
+        // Run batches sequentially
+        for sql in batches {
+            self.filter_files_from_ignore_database_run_batch(&mut conn, sql)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn get_db_conn(&mut self) -> Result<my::Conn, String> {
+        let state = self.state.clone();
+        let tool_db_user_pass = state.get_tool_db_user_pass().lock().await;
+        let conn = state
+            .get_tool_db_connection(tool_db_user_pass.clone())
+            .await?;
+        Ok(conn)
+    }
+
+    fn filter_files_from_ignore_database_prepare_batches(&mut self) -> Vec<(String, Vec<MyValue>)> {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         let items: Vec<String> = self
@@ -558,31 +554,27 @@ impl WDfist {
             );
             batches.push(sql);
         });
+        batches
+    }
 
-        // Prepare
-        let state = self.state.clone();
-        let tool_db_user_pass = state.get_tool_db_user_pass().lock().await;
-        let mut conn = state
-            .get_tool_db_connection(tool_db_user_pass.clone())
-            .await?;
-
-        // Run batches sequentially
-        for sql in batches {
-            let rows = conn
-                .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-                .await
-                .map_err(|e| format!("{:?}", e))?
-                .map_and_drop(from_row::<(String, String)>)
-                .await
-                .map_err(|e| format!("{:?}", e))?;
-
-            for (item, filename) in rows {
-                let filename = self.normalize_filename(&filename.to_string());
-                if let Some(ref mut files) = self.item2files.get_mut(&item) {
-                    files.remove(&filename);
-                    if files.is_empty() {
-                        self.item2files.remove(&item);
-                    }
+    async fn filter_files_from_ignore_database_run_batch(
+        &mut self,
+        conn: &mut my::Conn,
+        sql: (String, Vec<MyValue>),
+    ) -> Result<(), String> {
+        let rows = conn
+            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .await
+            .map_err(|e| format!("{:?}", e))?
+            .map_and_drop(from_row::<(String, String)>)
+            .await
+            .map_err(|e| format!("{:?}", e))?;
+        for (item, filename) in rows {
+            let filename = self.normalize_filename(&filename.to_string());
+            if let Some(ref mut files) = self.item2files.get_mut(&item) {
+                files.remove(&filename);
+                if files.is_empty() {
+                    self.item2files.remove(&item);
                 }
             }
         }
@@ -594,6 +586,32 @@ impl WDfist {
             return Ok(());
         }
 
+        let file2count = self.get_file_counts();
+        if file2count.is_empty() {
+            return Ok(());
+        }
+
+        let mut files_to_remove: Vec<String> = vec![];
+        self.wdf_only_files_not_on_wd(&file2count, &mut files_to_remove)
+            .await?;
+        self.remove_max_files_returned(&mut files_to_remove, file2count);
+        self.remove_files(files_to_remove);
+
+        // Remove empty item results
+        self.item2files.retain(|_item, files| !files.is_empty());
+        Ok(())
+    }
+
+    fn remove_files(&mut self, files_to_remove: Vec<String>) {
+        // Remove the files
+        self.item2files.iter_mut().for_each(|(_item, files)| {
+            files_to_remove.iter().for_each(|filename| {
+                files.remove(filename);
+            });
+        });
+    }
+
+    fn get_file_counts(&mut self) -> HashMap<String, usize> {
         // Collect all filenames, and how often they are used in this result set
         let mut file2count: HashMap<String, usize> = HashMap::new();
         self.item2files.iter().for_each(|(_item, files)| {
@@ -601,39 +619,14 @@ impl WDfist {
                 .iter()
                 .for_each(|fc| *file2count.entry(fc.0.to_string()).or_insert(0) += 1);
         });
-        if file2count.is_empty() {
-            return Ok(());
-        }
+        file2count
+    }
 
-        let mut files_to_remove: Vec<String> = vec![];
-
-        if self.bool_param("wdf_only_files_not_on_wd") {
-            // Get distinct filenames to check
-            let filenames: Vec<String> = file2count
-                .par_iter()
-                .map(|(file, _count)| file.to_owned())
-                .collect();
-
-            // Create batches
-            let mut batches: Vec<SQLtuple> = vec![];
-            filenames.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-                let mut sql = Platform::prep_quote(chunk);
-                sql.0 = format!(
-                    "SELECT DISTINCT il_to FROM imagelinks WHERE il_from_namespace=0 AND il_to IN ({})",
-                    &sql.0
-                );
-                batches.push(sql);
-            });
-
-            // Run batches, and get a list of files to remove
-            let pagelist = PageList::new_from_wiki("wikidatawiki");
-            let rows = pagelist.run_batch_queries(&self.state, batches).await?;
-            files_to_remove = rows
-                .par_iter()
-                .map(|row| my::from_row::<String>(row.to_owned()))
-                .collect();
-        }
-
+    fn remove_max_files_returned(
+        &mut self,
+        files_to_remove: &mut Vec<String>,
+        file2count: HashMap<String, usize>,
+    ) {
         // Remove max files returned
         if self.bool_param("wdf_max_five_results") {
             files_to_remove.extend(
@@ -645,17 +638,40 @@ impl WDfist {
             files_to_remove.par_sort();
             files_to_remove.dedup();
         }
+    }
 
-        // Remove the files
-        self.item2files.iter_mut().for_each(|(_item, files)| {
-            files_to_remove.iter().for_each(|filename| {
-                files.remove(filename);
-            });
+    async fn wdf_only_files_not_on_wd(
+        &mut self,
+        file2count: &HashMap<String, usize>,
+        files_to_remove: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if !self.bool_param("wdf_only_files_not_on_wd") {
+            return Ok(());
+        }
+        // Get distinct filenames to check
+        let filenames: Vec<String> = file2count
+            .par_iter()
+            .map(|(file, _count)| file.to_owned())
+            .collect();
+
+        // Create batches
+        let mut batches: Vec<SQLtuple> = vec![];
+        filenames.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
+            let mut sql = Platform::prep_quote(chunk);
+            sql.0 = format!(
+                "SELECT DISTINCT il_to FROM imagelinks WHERE il_from_namespace=0 AND il_to IN ({})",
+                &sql.0
+            );
+            batches.push(sql);
         });
 
-        // Remove empty item results
-        self.item2files.retain(|_item, files| !files.is_empty());
-
+        // Run batches, and get a list of files to remove
+        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
+        *files_to_remove = rows
+            .par_iter()
+            .map(|row| my::from_row::<String>(row.to_owned()))
+            .collect();
         Ok(())
     }
 
@@ -727,6 +743,60 @@ impl WDfist {
                 self.item2files.insert(item.to_string(), file_entry);
             }
         }
+    }
+
+    async fn follow_search_commons_get_results(
+        &self,
+        params: Vec<HashMap<String, String>>,
+        api: Api,
+    ) -> Vec<Value> {
+        let mut results: Vec<_> = vec![];
+        for param in params {
+            match api.get_query_api_json(&param).await {
+                Ok(x) => results.push(x),
+                _ => results.push(json!({})), // Ignore
+            }
+        }
+        results
+    }
+
+    async fn get_commons_api(&self) -> Result<Api, String> {
+        let api = Api::new("https://commons.wikimedia.org/w/api.php")
+            .await
+            .map_err(|e| format!("{:?}", e))?;
+        Ok(api)
+    }
+
+    fn follow_search_commons_get_item2label(&self, rows: Vec<my::Row>) -> Vec<(String, String)> {
+        let item2label: Vec<(String, String)> = rows
+            .par_iter()
+            .map(|row| my::from_row::<(String, String)>(row.to_owned()))
+            .collect();
+        item2label
+    }
+
+    fn follow_coords_get_params(
+        &self,
+        page_coords: &[(String, f64, f64)],
+        api: &Api,
+    ) -> Vec<HashMap<String, String>> {
+        let params: Vec<_> = page_coords
+            .iter()
+            .map(|(_q, lat, lon)| {
+                api.params_into(&[
+                    ("action", "query"),
+                    ("list", "geosearch"),
+                    ("gscoord", format!("{}|{}", lat, lon).as_str()),
+                    (
+                        "gsradius",
+                        format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
+                    ),
+                    ("gslimit", "50"),
+                    ("gsnamespace", "6"),
+                ])
+            })
+            .collect();
+        params
     }
 }
 
@@ -850,38 +920,39 @@ mod tests {
         assert!(!wdfist.is_valid_filename(&"foobar.svg".to_string()));
     }
 
-    #[tokio::test]
-    async fn test_follow_language_links() {
-        let params: Vec<(&str, &str)> = vec![];
-        let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
+    // Deactivated: connection to cewiki_p required
+    // #[tokio::test]
+    // async fn test_follow_language_links() {
+    //     let params: Vec<(&str, &str)> = vec![];
+    //     let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
 
-        // All files
-        wdfist.wdf_allow_svg = true;
-        wdfist.follow_language_links().await.unwrap();
-        assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
-        assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() > 90);
+    //     // All files
+    //     wdfist.wdf_allow_svg = true;
+    //     wdfist.follow_language_links().await.unwrap();
+    //     assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
+    //     assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() > 90);
 
-        // No SVG
-        wdfist.item2files.clear();
-        wdfist.wdf_allow_svg = false;
-        wdfist.follow_language_links().await.unwrap();
-        assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
-        assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() < 50);
-        assert!(wdfist
-            .item2files
-            .get(&"Q1481".to_string())
-            .unwrap()
-            .contains_key(&"Felsberg_bl_von_turm_zwei_wv_ds_09_2006.JPG".to_string()));
+    //     // No SVG
+    //     wdfist.item2files.clear();
+    //     wdfist.wdf_allow_svg = false;
+    //     wdfist.follow_language_links().await.unwrap();
+    //     assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
+    //     assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() < 50);
+    //     assert!(wdfist
+    //         .item2files
+    //         .get(&"Q1481".to_string())
+    //         .unwrap()
+    //         .contains_key(&"Felsberg_bl_von_turm_zwei_wv_ds_09_2006.JPG".to_string()));
 
-        // Page images
-        let params: Vec<(&str, &str)> = vec![("wdf_only_page_images", "1")];
-        let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
-        wdfist.follow_language_links().await.unwrap();
-        assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
-        let x = wdfist.item2files.get(&"Q1481".to_string()).unwrap();
-        assert!(x.len() < 50);
-        assert!(x.contains_key(&"Felsberg_(Hessen).jpg".to_string()));
-    }
+    //     // Page images
+    //     let params: Vec<(&str, &str)> = vec![("wdf_only_page_images", "1")];
+    //     let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
+    //     wdfist.follow_language_links().await.unwrap();
+    //     assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
+    //     let x = wdfist.item2files.get(&"Q1481".to_string()).unwrap();
+    //     assert!(x.len() < 50);
+    //     assert!(x.contains_key(&"Felsberg_(Hessen).jpg".to_string()));
+    // }
 
     #[tokio::test]
     async fn test_follow_coords() {
@@ -915,6 +986,14 @@ mod tests {
             .item2files
             .get(&"Q66711783".to_string())
             .unwrap()
-            .contains_key(&"Gerst_lilly_nee_kohn_with_son_walter_samuel.png".to_string()));
+            .contains_key(&"Walter_Archer_and_family.jpg".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_seed_ignore_files() {
+        let params: Vec<(&str, &str)> = vec![];
+        let mut wdfist = get_wdfist(params, vec![]).await;
+        wdfist.seed_ignore_files().await.unwrap();
+        assert!(wdfist.files2ignore.len() > 100);
     }
 }
