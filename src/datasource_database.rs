@@ -22,6 +22,8 @@ use wikibase::mediawiki::title::Title;
 static MAX_CATEGORY_BATCH_SIZE: usize = 2500;
 static MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
 
+type PrimaryResultRow = (u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount);
+
 #[derive(Debug)]
 struct DsdbParams {
     link_count_sql: String,
@@ -366,99 +368,6 @@ impl SourceDatabase {
         Ok(categories_done.drain().collect())
     }
 
-    /*
-    // This might be nice but PetScan is not allowed to create temporary tables on Commons
-    async fn get_categories_in_tree_db(
-        &self,
-        state: &AppState,
-        wiki: &str,
-        title: &str,
-        depth: u16,
-    ) -> Result<Vec<String>, String> {
-        let is_cs = self.params.category_namespace_is_case_insensitive;
-        let title = SourceDatabaseParameters::s2u_ucfirst(title,is_cs);
-
-        let mut conn = state.get_wiki_db_connection(&wiki).await?;
-
-        // Initialize temporary tables
-        let sql = "CREATE TEMPORARY TABLE `categories_done` (
-            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-            `category` varchar(255) NOT NULL DEFAULT '',
-            PRIMARY KEY (`id`),
-            UNIQUE KEY `category1` (`category`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;" ;
-        conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
-
-        let sql = "CREATE TEMPORARY TABLE `categories_todo` (
-            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-            `category` varchar(255) NOT NULL DEFAULT '',
-            PRIMARY KEY (`id`),
-            UNIQUE KEY `category2` (`category`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;" ;
-        conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
-
-        let sql = "CREATE TEMPORARY TABLE `categories_new` (
-            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-            `category` varchar(255) NOT NULL DEFAULT '',
-            PRIMARY KEY (`id`),
-            UNIQUE KEY `category3` (`category`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;" ;
-        conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
-
-        let sql : SQLtuple = ("INSERT INTO `categories_done` (?)".to_string(),vec![title.to_owned().into()]);
-        conn.exec_drop(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await.map_err(|e|format!("{:?}",e))?;
-
-        let sql : SQLtuple = ("INSERT INTO `categories_todo` (?)".to_string(),vec![title.into()]);
-        conn.exec_drop(sql.0.as_str(),mysql_async::Params::Positional(sql.1)).await.map_err(|e|format!("{:?}",e))?;
-
-        // Iterate on depth
-        let mut remaining_depth = depth;
-        while remaining_depth>0 {
-            remaining_depth -= 1 ;
-
-            // Find new sub-categories
-            let sql = "INSERT INTO categories_new (category)
-                SELECT DISTINCT page_title
-                FROM page,categorylinks,categories_todo
-                WHERE cl_from=page_id
-                AND cl_type='subcat'
-                AND cl_to=categories_todo.category
-                AND NOT EXISTS (SELECT * FROM categories_done WHERE category=page_title)" ;
-            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
-            if conn.affected_rows() == 0 {
-                break; // Nothing new, we are done here
-            }
-
-            // Add new sub-categories to categories_done
-            let sql = "INSERT INTO `categories_done` (category) SELECT category FROM categories_new";
-            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
-
-            // Clear categories_todo and add new sub-categories
-            let sql = "TRUNCATE `categories_todo`";
-            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
-
-            let sql = "INSERT INTO `categories_todo` (category) SELECT category FROM categories_new";
-            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
-
-            // Clear categories_new for next round
-            let sql = "TRUNCATE `categories_new`";
-            conn.exec_drop(&sql,()).await.map_err(|e|format!("{:?}",e))?;
-        }
-
-        // Retrieve results
-        let sql = "SELECT `category` FROM `categories_done`";
-        let result = conn
-            .exec_iter(sql,()).await
-            .map_err(|e|format!("{:?}",e))?
-            .map_and_drop(from_row::<Vec<u8>>)
-            .await
-            .map_err(|e|format!("{:?}",e))?
-            .iter()
-            .map(|row| String::from_utf8_lossy(&row).into_owned())
-            .collect();
-        Ok(result)
-    } */
-
     pub async fn parse_category_list(
         &self,
         state: &AppState,
@@ -735,19 +644,7 @@ impl SourceDatabase {
             || !self.params.links_to_all.is_empty()
             || !self.params.links_to_any.is_empty();
 
-        let primary = if !self.cat_pos.is_empty() {
-            "categories"
-        } else if self.has_pos_templates {
-            "templates"
-        } else if self.has_pos_linked_from {
-            "links_from"
-        } else if primary_pagelist.is_some() {
-            "pagelist"
-        } else if self.params.page_wikidata_item == "without" {
-            "no_wikidata"
-        } else {
-            return Err("SourceDatabase: Missing primary".to_string());
-        };
+        let primary = self.get_primary(primary_pagelist)?;
 
         let link_count_sql = if self.params.gather_link_count {
             ",(SELECT count(*) FROM pagelinks WHERE pl_from=p.page_id) AS link_count"
@@ -792,6 +689,23 @@ impl SourceDatabase {
             sql_before_after,
             is_before_after_done,
         })
+    }
+
+    fn get_primary(&mut self, primary_pagelist: Option<&PageList>) -> Result<String, String> {
+        let primary = if !self.cat_pos.is_empty() {
+            "categories"
+        } else if self.has_pos_templates {
+            "templates"
+        } else if self.has_pos_linked_from {
+            "links_from"
+        } else if primary_pagelist.is_some() {
+            "pagelist"
+        } else if self.params.page_wikidata_item == "without" {
+            "no_wikidata"
+        } else {
+            return Err("SourceDatabase: Missing primary".to_string());
+        };
+        Ok(primary.to_string())
     }
 
     async fn get_pages_categories(
@@ -1025,124 +939,159 @@ impl SourceDatabase {
     ) -> Result<(), String> {
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
 
-        // Namespaces
-        if !self.params.namespace_ids.is_empty() && primary != "pagelist" {
-            let namespace_ids = &self
-                .params
-                .namespace_ids
-                .iter()
-                .map(|ns| ns.to_string())
-                .collect::<Vec<String>>();
-            sql.0 += " AND p.page_namespace";
-            self.sql_in(namespace_ids, &mut sql);
+        self.get_pages_for_primary_namespaces(primary, &mut sql);
+        self.get_pages_for_primary_negative_categories(&mut sql);
+        self.get_pages_for_primary_templates_as_secondary(&mut sql);
+        self.get_pages_for_primary_negative_templates(&mut sql);
+        self.get_pages_for_primary_links_from(&mut sql, &api);
+        self.get_pages_for_primary_links_to(&mut sql, api);
+        self.get_pages_for_primary_lead_image(&mut sql);
+        self.get_pages_for_primary_ores(&mut sql);
+        self.get_pages_for_primary_last_edit(&mut sql);
+        self.get_pages_for_primary_page_types(&mut sql);
+        self.get_pages_for_primary_page_size(&mut sql);
+        self.get_pages_for_primary_wikidata_item_speedup(primary, &mut sql);
+        self.get_pages_for_primary_last_edited(is_before_after_done, &mut sql, sql_before_after);
+        self.get_pages_for_primary_having(&mut sql);
+
+        let wiki = self
+            .params
+            .wiki
+            .as_ref()
+            .ok_or_else(|| {
+                "SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params"
+                    .to_string()
+            })?
+            .to_string();
+
+        let sql_1_len = sql.1.len();
+        let rows = self.get_pages_for_primary_run_query(sql, conn).await?;
+        Platform::profile("DSDB::get_pages_for_primary RUN FINISHED", Some(sql_1_len));
+
+        pages_sublist.set_wiki(Some(wiki))?;
+        pages_sublist.clear_entries()?;
+
+        Platform::profile(
+            "DSDB::get_pages_for_primary RETRIEVING RESULT",
+            Some(sql_1_len),
+        );
+
+        self.get_pages_for_primary_rows_to_result(rows, pages_sublist);
+
+        Platform::profile("DSDB::get_pages_for_primary COMPLETE", Some(sql_1_len));
+
+        Ok(())
+    }
+
+    fn get_pages_for_primary_wikidata_item_speedup(
+        &self,
+        primary: &String,
+        sql: &mut (String, Vec<MyValue>),
+    ) {
+        // Speed up "Only pages without Wikidata items"
+        if primary != "no_wikidata" && self.params.page_wikidata_item == "without" {
+            sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')" ;
+        }
+    }
+
+    fn get_pages_for_primary_rows_to_result(
+        &self,
+        rows: Vec<PrimaryResultRow>,
+        pages_sublist: &mut PageList,
+    ) {
+        rows.iter().for_each(
+            |(page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count)| {
+                let page_title = String::from_utf8_lossy(page_title).into_owned();
+                let page_timestamp = String::from_utf8_lossy(page_timestamp).into_owned();
+                let mut entry = PageListEntry::new(Title::new(&page_title, *page_namespace));
+                entry.page_id = Some(*page_id);
+                entry.page_bytes = Some(*page_bytes);
+                entry.set_page_timestamp(Some(page_timestamp));
+                if self.params.gather_link_count {
+                    entry.link_count = Some(*link_count);
+                }
+                if pages_sublist.add_entry(entry).is_ok() {}
+            },
+        );
+    }
+
+    fn get_pages_for_primary_having(&self, sql: &mut (String, Vec<MyValue>)) {
+        // Link count
+        let mut having: Vec<SQLtuple> = vec![];
+        if let Some(l) = self.params.minlinks {
+            having.push(("link_count>=".to_owned() + l.to_string().as_str(), vec![]))
+        }
+        if let Some(l) = self.params.maxlinks {
+            having.push(("link_count<=".to_owned() + l.to_string().as_str(), vec![]))
         }
 
-        // Negative categories
-        let negative_categories_use_not_exists = false;
-        if !self.cat_neg.is_empty() {
-            let mut cats: Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
-            cats.sort_unstable();
-            cats.dedup();
-            if negative_categories_use_not_exists {
-                sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks WHERE cl_from=p.page_id AND cl_to";
-            } else {
-                sql.0 +=
-                    " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
+        // HAVING
+        if !having.is_empty() {
+            sql.0 += " HAVING ";
+            for h in having {
+                Platform::append_sql(sql, h);
             }
-            self.sql_in(&cats, &mut sql);
-            sql.0 += ")";
         }
+    }
 
-        // Templates as secondary; template namespace only!
-        if self.has_pos_templates {
-            // All
-            self.params.templates_yes.iter().for_each(|t| {
-                let tmp = self.template_subquery(
-                    &[t.to_string()],
-                    self.params.templates_yes_talk_page,
-                    false,
-                );
-                Platform::append_sql(&mut sql, tmp);
-            });
-
-            // Any
-            if !self.params.templates_any.is_empty() {
-                let tmp = self.template_subquery(
-                    &self.params.templates_any,
-                    self.params.templates_any_talk_page,
-                    false,
-                );
-                Platform::append_sql(&mut sql, tmp);
-            }
+    fn get_pages_for_primary_page_size(&self, sql: &mut (String, Vec<MyValue>)) {
+        // Size
+        if let Some(i) = self.params.larger {
+            sql.0 += " AND p.page_len>=";
+            sql.0 += i.to_string().as_str();
         }
-
-        // Negative templates
-        if !self.params.templates_no.is_empty() {
-            let tmp = self.template_subquery(
-                &self.params.templates_no,
-                self.params.templates_no_talk_page,
-                true,
-            );
-            Platform::append_sql(&mut sql, tmp);
+        if let Some(i) = self.params.smaller {
+            sql.0 += &format!(" AND p.page_len<={i}");
         }
-
-        // Links from all
-        self.params.linked_from_all.iter().for_each(|l| {
-            sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(&mut sql, self.links_from_subquery(&[l.to_owned()], &api));
-        });
-
-        // Links from any
-        if !self.params.linked_from_any.is_empty() {
-            sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(
-                &mut sql,
-                self.links_from_subquery(&self.params.linked_from_any, &api),
-            );
+        if let Some(i) = self.params.since_rev0 {
+            sql.0 += &format!(" AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*{i}/100");
         }
+    }
 
-        // Links from none
-        if !self.params.linked_from_none.is_empty() {
-            sql.0 += " AND p.page_id NOT IN ";
-            Platform::append_sql(
-                &mut sql,
-                self.links_from_subquery(&self.params.linked_from_none, &api),
-            );
+    fn get_pages_for_primary_page_types(&self, sql: &mut (String, Vec<MyValue>)) {
+        // Misc page types
+        // TODO FIXME get local "Soft_redirect" page title from Wikidata Q4844001
+        let soft_redirects_page = "Soft_redirect";
+        if "yes" == self.params.soft_redirects.as_str() {
+            sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)" ;
+            sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
         }
-
-        // Links to all
-        self.params.links_to_all.iter().for_each(|l| {
-            sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(&mut sql, self.links_to_subquery(&[l.to_owned()], &api));
-        });
-
-        // Links to any
-        if !self.params.links_to_any.is_empty() {
-            sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(
-                &mut sql,
-                self.links_to_subquery(&self.params.links_to_any, &api),
-            );
-        }
-
-        // Links to none
-        if !self.params.links_to_none.is_empty() {
-            sql.0 += " AND p.page_id NOT IN ";
-            Platform::append_sql(
-                &mut sql,
-                self.links_to_subquery(&self.params.links_to_none, &api),
-            );
-        }
-
-        // Lead image
-        match self.params.page_image.as_str() {
-            "yes" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))" ,
-            "free" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free')" ,
-            "nonfree" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image')" ,
-            "no" => sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))" ,
+        match self.params.redirects.as_str() {
+            "yes" => sql.0 += " AND p.page_is_redirect=1",
+            "no" => sql.0 += " AND p.page_is_redirect=0",
             _ => {}
         }
+        match self.params.disambiguation_pages.as_str() {
+            "yes" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')",
+            "no" => sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')",
+            _ => {}
+        }
+    }
 
+    fn get_pages_for_primary_last_edit(&self, sql: &mut (String, Vec<MyValue>)) {
+        // Last edit
+        match self.params.last_edit_anon.as_str() {
+            "yes" => sql.0 +=" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NULL)" ,
+            "no" => sql.0 +=" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NOT NULL)" ,
+            _ => {}
+        }
+        match self.params.last_edit_bot.as_str() {
+            "yes" => sql.0 +=" AND EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')" ,
+            "no" => sql.0 +=" AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')" ,
+            _ => {}
+        }
+        match self.params.last_edit_flagged.as_str() {
+            "yes" => sql.0 +=
+                " AND NOT EXISTS (SELECT * FROM flaggedpage_pending WHERE p.page_id=fpp_page_id)",
+            "no" => {
+                sql.0 +=
+                    " AND EXISTS (SELECT * FROM flaggedpage_pending WHERE p.page_id=fpp_page_id)"
+            }
+            _ => {}
+        }
+    }
+
+    fn get_pages_for_primary_ores(&self, sql: &mut (String, Vec<MyValue>)) {
         // ORES
         if self.params.ores_type != "any"
             && (self.params.ores_prediction != "any"
@@ -1165,102 +1114,157 @@ impl SourceDatabase {
             }
             sql.0 += ")";
         }
+    }
 
-        // Last edit
-        match self.params.last_edit_anon.as_str() {
-            "yes" => sql.0 +=" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NULL)" ,
-            "no" => sql.0 +=" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NOT NULL)" ,
+    fn get_pages_for_primary_lead_image(&self, sql: &mut (String, Vec<MyValue>)) {
+        // Lead image
+        match self.params.page_image.as_str() {
+            "yes" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))" ,
+            "free" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free')" ,
+            "nonfree" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image')" ,
+            "no" => sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))" ,
             _ => {}
         }
-        match self.params.last_edit_bot.as_str() {
-            "yes" => sql.0 +=" AND EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')" ,
-            "no" => sql.0 +=" AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')" ,
-            _ => {}
+    }
+
+    fn get_pages_for_primary_links_to(&self, sql: &mut (String, Vec<MyValue>), api: Api) {
+        // Links to all
+        self.params.links_to_all.iter().for_each(|l| {
+            sql.0 += " AND p.page_id IN ";
+            Platform::append_sql(sql, self.links_to_subquery(&[l.to_owned()], &api));
+        });
+
+        // Links to any
+        if !self.params.links_to_any.is_empty() {
+            sql.0 += " AND p.page_id IN ";
+            Platform::append_sql(sql, self.links_to_subquery(&self.params.links_to_any, &api));
         }
-        match self.params.last_edit_flagged.as_str() {
-            "yes" => sql.0 +=
-                " AND NOT EXISTS (SELECT * FROM flaggedpage_pending WHERE p.page_id=fpp_page_id)",
-            "no" => {
-                sql.0 +=
-                    " AND EXISTS (SELECT * FROM flaggedpage_pending WHERE p.page_id=fpp_page_id)"
+
+        // Links to none
+        if !self.params.links_to_none.is_empty() {
+            sql.0 += " AND p.page_id NOT IN ";
+            Platform::append_sql(
+                sql,
+                self.links_to_subquery(&self.params.links_to_none, &api),
+            );
+        }
+    }
+
+    fn get_pages_for_primary_links_from(&self, sql: &mut (String, Vec<MyValue>), api: &Api) {
+        // Links from all
+        self.params.linked_from_all.iter().for_each(|l| {
+            sql.0 += " AND p.page_id IN ";
+            Platform::append_sql(sql, self.links_from_subquery(&[l.to_owned()], api));
+        });
+
+        // Links from any
+        if !self.params.linked_from_any.is_empty() {
+            sql.0 += " AND p.page_id IN ";
+            Platform::append_sql(
+                sql,
+                self.links_from_subquery(&self.params.linked_from_any, api),
+            );
+        }
+
+        // Links from none
+        if !self.params.linked_from_none.is_empty() {
+            sql.0 += " AND p.page_id NOT IN ";
+            Platform::append_sql(
+                sql,
+                self.links_from_subquery(&self.params.linked_from_none, api),
+            );
+        }
+    }
+
+    fn get_pages_for_primary_negative_templates(&self, sql: &mut (String, Vec<MyValue>)) {
+        // Negative templates
+        if !self.params.templates_no.is_empty() {
+            let tmp = self.template_subquery(
+                &self.params.templates_no,
+                self.params.templates_no_talk_page,
+                true,
+            );
+            Platform::append_sql(sql, tmp);
+        }
+    }
+
+    /// Templates as secondary; template namespace only!
+    fn get_pages_for_primary_templates_as_secondary(&self, sql: &mut (String, Vec<MyValue>)) {
+        if self.has_pos_templates {
+            // All
+            self.params.templates_yes.iter().for_each(|t| {
+                let tmp = self.template_subquery(
+                    &[t.to_string()],
+                    self.params.templates_yes_talk_page,
+                    false,
+                );
+                Platform::append_sql(sql, tmp);
+            });
+
+            // Any
+            if !self.params.templates_any.is_empty() {
+                let tmp = self.template_subquery(
+                    &self.params.templates_any,
+                    self.params.templates_any_talk_page,
+                    false,
+                );
+                Platform::append_sql(sql, tmp);
             }
-            _ => {}
         }
+    }
 
-        // Misc page types
-        // TODO FIXME get local "Soft_redirect" page title from Wikidata Q4844001
-        let soft_redirects_page = "Soft_redirect";
-        if "yes" == self.params.soft_redirects.as_str() {
-            sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)" ;
-            sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
-            // sql.1.push(MyValue::Bytes(soft_redirects_page.into())); // TODO FIXME why twice?
+    fn get_pages_for_primary_negative_categories(&self, sql: &mut (String, Vec<MyValue>)) {
+        let negative_categories_use_not_exists = false;
+        if !self.cat_neg.is_empty() {
+            let mut cats: Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
+            cats.sort_unstable();
+            cats.dedup();
+            if negative_categories_use_not_exists {
+                sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks WHERE cl_from=p.page_id AND cl_to";
+            } else {
+                sql.0 +=
+                    " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
+            }
+            self.sql_in(&cats, sql);
+            sql.0 += ")";
         }
-        match self.params.redirects.as_str() {
-            "yes" => sql.0 += " AND p.page_is_redirect=1",
-            "no" => sql.0 += " AND p.page_is_redirect=0",
-            _ => {}
-        }
-        match self.params.disambiguation_pages.as_str() {
-            "yes" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')",
-            "no" => sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')",
-            _ => {}
-        }
+    }
 
-        // Size
-        if let Some(i) = self.params.larger {
-            sql.0 += " AND p.page_len>=";
-            sql.0 += i.to_string().as_str();
+    fn get_pages_for_primary_namespaces(&self, primary: &String, sql: &mut (String, Vec<MyValue>)) {
+        if !self.params.namespace_ids.is_empty() && primary != "pagelist" {
+            let namespace_ids = &self
+                .params
+                .namespace_ids
+                .iter()
+                .map(|ns| ns.to_string())
+                .collect::<Vec<String>>();
+            sql.0 += " AND p.page_namespace";
+            self.sql_in(namespace_ids, sql);
         }
-        if let Some(i) = self.params.smaller {
-            sql.0 += &format!(" AND p.page_len<={i}");
-        }
-        if let Some(i) = self.params.since_rev0 {
-            sql.0 += &format!(" AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*{i}/100");
-        }
+    }
 
-        // Speed up "Only pages without Wikidata items"
-        if primary != "no_wikidata" && self.params.page_wikidata_item == "without" {
-            sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')" ;
-        }
-
+    fn get_pages_for_primary_last_edited(
+        &self,
+        is_before_after_done: &mut bool,
+        sql: &mut (String, Vec<MyValue>),
+        sql_before_after: (String, Vec<MyValue>),
+    ) {
         // Last edit/created before/after
         if !*is_before_after_done {
-            Platform::append_sql(&mut sql, sql_before_after);
+            Platform::append_sql(sql, sql_before_after);
             *is_before_after_done = true;
         }
+    }
 
-        // Link count
-        let mut having: Vec<SQLtuple> = vec![];
-        if let Some(l) = self.params.minlinks {
-            having.push(("link_count>=".to_owned() + l.to_string().as_str(), vec![]))
-        }
-        if let Some(l) = self.params.maxlinks {
-            having.push(("link_count<=".to_owned() + l.to_string().as_str(), vec![]))
-        }
-
-        // HAVING
-        if !having.is_empty() {
-            sql.0 += " HAVING ";
-            for h in having {
-                Platform::append_sql(&mut sql, h);
-            }
-        }
-
-        let wiki =
-            match &self.params.wiki {
-                Some(wiki) => wiki,
-                None => return Err(
-                    "SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params"
-                        .to_string(),
-                ),
-            };
-
+    async fn get_pages_for_primary_run_query(
+        &self,
+        sql: (String, Vec<MyValue>),
+        conn: &mut my::Conn,
+    ) -> Result<Vec<PrimaryResultRow>, String> {
         Platform::profile(
             "DSDB::get_pages_for_primary STARTING RUN",
             Some(sql.1.len()),
         );
-
-        let sql_1_len = sql.1.len();
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await
@@ -1268,35 +1272,7 @@ impl SourceDatabase {
             .map_and_drop(from_row::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>)
             .await
             .map_err(|e| format!("{:?}", e))?;
-
-        Platform::profile("DSDB::get_pages_for_primary RUN FINISHED", Some(sql_1_len));
-
-        pages_sublist.set_wiki(Some(wiki.to_string()))?;
-        pages_sublist.clear_entries()?;
-
-        Platform::profile(
-            "DSDB::get_pages_for_primary RETRIEVING RESULT",
-            Some(sql_1_len),
-        );
-
-        rows.iter().for_each(
-            |(page_id, page_title, page_namespace, page_timestamp, page_bytes, link_count)| {
-                let page_title = String::from_utf8_lossy(page_title).into_owned();
-                let page_timestamp = String::from_utf8_lossy(page_timestamp).into_owned();
-                let mut entry = PageListEntry::new(Title::new(&page_title, *page_namespace));
-                entry.page_id = Some(*page_id);
-                entry.page_bytes = Some(*page_bytes);
-                entry.set_page_timestamp(Some(page_timestamp));
-                if self.params.gather_link_count {
-                    entry.link_count = Some(*link_count);
-                }
-                if pages_sublist.add_entry(entry).is_ok() {}
-            },
-        );
-
-        Platform::profile("DSDB::get_pages_for_primary COMPLETE", Some(sql_1_len));
-
-        Ok(())
+        Ok(rows)
     }
 }
 
