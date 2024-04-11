@@ -3,7 +3,7 @@ use crate::pagelist::*;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
 use async_trait::async_trait;
-use wikibase::mediawiki::title::Title;
+use wikimisc::mediawiki::title::Title;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceManual {}

@@ -6,7 +6,7 @@ use crate::render_params::RenderParams;
 use async_trait::async_trait;
 use htmlescape::encode_minimal;
 use std::time::{SystemTime, UNIX_EPOCH};
-use wikibase::mediawiki::title::Title;
+use wikimisc::mediawiki::title::Title;
 
 static MAX_HTML_RESULTS: usize = 10000;
 

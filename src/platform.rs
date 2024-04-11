@@ -36,8 +36,8 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, instrument};
-use wikibase::mediawiki::api::NamespaceID;
-use wikibase::mediawiki::title::Title;
+use wikimisc::mediawiki::api::NamespaceID;
+use wikimisc::mediawiki::title::Title;
 
 pub static PAGE_BATCH_SIZE: usize = 15000;
 

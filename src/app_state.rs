@@ -14,7 +14,7 @@ use std::fs;
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 use tracing::{instrument, trace};
-use wikibase::mediawiki::api::Api;
+use wikimisc::mediawiki::api::Api;
 
 pub type DbUserPass = (String, String);
 

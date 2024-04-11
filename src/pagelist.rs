@@ -10,8 +10,8 @@ use rayon::prelude::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
-use wikibase::mediawiki::api::NamespaceID;
-use wikibase::mediawiki::title::Title;
+use wikimisc::mediawiki::api::{Api, NamespaceID};
+use wikimisc::mediawiki::title::Title;
 //________________________________________________________________________________________________________________________
 
 #[derive(Debug)]
@@ -715,12 +715,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         Ok(())
     }
 
-    async fn search_entry(
-        &self,
-        api: &wikibase::mediawiki::api::Api,
-        search: &str,
-        page_id: u32,
-    ) -> Result<bool, String> {
+    async fn search_entry(&self, api: &Api, search: &str, page_id: u32) -> Result<bool, String> {
         let params = [
             ("action".to_string(), "query".to_string()),
             ("list".to_string(), "search".to_string()),
@@ -738,7 +733,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             Ok(result) => result,
             Err(e) => return Err(format!("{:?}", e)),
         };
-        let titles = wikibase::mediawiki::api::Api::result_array_to_titles(&result);
+        let titles = Api::result_array_to_titles(&result);
         Ok(!titles.is_empty())
     }
 

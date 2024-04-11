@@ -21,7 +21,7 @@ reqwest = { version = "*", features = ["json"] }
 time = "^0.3"
 percent-encoding = "*"
 async-trait = "*"
-wikibase = { git = "https://gitlab.com/tobias47n9e/wikibase_rs" }
+wikimisc = { git = "https://github.com/magnusmanske/wikimisc" }
 tokio = { version = "^1", features = ["macros", "fs", "sync"] }
 tokio-util = "*"
 hyper = { version = "^1", features = ["full"] }

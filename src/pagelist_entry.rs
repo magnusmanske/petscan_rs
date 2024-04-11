@@ -1,8 +1,8 @@
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
-use wikibase::mediawiki::api::NamespaceID;
-use wikibase::mediawiki::title::Title;
+use wikimisc::mediawiki::api::NamespaceID;
+use wikimisc::mediawiki::title::Title;
 
 //________________________________________________________________________________________________________________________
 

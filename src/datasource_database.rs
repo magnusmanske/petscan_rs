@@ -16,8 +16,8 @@ use mysql_async::prelude::Queryable;
 use mysql_async::Value as MyValue;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use wikibase::mediawiki::api::{Api, NamespaceID};
-use wikibase::mediawiki::title::Title;
+use wikimisc::mediawiki::api::{Api, NamespaceID};
+use wikimisc::mediawiki::title::Title;
 
 static MAX_CATEGORY_BATCH_SIZE: usize = 2500;
 static MAX_SUBCATEGORIES_IN_TREE: usize = 500000;

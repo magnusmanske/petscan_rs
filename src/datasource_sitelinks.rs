@@ -5,7 +5,7 @@ use crate::platform::Platform;
 use async_trait::async_trait;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
-use wikibase::mediawiki::title::Title;
+use wikimisc::mediawiki::title::Title;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceSitelinks {

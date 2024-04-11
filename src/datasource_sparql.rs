@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde_json::value::Value;
 use std::collections::HashMap;
 use std::time;
-use wikibase::mediawiki::api::Api;
+use wikimisc::mediawiki::api::Api;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceSparql {}

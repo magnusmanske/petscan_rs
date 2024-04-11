@@ -4,7 +4,7 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
 use async_trait::async_trait;
 use rayon::prelude::*;
-use wikibase::mediawiki::api::Api;
+use wikimisc::mediawiki::api::Api;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceSearch {}

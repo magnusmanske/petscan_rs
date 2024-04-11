@@ -5,8 +5,8 @@ use crate::platform::Platform;
 use async_trait::async_trait;
 use serde_json::value::Value;
 use std::time;
-use wikibase::mediawiki::api::Api;
-use wikibase::mediawiki::title::Title;
+use wikimisc::mediawiki::api::Api;
+use wikimisc::mediawiki::title::Title;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourcePagePile {}

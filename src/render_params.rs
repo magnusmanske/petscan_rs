@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::platform::*;
 use crate::render::AUTOLIST_WIKIDATA;
 use std::sync::Arc;
-use wikibase::mediawiki::api::Api;
+use wikimisc::mediawiki::api::Api;
 
 #[derive(Debug, Clone)]
 pub struct RenderParams {

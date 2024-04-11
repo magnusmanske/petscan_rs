@@ -12,7 +12,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use wikibase::mediawiki::api::Api;
+use wikimisc::mediawiki::api::Api;
 
 pub static MIN_IGNORE_DB_FILE_COUNT: usize = 3;
 pub static MAX_FILE_COUNT_IN_RESULT_SET: usize = 5;
