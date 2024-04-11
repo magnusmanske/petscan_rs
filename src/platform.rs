@@ -988,11 +988,7 @@ impl Platform {
             Some(wiki) => wiki.to_string(),
             None => return Ok(()), // TODO is it OK to just ignore? Error for "no wiki set"?
         };
-        let api = self
-            .state
-            .get_api_for_wiki(wiki.to_owned())
-            .await
-            .map_err(|e| format!("{e}"))?;
+        let api = self.state.get_api_for_wiki(wiki.to_owned()).await?;
 
         // Using Wikidata
         let titles: Vec<String> = result
