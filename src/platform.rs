@@ -10,9 +10,7 @@ use crate::datasource_sparql::SourceSparql;
 use crate::datasource_wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
-use crate::pagelist_entry::{
-    FileInfo, LinkCount, PageCoordinates, PageListEntry, PageListSort, TriState,
-};
+use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, PageListSort, TriState};
 use crate::render::*;
 use crate::render_html::RenderHTML;
 use crate::render_json::RenderJSON;
@@ -775,7 +773,7 @@ impl Platform {
             if add_coordinates {
                 let coordinates = match parts.remove(0) {
                     my::Value::Bytes(s) => match String::from_utf8(s) {
-                        Ok(lat_lon) => PageCoordinates::new_from_lat_lon(&lat_lon),
+                        Ok(lat_lon) => wikimisc::lat_lon::LatLon::from_str(&lat_lon),
                         _ => None,
                     },
                     _ => None,
@@ -990,7 +988,11 @@ impl Platform {
             Some(wiki) => wiki.to_string(),
             None => return Ok(()), // TODO is it OK to just ignore? Error for "no wiki set"?
         };
-        let api = self.state.get_api_for_wiki(wiki.to_owned()).await?;
+        let api = self
+            .state
+            .get_api_for_wiki(wiki.to_owned())
+            .await
+            .map_err(|e| format!("{e}"))?;
 
         // Using Wikidata
         let titles: Vec<String> = result
@@ -1574,7 +1576,7 @@ impl Platform {
             (_, "wikidata") => Some("wikidatawiki".to_string()),
             (l, p) => {
                 let url = format!("https://{}.{}.org", &l, &p);
-                self.state.get_wiki_for_server_url(&url)
+                self.state.site_matrix().get_wiki_for_server_url(&url)
             }
         }
     }

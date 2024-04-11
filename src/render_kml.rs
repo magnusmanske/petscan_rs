@@ -17,7 +17,7 @@ impl Render for RenderKML {
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let params = RenderParams::new(platform, wiki).await?;
-        let server = match params.state().get_server_url_for_wiki(wiki) {
+        let server = match params.state().site_matrix().get_server_url_for_wiki(wiki) {
             Ok(url) => url,
             Err(_e) => String::new(),
         };

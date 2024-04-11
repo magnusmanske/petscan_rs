@@ -7,7 +7,6 @@ use mysql_async::prelude::Queryable;
 use mysql_async::Value as MyValue;
 use rand::prelude::thread_rng;
 use rand::seq::SliceRandom;
-use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -15,6 +14,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 use tracing::{instrument, trace};
 use wikimisc::mediawiki::api::Api;
+use wikimisc::site_matrix::SiteMatrix;
 
 pub type DbUserPass = (String, String);
 
@@ -25,7 +25,7 @@ pub struct AppState {
     tool_db_mutex: Arc<Mutex<DbUserPass>>,
     threads_running: Arc<RwLock<i64>>,
     shutting_down: Arc<RwLock<bool>>,
-    site_matrix: Value,
+    site_matrix: SiteMatrix,
     main_page: String,
     port_mapping: HashMap<String, u16>, // Local testing only
 }
@@ -50,13 +50,18 @@ impl AppState {
             .into_iter()
             .map(|(k, v)| (k.to_string(), v.as_i64().unwrap_or_default() as u16))
             .collect();
+        let wikidata_api = Api::new("https://www.wikidata.org/w/api.php")
+            .await
+            .expect("Can't talk to Wikidata API");
         let ret = Self {
             db_pool: Arc::new(Mutex::new(vec![])),
             config: config.to_owned(),
             port_mapping,
             threads_running: Arc::new(RwLock::new(0)),
             shutting_down: Arc::new(RwLock::new(false)),
-            site_matrix: AppState::load_site_matrix().await,
+            site_matrix: SiteMatrix::new(&wikidata_api)
+                .await
+                .expect("Can't get site matrix"),
             tool_db_mutex: Arc::new(Mutex::new(tool_db_access_tuple)),
             main_page: String::from_utf8_lossy(
                 &fs::read(main_page_path).expect("Could not read index.html file form disk"),
@@ -117,7 +122,7 @@ impl AppState {
     }
 
     pub fn get_main_page(&self, interface_language: String) -> String {
-        let direction = if self.is_language_rtl(&interface_language) {
+        let direction = if self.site_matrix.is_language_rtl(&interface_language) {
             "rtl"
         } else {
             "ltr"
@@ -128,7 +133,7 @@ impl AppState {
             interface_language.replace('\'', "")
         );
         let ret = self.main_page.replace("<html>", &h);
-        if self.is_language_rtl(&interface_language) {
+        if self.site_matrix.is_language_rtl(&interface_language) {
             ret.replace("bootstrap.min.css", "bootstrap-rtl.min.css")
         } else {
             ret
@@ -283,116 +288,10 @@ impl AppState {
     }
 
     pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api, String> {
-        // TODO cache url and/or api object?
-        let url = self.get_server_url_for_wiki(&wiki)? + "/w/api.php";
-        match Api::new(&url).await {
-            Ok(api) => Ok(api),
-            Err(e) => Err(format!("{:?}", e)),
-        }
-    }
-
-    fn get_value_from_site_matrix_entry(
-        &self,
-        value: &str,
-        site: &Value,
-        key_match: &str,
-        key_return: &str,
-    ) -> Option<String> {
-        if site["closed"].as_str().is_some() {
-            return None;
-        }
-        if site["private"].as_str().is_some() {
-            return None;
-        }
-        match site[key_match].as_str() {
-            Some(site_url) => {
-                if value == site_url {
-                    site[key_return].as_str().map(|url| url.to_string())
-                } else {
-                    None
-                }
-            }
-            None => None,
-        }
-    }
-
-    fn get_wiki_for_server_url_from_site(&self, url: &str, site: &Value) -> Option<String> {
-        self.get_value_from_site_matrix_entry(url, site, "url", "dbname")
-    }
-
-    fn get_url_for_wiki_from_site(&self, wiki: &str, site: &Value) -> Option<String> {
-        self.get_value_from_site_matrix_entry(wiki, site, "dbname", "url")
-    }
-
-    pub fn is_language_rtl(&self, language: &str) -> bool {
-        self.site_matrix["sitematrix"]
-            .as_object()
-            .expect("AppState::get_wiki_for_server_url: sitematrix not an object")
-            .iter()
-            .any(
-                |(_id, data)| match (data["code"].as_str(), data["dir"].as_str()) {
-                    (Some(lang), Some("rtl")) => lang == language,
-                    _ => false,
-                },
-            )
-    }
-
-    pub fn get_wiki_for_server_url(&self, url: &str) -> Option<String> {
-        self.site_matrix["sitematrix"]
-            .as_object()
-            .expect("AppState::get_wiki_for_server_url: sitematrix not an object")
-            .iter()
-            .filter_map(|(id, data)| match id.as_str() {
-                "count" => None,
-                "specials" => data
-                    .as_array()
-                    .expect("AppState::get_wiki_for_server_url: 'specials' is not an array")
-                    .iter()
-                    .filter_map(|site| self.get_wiki_for_server_url_from_site(url, site))
-                    .next(),
-                _other => match data["site"].as_array() {
-                    Some(sites) => sites
-                        .iter()
-                        .filter_map(|site| self.get_wiki_for_server_url_from_site(url, site))
-                        .next(),
-                    None => None,
-                },
-            })
-            .next()
-    }
-
-    pub fn get_server_url_for_wiki(&self, wiki: &str) -> Result<String, String> {
-        match wiki.replace('_', "-").as_str() {
-            "be-taraskwiki" | "be-x-oldwiki" => {
-                return Ok("https://be-tarask.wikipedia.org".to_string())
-            }
-            _ => {}
-        }
-        self.site_matrix["sitematrix"]
-            .as_object()
-            .expect("AppState::get_server_url_for_wiki: sitematrix not an object")
-            .iter()
-            .filter_map(|(id, data)| match id.as_str() {
-                "count" => None,
-                "specials" => data
-                    .as_array()
-                    .expect("AppState::get_server_url_for_wiki: 'specials' is not an array")
-                    .iter()
-                    .filter_map(|site| self.get_url_for_wiki_from_site(wiki, site))
-                    .next(),
-                _other => match data["site"].as_array() {
-                    Some(sites) => sites
-                        .iter()
-                        .filter_map(|site| self.get_url_for_wiki_from_site(wiki, site))
-                        .next(),
-                    None => None,
-                },
-            })
-            .next()
-            .ok_or(format!(
-                "AppState::get_server_url_for_wiki: Cannot find server for wiki '{}'",
-                &wiki
-            ))
+        self.site_matrix
+            .get_api_for_wiki(&wiki)
+            .await
+            .map_err(|e| format!("{e}"))
     }
 
     pub async fn get_tool_db_connection(
@@ -534,19 +433,6 @@ impl AppState {
         }
     }
 
-    async fn load_site_matrix() -> Value {
-        let api = Api::new("https://www.wikidata.org/w/api.php")
-            .await
-            .expect("Can't talk to Wikidata API");
-        let params: HashMap<String, String> = vec![("action", "sitematrix")]
-            .par_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        api.get_query_api_json(&params)
-            .await
-            .expect("Can't run action=sitematrix on Wikidata API")
-    }
-
     pub fn try_shutdown(&self) {
         if !self.is_shutting_down() {
             return;
@@ -576,6 +462,10 @@ impl AppState {
         if let Ok(mut sd) = self.shutting_down.write() {
             *sd = true;
         }
+    }
+
+    pub fn site_matrix(&self) -> &SiteMatrix {
+        &self.site_matrix
     }
 }
 
@@ -614,11 +504,15 @@ mod tests {
     async fn test_get_wiki_for_server_url() {
         let state = get_state().await;
         assert_eq!(
-            state.get_wiki_for_server_url(&"https://am.wiktionary.org".to_string()),
+            state
+                .site_matrix
+                .get_wiki_for_server_url(&"https://am.wiktionary.org".to_string()),
             Some("amwiktionary".to_string())
         );
         assert_eq!(
-            state.get_wiki_for_server_url(&"https://outreach.wikimedia.org".to_string()),
+            state
+                .site_matrix
+                .get_wiki_for_server_url(&"https://outreach.wikimedia.org".to_string()),
             Some("outreachwiki".to_string())
         );
     }
@@ -640,14 +534,5 @@ mod tests {
                 .unwrap()
                 .1
         );
-    }
-
-    #[tokio::test]
-    async fn is_language_rtl() {
-        let state = get_state().await;
-        assert!(!state.is_language_rtl("en"));
-        assert!(state.is_language_rtl("ar"));
-        assert!(!state.is_language_rtl("de"));
-        assert!(state.is_language_rtl("he"));
     }
 }

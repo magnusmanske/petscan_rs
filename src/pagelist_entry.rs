@@ -115,24 +115,6 @@ impl FileUsage {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct PageCoordinates {
-    pub lat: f64,
-    pub lon: f64,
-}
-
-impl PageCoordinates {
-    pub fn new_from_lat_lon(s: &str) -> Option<Self> {
-        let parts: Vec<&str> = s.split(',').collect();
-        /* trunk-ignore(clippy/get_first) */
-        let lat = parts.get(0)?.parse::<f64>().ok()?;
-        let lon = parts.get(1)?.parse::<f64>().ok()?;
-        Some(Self { lat, lon })
-    }
-}
-
-//________________________________________________________________________________________________________________________
-
 pub type LinkCount = u32;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -178,7 +160,7 @@ pub struct PageListEntry {
     wikidata_label: Option<String>,
     wikidata_description: Option<String>,
     defaultsort: Option<String>,
-    coordinates: Option<PageCoordinates>,
+    coordinates: Option<wikimisc::lat_lon::LatLon>,
     file_info: Option<FileInfo>,
 }
 
@@ -229,13 +211,13 @@ impl PageListEntry {
         self.file_info = file_info_option
     }
 
-    pub fn get_coordinates(&self) -> Option<PageCoordinates> {
+    pub fn get_coordinates(&self) -> Option<wikimisc::lat_lon::LatLon> {
         self.coordinates
             .as_ref()
             .map(|coordinates| coordinates.to_owned())
     }
 
-    pub fn set_coordinates(&mut self, coordinates_option: Option<PageCoordinates>) {
+    pub fn set_coordinates(&mut self, coordinates_option: Option<wikimisc::lat_lon::LatLon>) {
         self.coordinates = coordinates_option
     }
 
@@ -537,28 +519,5 @@ mod tests {
                 .to_string(),
         );
         assert_eq!(fi.file_usage, vec![fu]);
-    }
-
-    #[test]
-    fn lat_lon() {
-        assert_eq!(
-            PageCoordinates::new_from_lat_lon(&"something".to_string()),
-            None
-        );
-        assert_eq!(
-            PageCoordinates::new_from_lat_lon(&"-0.1234".to_string()),
-            None
-        );
-        assert_eq!(
-            PageCoordinates::new_from_lat_lon(&"-0.1234,A".to_string()),
-            None
-        );
-        assert_eq!(
-            PageCoordinates::new_from_lat_lon(&"-0.1234,2.345".to_string()),
-            Some(PageCoordinates {
-                lat: -0.1234,
-                lon: 2.345
-            })
-        );
     }
 }

@@ -176,7 +176,11 @@ impl Render for RenderHTML {
         match image {
             Some(img) => {
                 let thumnail_size = "120px"; // TODO
-                let server_url = match params.state().get_server_url_for_wiki(params.wiki()) {
+                let server_url = match params
+                    .state()
+                    .site_matrix()
+                    .get_server_url_for_wiki(params.wiki())
+                {
                     Ok(url) => url,
                     _ => return String::new(),
                 };
@@ -325,7 +329,7 @@ impl RenderHTML {
         wikidata_description: &Option<String>,
         is_redlink: bool,
     ) -> String {
-        let server = match params.state().get_server_url_for_wiki(wiki) {
+        let server = match params.state().site_matrix().get_server_url_for_wiki(wiki) {
             Ok(url) => url,
             Err(_e) => return String::new(),
         };
