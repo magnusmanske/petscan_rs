@@ -490,8 +490,8 @@ impl WDfist {
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = Platform::prep_quote(chunk);
             sql.0 = format!("SELECT page_title FROM page WHERE page_namespace=0 AND page_is_redirect=0 AND page_title IN ({})",&sql.0) ;
-            if  wdf_only_items_without_p18 {sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=120 AND pl_title='P18')" ;}
-            sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=0 AND pl_title IN ('Q13406463','Q4167410'))" ; // No list/disambig
+            if  wdf_only_items_without_p18 {sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=120 AND lt_title='P18')" ;}
+            sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title IN ('Q13406463','Q4167410'))" ; // No list/disambig
             batches.push(sql);
         });
 

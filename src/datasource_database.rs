@@ -479,9 +479,9 @@ impl SourceDatabase {
             if !sql.1.is_empty() {
                 sql.0 += " ) OR ( ";
             }
-            sql.0 += "( SELECT p_to.page_id FROM page p_to,page p_from,pagelinks WHERE p_from.page_namespace=";
+            sql.0 += "( SELECT p_to.page_id FROM page p_to,page p_from,pagelinks,linktarget WHERE pl_target_id=lt_id AND p_from.page_namespace=";
             sql.0 += &nsgroup.0.to_string();
-            sql.0 += "  AND p_from.page_id=pl_from AND pl_namespace=p_to.page_namespace AND pl_title=p_to.page_title AND p_from.page_title" ;
+            sql.0 += "  AND p_from.page_id=pl_from AND lt_namespace=p_to.page_namespace AND lt_title=p_to.page_title AND p_from.page_title" ;
             self.sql_in(nsgroup.1,&mut sql);
             sql.0 += " )";
         });
@@ -496,9 +496,9 @@ impl SourceDatabase {
             if !sql.1.is_empty() {
                 sql.0 += " ) OR ( ";
             }
-            sql.0 += "( SELECT DISTINCT pl_from FROM pagelinks WHERE pl_namespace=";
+            sql.0 += "( SELECT DISTINCT pl_from FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND lt_namespace=";
             sql.0 += &nsgroup.0.to_string();
-            sql.0 += " AND pl_title";
+            sql.0 += " AND lt_title";
             self.sql_in(nsgroup.1, &mut sql);
             sql.0 += " )";
         });

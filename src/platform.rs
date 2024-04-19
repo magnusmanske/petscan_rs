@@ -544,14 +544,14 @@ impl Platform {
                 .to_sql_batches(PAGE_BATCH_SIZE/20)? // ???
                 .par_iter_mut()
                 .map(|sql_batch| {
-                    let mut sql = "SELECT pl_title,pl_namespace,(SELECT COUNT(*) FROM page p1 WHERE p1.page_title=pl0.pl_title AND p1.page_namespace=pl0.pl_namespace) AS cnt from page p0,pagelinks pl0 WHERE pl_from=p0.page_id AND ".to_string() ;
+                    let mut sql = "SELECT lt0.lt_title,lt0.lt_namespace,(SELECT COUNT(*) FROM page p1 WHERE p1.page_title=lt0.lt_title AND p1.page_namespace=lt0.lt_namespace) AS cnt from page p0,pagelinks pl0,linktarget lt0 WHERE pl0.pl_target_id=lt0.lt_id AND pl_from=p0.page_id AND ".to_string() ;
                     sql += &sql_batch.0 ;
-                    if ns0_only {sql += " AND pl_namespace=0" ;}
-                    else {sql += " AND pl_namespace>=0" ;}
+                    if ns0_only {sql += " AND lt0.lt_namespace=0" ;}
+                    else {sql += " AND lt0._namespace>=0" ;}
                     if remove_template_redlinks {
-                        sql += " AND NOT EXISTS (SELECT * FROM pagelinks pl1 WHERE pl1.pl_from_namespace=10 AND pl0.pl_namespace=pl1.pl_namespace AND pl0.pl_title=pl1.pl_title LIMIT 1)" ;
+                        sql += " AND NOT EXISTS (SELECT * FROM pagelinks pl1,linktarget lt1 WHERE pl1.pl_target_id=lt1.lt_id AND pl1.pl_from_namespace=10 AND lt0.lt_namespace=lt1.lt_namespace AND lt0.lt_title=lt1.lt_title LIMIT 1)" ;
                     }
-                    sql += " GROUP BY page_id,pl_namespace,pl_title" ;
+                    sql += " GROUP BY page_id,lt0.lt_namespace,lt_title" ;
                     sql += " HAVING cnt=0" ;
 
                     sql_batch.0 = sql ;
@@ -746,7 +746,7 @@ impl Platform {
                     if add_coordinates {sql += ",(SELECT concat(gt_lat,',',gt_lon) FROM geo_tags WHERE gt_primary=1 AND gt_globe='earth' AND gt_page_id=page_id LIMIT 1) AS coord" ;}
                     if add_defaultsort {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname='defaultsort' LIMIT 1) AS defaultsort" ;}
                     if add_disambiguation {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname='disambiguation' LIMIT 1) AS disambiguation" ;}
-                    if add_incoming_links {sql += ",(SELECT count(*) FROM pagelinks WHERE pl_namespace=page_namespace AND pl_title=page_title AND pl_from_namespace=0) AS incoming_links" ;}
+                    if add_incoming_links {sql += ",(SELECT count(*) FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND lt_namespace=page_namespace AND lt_title=page_title AND pl_from_namespace=0) AS incoming_links" ;}
                     if add_sitelinks {
                         if is_wikidata {
                             sql += ",(SELECT count(*) FROM wb_items_per_site WHERE page_namespace IN (0,120) AND ips_item_id=substr(page_title,2)) AS sitelinks" ;
@@ -1464,11 +1464,11 @@ impl Platform {
             .split_terminator(',')
             .filter_map(|s| match s.chars().next() {
                 Some('Q') => Some((
-                    "(SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=0 AND pl_title=?)".to_string(),
+                    "(SELECT * FROM pagelinks,linktarget WHERE pl_from=page_id AND lt_namespace=0 AND lt_title=?)".to_string(),
                     vec![s.into()],
                 )),
                 Some('P') => Some((
-                    "(SELECT * FROM pagelinks WHERE pl_from=page_id AND pl_namespace=120 AND pl_title=?)".to_string(),
+                    "(SELECT * FROM pagelinks,linktarget WHERE pl_from=page_id AND lt_namespace=120 AND lt_title=?)".to_string(),
                     vec![s.into()],
                 )),
                 _ => None,
