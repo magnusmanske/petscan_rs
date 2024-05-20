@@ -223,6 +223,10 @@ impl RenderJSON {
                         }
                     }
                     self.add_metadata(&mut o, entry, header);
+                    if let Some(q) = entry.get_wikidata_item() {
+                        o["q"] = json!(q);
+                        o["metadata"]["wikidata"] = json!(q);
+                    }
                     o
                 })
                 .collect();
