@@ -179,6 +179,7 @@ impl RenderJSON {
     ) -> Value {
         let mut ret = json!({
             "namespaces":{},
+            "wiki": platform.get_main_wiki(),
             "status":"OK",
             "start":0,
             "max":entries.len()+1,
