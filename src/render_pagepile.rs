@@ -2,6 +2,7 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::*;
 use crate::render::Render;
 use crate::render_params::RenderParams;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
 
@@ -15,7 +16,7 @@ impl Render for RenderPagePile {
         platform: &Platform,
         wiki: &str,
         entries: Vec<PageListEntry>,
-    ) -> Result<MyResponse, String> {
+    ) -> Result<MyResponse> {
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let url = "https://pagepile.toolforge.org/api.php";
         let data: String = entries
@@ -32,12 +33,12 @@ impl Render for RenderPagePile {
 
         let result = match api.query_raw(url, &params, "POST").await {
             Ok(r) => r,
-            Err(e) => return Err(format!("PagePile generation failed: {:?}", e)),
+            Err(e) => return Err(anyhow!("PagePile generation failed: {:?}", e)),
         };
         let json: serde_json::value::Value = match serde_json::from_str(&result) {
             Ok(j) => j,
             Err(e) => {
-                return Err(format!(
+                return Err(anyhow!(
                     "PagePile generation did not return valid JSON: {:?}",
                     e
                 ))
@@ -46,7 +47,7 @@ impl Render for RenderPagePile {
         let pagepile_id = match json["pile"]["id"].as_u64() {
             Some(id) => id,
             None => {
-                return Err(format!(
+                return Err(anyhow!(
                     "PagePile generation did not return a pagepile ID: {:?}",
                     json.clone()
                 ))

@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::platform::*;
 use crate::render::AUTOLIST_WIKIDATA;
+use anyhow::Result;
 use std::sync::Arc;
 use wikimisc::mediawiki::api::Api;
 
@@ -34,7 +35,7 @@ pub struct RenderParams {
 }
 
 impl RenderParams {
-    pub async fn new(platform: &Platform, wiki: &str) -> Result<Self, String> {
+    pub async fn new(platform: &Platform, wiki: &str) -> Result<Self> {
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let mut ret = Self {
             wiki: wiki.to_string(),

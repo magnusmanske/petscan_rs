@@ -21,6 +21,7 @@ pub mod datasource_sparql;
 pub mod datasource_wikidata;
 pub mod form_parameters;
 pub mod pagelist;
+pub mod pagelist_disk;
 pub mod pagelist_entry;
 pub mod platform;
 pub mod render;

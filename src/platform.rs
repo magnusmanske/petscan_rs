@@ -10,6 +10,7 @@ use crate::datasource_sparql::SourceSparql;
 use crate::datasource_wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::*;
+use crate::pagelist_disk::PageListDisk;
 use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, PageListSort, TriState};
 use crate::render::*;
 use crate::render_html::RenderHTML;
@@ -20,6 +21,7 @@ use crate::render_plaintext::RenderPlainText;
 use crate::render_tsv::RenderTSV;
 use crate::render_wikitext::RenderWiki;
 use crate::wdfist::*;
+use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use mysql_async as my;
 use mysql_async::from_row;
@@ -133,18 +135,18 @@ impl Platform {
         }
     }
 
-    pub fn warnings(&self) -> Result<Vec<String>, String> {
+    pub fn warnings(&self) -> Result<Vec<String>> {
         Ok(self
             .warnings
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{:?}", e))?
             .clone())
     }
 
-    pub fn warn(&self, s: String) -> Result<(), String> {
+    pub fn warn(&self, s: String) -> Result<()> {
         self.warnings
             .write()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{:?}", e))?
             .push(s);
         Ok(())
     }
@@ -214,7 +216,7 @@ impl Platform {
     }
 
     #[instrument(skip_all, err(level = tracing::Level::INFO))]
-    pub async fn run(&mut self) -> Result<(), String> {
+    pub async fn run(&mut self) -> Result<()> {
         Platform::profile("begin run", None);
         let start_time = SystemTime::now();
         self.output_redlinks = self.has_param("show_redlinks");
@@ -264,25 +266,22 @@ impl Platform {
             futures.push(s_labels.run(self));
         }
         if futures.is_empty() {
-            return Err("No possible data source found in parameters".to_string());
+            return Err(anyhow!("No possible data source found in parameters"));
         }
 
         Platform::profile("begin futures 1", None);
 
         let mut tmp_results = join_all(futures).await;
 
-        let mut results: HashMap<String, PageList> = HashMap::new();
+        let mut results: HashMap<String, PageListDisk> = HashMap::new();
         let mut names = available_sources.clone();
         while !tmp_results.is_empty() {
             let result = tmp_results.remove(0);
             if names.is_empty() {
-                panic!("Platform::run names is empty");
+                return Err(anyhow!("Platform::run names is empty"));
             }
             let name = names.remove(0);
             results.insert(name, result?);
-            // if let Ok(r) = result {
-            //     results.insert(name,r);
-            // }
         }
         drop(tmp_results);
 
@@ -317,14 +316,13 @@ impl Platform {
                         .convert_to_wiki("wikidatawiki", self)
                         .await
                         .map_err(|e| {
-                            format!("Failed to convert result to Wikidata for WDfist: {}", e)
+                            anyhow!("Failed to convert result to Wikidata for WDfist: {}", e)
                         })?;
                 }
-                None => return Err("No result set for WDfist".to_string()),
+                None => return Err(anyhow!("No result set for WDfist")),
             }
-            //self.result = Some(pagelist);
-            let mut wdfist = WDfist::new(self, &self.result)
-                .ok_or_else(|| "Cannot create WDfist".to_string())?;
+            let mut wdfist =
+                WDfist::new(self, &self.result).ok_or_else(|| anyhow!("Cannot create WDfist"))?;
             self.result = None; // Safe space
             self.wdfist_result = Some(wdfist.run().await?);
         }
@@ -339,7 +337,7 @@ impl Platform {
         debug!(num, "{}", label);
     }
 
-    async fn post_process_result(&self, available_sources: &[String]) -> Result<(), String> {
+    async fn post_process_result(&self, available_sources: &[String]) -> Result<()> {
         Platform::profile("post_process_result begin", None);
         let result = match self.result.as_ref() {
             Some(res) => res,
@@ -408,7 +406,7 @@ impl Platform {
         self.state.clone()
     }
 
-    async fn convert_to_common_wiki(&self, result: &PageList) -> Result<(), String> {
+    async fn convert_to_common_wiki(&self, result: &PageList) -> Result<()> {
         // Find best wiki to convert to
         match self.get_param_default("common_wiki", "auto").as_str() {
             "auto" => {}
@@ -416,7 +414,7 @@ impl Platform {
                 result
                     .convert_to_wiki(
                         self.wiki_by_source.get("categories").ok_or_else(|| {
-                            "categories wiki requested as output, but not set".to_string()
+                            anyhow!("categories wiki requested as output, but not set")
                         })?,
                         self,
                     )
@@ -426,7 +424,7 @@ impl Platform {
                 result
                     .convert_to_wiki(
                         self.wiki_by_source.get("pagepile").ok_or_else(|| {
-                            "pagepile wiki requested as output, but not set".to_string()
+                            anyhow!("pagepile wiki requested as output, but not set")
                         })?,
                         self,
                     )
@@ -441,7 +439,7 @@ impl Platform {
                             .map(|s| s.to_string())
                             .or_else(|| self.get_param("common_wiki_other"))
                             .ok_or_else(|| {
-                                "manual wiki requested as output, but not set".to_string()
+                                anyhow!("manual wiki requested as output, but not set")
                             })?,
                         self,
                     )
@@ -452,14 +450,13 @@ impl Platform {
                 result
                     .convert_to_wiki(
                         &self.get_param("common_wiki_other").ok_or_else(|| {
-                            "Other wiki for output expected, but not given in text field"
-                                .to_string()
+                            anyhow!("Other wiki for output expected, but not given in text field")
                         })?,
                         self,
                     )
                     .await?
             }
-            unknown => return Err(format!("Unknown output wiki type '{}'", &unknown)),
+            unknown => return Err(anyhow!("Unknown output wiki type '{unknown}'")),
         }
         Ok(())
     }
@@ -476,7 +473,7 @@ impl Platform {
 
     // Prepares for JS "creator" mode
     // Chackes which labels already exist on Wikidata
-    async fn process_creator(&self, result: &PageList) -> Result<(), String> {
+    async fn process_creator(&self, result: &PageList) -> Result<()> {
         if result.is_empty()? || result.is_wikidata() {
             return Ok(());
         }
@@ -514,26 +511,24 @@ impl Platform {
         for sql in batches {
             let rows = conn
                 .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-                .await
-                .map_err(|e| format!("{:?}", e))?
+                .await?
                 .map_and_drop(from_row::<Vec<u8>>)
-                .await
-                .map_err(|e| format!("{:?}", e))?;
+                .await?;
 
             let mut el = match self.existing_labels.write() {
                 Ok(el) => el,
-                Err(e) => return Err(format!("{:?}", e)),
+                Err(e) => return Err(anyhow!("{:?}", e)),
             };
             for wbx_text in rows {
                 let label = String::from_utf8_lossy(&wbx_text);
                 el.insert(label.to_string());
             }
         }
-        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
+        conn.disconnect().await?;
         Ok(())
     }
 
-    async fn process_redlinks(&self, result: &PageList) -> Result<(), String> {
+    async fn process_redlinks(&self, result: &PageList) -> Result<()> {
         if result.is_empty()? || !self.do_output_redlinks() || result.is_wikidata() {
             return Ok(());
         }
@@ -564,20 +559,16 @@ impl Platform {
 
         let wiki = match result.wiki()? {
             Some(wiki) => wiki.to_owned(),
-            None => return Err("Platform::process_redlinks: no wiki set in result".to_string()),
+            None => return Err(anyhow!("Platform::process_redlinks: no wiki set in result")),
         };
 
-        let mut conn = self
-            .state
-            .get_wiki_db_connection(&wiki)
-            .await
-            .map_err(|e| format!("{:?}", e))?;
+        let mut conn = self.state.get_wiki_db_connection(&wiki).await?;
 
         for sql in batches {
             self.process_redlinks_batch(&mut conn, sql, &mut redlink_counter)
                 .await?;
         }
-        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
+        conn.disconnect().await?;
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
@@ -603,14 +594,12 @@ impl Platform {
         conn: &mut mysql_async::Conn,
         sql: SQLtuple,
         redlink_counter: &mut HashMap<Title, LinkCount>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-            .await
-            .map_err(|e| format!("{:?}", e))?
+            .await?
             .map_and_drop(from_row::<(Vec<u8>, i64, usize)>)
-            .await
-            .map_err(|e| format!("{:?}", e))?;
+            .await?;
 
         for (page_title, namespace_id, _count) in rows {
             let page_title = String::from_utf8_lossy(&page_title).to_string();
@@ -620,7 +609,7 @@ impl Platform {
         Ok(())
     }
 
-    async fn process_namespace_conversion(&self, result: &PageList) -> Result<(), String> {
+    async fn process_namespace_conversion(&self, result: &PageList) -> Result<()> {
         let namespace_conversion = self.get_param_default("namespace_conversion", "keep");
         let add = match namespace_conversion.as_str() {
             "topic" => 0,
@@ -631,7 +620,7 @@ impl Platform {
         let tmp = result
             .entries()
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{:?}", e))?
             .par_iter()
             .map(|entry| {
                 let mut nsid = entry.title().namespace_id();
@@ -641,11 +630,11 @@ impl Platform {
                 PageListEntry::new(new_title)
             })
             .collect();
-        *(result.entries().write().map_err(|e| format!("{:?}", e))?) = tmp;
+        *(result.entries().write().map_err(|e| anyhow!("{:?}", e))?) = tmp;
         Ok(())
     }
 
-    async fn process_subpages(&self, result: &PageList) -> Result<(), String> {
+    async fn process_subpages(&self, result: &PageList) -> Result<()> {
         let add_subpages = self.has_param("add_subpages");
         let subpage_filter = self.get_param_default("subpage_filter", "either");
         if !add_subpages && subpage_filter != "subpages" && subpage_filter != "no_subpages" {
@@ -656,7 +645,7 @@ impl Platform {
             let title_ns: Vec<(String, NamespaceID)> = result
                 .entries()
                 .read()
-                .map_err(|e| format!("{:?}", e))?
+                .map_err(|e| anyhow!("{:?}", e))?
                 .par_iter()
                 .map(|entry| {
                     (
@@ -668,7 +657,7 @@ impl Platform {
 
             let wiki = match result.wiki()? {
                 Some(wiki) => wiki.to_owned(),
-                None => return Err("Platform::process_redlinks: no wiki set in result".to_string()),
+                None => return Err(anyhow!("Platform::process_redlinks: no wiki set in result")),
             };
             let mut conn = self.state.get_wiki_db_connection(&wiki).await?;
 
@@ -681,11 +670,9 @@ impl Platform {
 
                 let rows = conn
                     .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-                    .await
-                    .map_err(|e| format!("{:?}", e))?
+                    .await?
                     .map_and_drop(from_row::<(Vec<u8>, i64)>)
-                    .await
-                    .map_err(|e| format!("{:?}", e))?;
+                    .await?;
 
                 for (page_title, page_namespace) in rows {
                     let page_title = String::from_utf8_lossy(&page_title);
@@ -694,7 +681,7 @@ impl Platform {
                         .unwrap_or(());
                 }
             }
-            conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
+            conn.disconnect().await.map_err(|e| anyhow!("{:?}", e))?;
             // TODO if new pages were added, they should get some of the post_process_result treatment as well
         }
 
@@ -716,9 +703,9 @@ impl Platform {
         Ok(())
     }
 
-    async fn process_pages(&self, result: &PageList) -> Result<(), String> {
+    async fn process_pages(&self, result: &PageList) -> Result<()> {
         let is_kml = self.get_param_blank("format") == "kml";
-        let is_wikidata = result.wiki() == Ok(Some("wikidatawiki".to_string()));
+        let is_wikidata = result.wiki()? == Some("wikidatawiki".to_string());
         let add_coordinates = self.has_param("add_coordinates") || is_kml;
         let add_image = self.has_param("add_image") || is_kml;
         let add_defaultsort =
@@ -833,11 +820,13 @@ impl Platform {
         Ok(())
     }
 
-    async fn file_usage(&self, result: &PageList, file_usage_data_ns0: bool) -> Result<(), String> {
+    async fn file_usage(&self, result: &PageList, file_usage_data_ns0: bool) -> Result<()> {
         let mut batch_size = PAGE_BATCH_SIZE;
         loop {
             if batch_size == 0 {
-                return Err("file_usage: Too much file usage to report back from MySQL".into());
+                return Err(anyhow!(
+                    "file_usage: Too much file usage to report back from MySQL"
+                ));
             }
             let batches: Vec<SQLtuple> = result
                 .to_sql_batches_namespace(batch_size,6)?
@@ -863,7 +852,7 @@ impl Platform {
             let batch_results = match result.run_batch_queries(&self.state(), batches).await {
                 Ok(res) => res,
                 Err(e) => {
-                    if e.contains("packet too large") {
+                    if e.to_string().contains("packet too large") {
                         // Happens for heavily used files, try again with half batch size
                         batch_size = std::cmp::min(batch_size, result.len().unwrap()) / 2;
                         continue;
@@ -892,7 +881,7 @@ impl Platform {
         }
     }
 
-    async fn process_files(&self, result: &PageList) -> Result<(), String> {
+    async fn process_files(&self, result: &PageList) -> Result<()> {
         let giu = self.has_param("giu");
         let file_data = self.has_param("ext_image_data")
             || self.get_param("sortby") == Some("filesize".to_string())
@@ -982,7 +971,7 @@ impl Platform {
         Ok(())
     }
 
-    async fn annotate_with_wikidata_item(&self, result: &PageList) -> Result<(), String> {
+    async fn annotate_with_wikidata_item(&self, result: &PageList) -> Result<()> {
         if result.is_wikidata() {
             return Ok(());
         }
@@ -997,7 +986,7 @@ impl Platform {
         let titles: Vec<String> = result
             .entries()
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .par_iter()
             .filter_map(|entry| entry.title().full_pretty(&api))
             .collect();
@@ -1024,19 +1013,13 @@ impl Platform {
 
         for sql in batches {
             // Run query
-            let mut conn = self
-                .state
-                .get_wiki_db_connection("wikidatawiki")
-                .await
-                .map_err(|e| format!("{:?}", e))?;
+            let mut conn = self.state.get_wiki_db_connection("wikidatawiki").await?;
             let mut result = conn
                 .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-                .await
-                .map_err(|e| format!("{:?}", e))?
+                .await?
                 .collect_and_drop()
-                .await
-                .map_err(|e| format!("{:?}", e))?;
-            conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
+                .await?;
+            conn.disconnect().await?;
             rows.lock().await.append(&mut result);
         }
 
@@ -1106,7 +1089,7 @@ impl Platform {
     }
 
     /// Filters on whether a page has a Wikidata item, depending on the "wikidata_item"
-    async fn process_by_wikidata_item(&self, result: &PageList) -> Result<(), String> {
+    async fn process_by_wikidata_item(&self, result: &PageList) -> Result<()> {
         if result.is_wikidata() {
             return Ok(());
         }
@@ -1125,18 +1108,22 @@ impl Platform {
     }
 
     /// Adds page properties that might be missing if none of the original sources was "categories"
-    async fn process_missing_database_filters(&self, result: &PageList) -> Result<(), String> {
+    async fn process_missing_database_filters(&self, result: &PageList) -> Result<()> {
         let mut params = SourceDatabaseParameters::db_params(self).await;
         params.set_wiki(Some(result.wiki()?.ok_or_else(|| {
-            "Platform::process_missing_database_filters: result has no wiki".to_string()
+            anyhow!("Platform::process_missing_database_filters: result has no wiki".to_string())
         })?));
         let mut db = SourceDatabase::new(params);
-        let new_result = db.get_pages(&self.state, Some(result)).await?;
+        let result_disk = result.to_pagelist_disk()?;
+        let new_result = db
+            .get_pages(&self.state, Some(&result_disk))
+            .await?
+            .to_pagelist()?;
         result.set_from(new_result)?;
         Ok(())
     }
 
-    async fn process_labels_old(&self, result: &PageList) -> Result<(), String> {
+    async fn process_labels_old(&self, result: &PageList) -> Result<()> {
         let mut sql = self.get_label_sql();
         if sql.1.is_empty() {
             return Ok(());
@@ -1283,7 +1270,7 @@ impl Platform {
     }
 
     /// Using new wbt_item_terms
-    async fn process_labels_new(&self, result: &PageList) -> Result<(), String> {
+    async fn process_labels_new(&self, result: &PageList) -> Result<()> {
         if self.get_label_sql_new(&0).is_none() {
             return Ok(());
         }
@@ -1329,7 +1316,7 @@ impl Platform {
         Ok(())
     }
 
-    async fn process_labels(&self, result: &PageList) -> Result<(), String> {
+    async fn process_labels(&self, result: &PageList) -> Result<()> {
         if false {
             self.process_labels_old(result).await
         } else {
@@ -1337,7 +1324,7 @@ impl Platform {
         }
     }
 
-    async fn process_sitelinks(&self, result: &PageList) -> Result<(), String> {
+    async fn process_sitelinks(&self, result: &PageList) -> Result<()> {
         if result.is_empty()? {
             return Ok(());
         }
@@ -1437,7 +1424,7 @@ impl Platform {
         Ok(())
     }
 
-    async fn filter_wikidata(&self, result: &PageList) -> Result<(), String> {
+    async fn filter_wikidata(&self, result: &PageList) -> Result<()> {
         if result.is_empty()? {
             return Ok(());
         }
@@ -1580,7 +1567,7 @@ impl Platform {
         }
     }
 
-    pub async fn get_response(&self) -> Result<MyResponse, String> {
+    pub async fn get_response(&self) -> Result<MyResponse> {
         // Shortcut: WDFIST
         match &self.wdfist_result {
             Some(j) => {
@@ -1593,11 +1580,11 @@ impl Platform {
 
         let result = match &self.result {
             Some(result) => result,
-            None => return Err("Platform::get_response: No result".to_string()),
+            None => return Err(anyhow!("Platform::get_response: No result")),
         };
         let wiki = match result.wiki()? {
             Some(wiki) => wiki,
-            None => return Err("Platform::get_response: No wiki in result".to_string()),
+            None => return Err(anyhow!("Platform::get_response: No wiki in result")),
         };
 
         let mut sortby = self.get_param_blank("sortby");
@@ -1906,9 +1893,7 @@ impl Platform {
         }
     }
 
-    fn serialize_combine_results(
-        combination: &Combination,
-    ) -> Result<Vec<CombinationSequential>, String> {
+    fn serialize_combine_results(combination: &Combination) -> Result<Vec<CombinationSequential>> {
         match combination {
             Combination::Source(s) => Ok(vec![CombinationSequential::Source(s.to_string())]),
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
@@ -1924,10 +1909,10 @@ impl Platform {
             },
             Combination::Intersection((a, b)) => match (a.as_ref(), b.as_ref()) {
                 (Combination::None, _c) => {
-                    Err("Intersection with Combination::None found".to_string())
+                    Err(anyhow!("Intersection with Combination::None found"))
                 }
                 (_c, Combination::None) => {
-                    Err("Intersection with Combination::None found".to_string())
+                    Err(anyhow!("Intersection with Combination::None found"))
                 }
                 (c, d) => {
                     let mut ret = vec![];
@@ -1938,7 +1923,7 @@ impl Platform {
                 }
             },
             Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => Err("Not with Combination::None found".to_string()),
+                (Combination::None, _c) => Err(anyhow!("Not with Combination::None found")),
                 (c, Combination::None) => Self::serialize_combine_results(c),
                 (c, d) => {
                     let mut ret = vec![];
@@ -1948,71 +1933,72 @@ impl Platform {
                     Ok(ret)
                 }
             },
-            Combination::None => Err("Combination::None found".to_string()),
+            Combination::None => Err(anyhow!("Combination::None found")),
         }
     }
 
     async fn combine_results(
         &self,
-        results: &mut HashMap<String, PageList>,
+        results: &mut HashMap<String, PageListDisk>,
         combination: Vec<CombinationSequential>,
-    ) -> Result<PageList, String> {
-        let mut registers: Vec<PageList> = vec![];
+    ) -> Result<PageList> {
+        let mut registers: Vec<PageListDisk> = vec![];
         for command in combination {
             match command {
                 CombinationSequential::Source(source_key) => match results.remove(&source_key) {
                     Some(source) => {
                         registers.push(source);
                     }
-                    None => return Err(format!("No result for source {}", &source_key)),
+                    None => return Err(anyhow!("No result for source {}", &source_key)),
                 },
                 CombinationSequential::Union => {
                     if registers.len() < 2 {
-                        return Err("combine_results: Not enough registers for Union".to_string());
+                        return Err(anyhow!("combine_results: Not enough registers for Union"));
                     }
                     let r2 = registers.pop().ok_or_else(|| {
-                        "combine_results: CombinationSequential::Union r1".to_string()
+                        anyhow!("combine_results: CombinationSequential::Union r1")
                     })?;
                     let r1 = registers.pop().ok_or_else(|| {
-                        "combine_results: CombinationSequential::Union r2".to_string()
+                        anyhow!("combine_results: CombinationSequential::Union r2")
                     })?;
                     r1.union(&r2, Some(self)).await?;
                     registers.push(r1)
                 }
                 CombinationSequential::Intersection => {
                     if registers.len() < 2 {
-                        return Err("combine_results: Not enough registers for Union".to_string());
+                        return Err(anyhow!("combine_results: Not enough registers for Union"));
                     }
                     let r2 = registers.pop().ok_or_else(|| {
-                        "combine_results: CombinationSequential::Intersection r1".to_string()
+                        anyhow!("combine_results: CombinationSequential::Intersection r1")
                     })?;
                     let r1 = registers.pop().ok_or_else(|| {
-                        "combine_results: CombinationSequential::Intersection r2".to_string()
+                        anyhow!("combine_results: CombinationSequential::Intersection r2")
                     })?;
                     r1.intersection(&r2, Some(self)).await?;
                     registers.push(r1)
                 }
                 CombinationSequential::Not => {
                     if registers.len() < 2 {
-                        return Err("combine_results: Not enough registers for Union".to_string());
+                        return Err(anyhow!("combine_results: Not enough registers for Union"));
                     }
-                    let r2 = registers.pop().ok_or_else(|| {
-                        "combine_results: CombinationSequential::Not r1".to_string()
-                    })?;
-                    let r1 = registers.pop().ok_or_else(|| {
-                        "combine_results: CombinationSequential::Not r2".to_string()
-                    })?;
+                    let r2 = registers
+                        .pop()
+                        .ok_or_else(|| anyhow!("combine_results: CombinationSequential::Not r1"))?;
+                    let r1 = registers
+                        .pop()
+                        .ok_or_else(|| anyhow!("combine_results: CombinationSequential::Not r2"))?;
                     r1.difference(&r2, Some(self)).await?;
                     registers.push(r1)
                 }
             }
         }
         if registers.len() == 1 {
-            return registers
+            let ret = registers
                 .pop()
-                .ok_or_else(|| "combine_results registers.len()".to_string());
+                .ok_or_else(|| anyhow!("combine_results registers.len()"))?;
+            return ret.to_pagelist();
         }
-        Err(format!("combine_results:{} registers set", registers.len()))
+        Err(anyhow!("combine_results:{} registers set", registers.len()))
     }
 
     pub fn result(&self) -> &Option<PageList> {
@@ -2055,7 +2041,7 @@ mod tests {
                               */
     }
 
-    async fn run_psid_ext(psid: usize, addendum: &str) -> Result<Platform, String> {
+    async fn run_psid_ext(psid: usize, addendum: &str) -> Result<Platform> {
         let state = get_state().await;
         let form_parameters = match state.get_query_from_psid(&format!("{}", &psid)).await {
             Ok(psid_query) => {
@@ -2085,7 +2071,7 @@ mod tests {
 
         let result = platform.result.unwrap();
         let some_wiki = result.wiki();
-        assert_eq!(some_wiki, Ok(Some(wiki.to_string())));
+        assert_eq!(some_wiki.unwrap(), Some(wiki.to_string()));
 
         // Sort/crop results
         let mut entries = result

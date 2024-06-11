@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -43,7 +44,7 @@ impl PageListSort {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct FileInfo {
     pub file_usage: Vec<FileUsage>,
     pub img_size: Option<usize>,
@@ -76,7 +77,7 @@ impl FileInfo {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileUsage {
     title: Title,
     wiki: String,
@@ -117,7 +118,7 @@ impl FileUsage {
 
 pub type LinkCount = u32;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TriState {
     Yes,
     No,
@@ -144,7 +145,7 @@ impl TriState {
 
 //________________________________________________________________________________________________________________________
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageListEntry {
     title: Title,
     disambiguation: TriState,
@@ -199,6 +200,10 @@ impl PageListEntry {
             wikidata_description: None,
             redlink_count: None,
         }
+    }
+
+    pub fn hash_key(&self) -> String {
+        format!("{}:{}", self.title.namespace_id(), self.title.pretty())
     }
 
     pub fn get_file_info(&self) -> Option<FileInfo> {

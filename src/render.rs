@@ -1,6 +1,7 @@
 use crate::pagelist_entry::{LinkCount, PageListEntry};
 use crate::platform::*;
 use crate::render_params::RenderParams;
+use anyhow::Result;
 use async_trait::async_trait;
 
 pub static AUTOLIST_WIKIDATA: &str = "www.wikidata.org";
@@ -13,7 +14,7 @@ pub trait Render {
         _platform: &Platform,
         _wiki: &str,
         _pages: Vec<PageListEntry>,
-    ) -> Result<MyResponse, String>;
+    ) -> Result<MyResponse>;
 
     fn file_data_keys(&self) -> Vec<&str> {
         vec![

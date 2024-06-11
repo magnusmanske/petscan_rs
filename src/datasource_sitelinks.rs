@@ -1,7 +1,8 @@
 use crate::datasource::{DataSource, SQLtuple};
-use crate::pagelist::*;
+use crate::pagelist_disk::PageListDisk;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
@@ -23,10 +24,10 @@ impl DataSource for SourceSitelinks {
         platform.has_param("sitelinks_yes") || platform.has_param("sitelinks_any")
     }
 
-    async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+    async fn run(&mut self, platform: &Platform) -> Result<PageListDisk> {
         let sql = self.generate_sql_query(platform)?;
         let rows = self.get_result_rows(platform, sql).await?;
-        let ret = PageList::new_from_wiki_with_capacity(&self.main_wiki, rows.len());
+        let ret = PageListDisk::new_from_wiki(&self.main_wiki);
         if self.use_min_max {
             ret.set_has_sitelink_counts(true)?;
         }
@@ -63,7 +64,7 @@ impl SourceSitelinks {
         Some(ret)
     }
 
-    fn generate_sql_query(&mut self, platform: &Platform) -> Result<SQLtuple, String> {
+    fn generate_sql_query(&mut self, platform: &Platform) -> Result<SQLtuple> {
         let sitelinks_yes = platform.get_param_as_vec("sitelinks_yes", "\n");
         let sitelinks_any = platform.get_param_as_vec("sitelinks_any", "\n");
         let sitelinks_no = platform.get_param_as_vec("sitelinks_no", "\n");
@@ -77,7 +78,7 @@ impl SourceSitelinks {
         yes_any.extend(&sitelinks_any);
         self.main_wiki = match yes_any.first() {
             Some(wiki) => wiki.to_string(),
-            None => return Err("No yes/any sitelink found in SourceSitelinks::run".to_string()),
+            None => return Err(anyhow!("No yes/any sitelink found in SourceSitelinks::run")),
         };
 
         let sitelinks_any: Vec<String> = sitelinks_any
@@ -140,19 +141,17 @@ impl SourceSitelinks {
         &self,
         platform: &Platform,
         sql: SQLtuple,
-    ) -> Result<Vec<(Vec<u8>, u32)>, String> {
+    ) -> Result<Vec<(Vec<u8>, u32)>> {
         let mut conn = platform
             .state()
             .get_wiki_db_connection(&self.main_wiki)
             .await?;
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-            .await
-            .map_err(|e| format!("{:?}", e))?
+            .await?
             .map_and_drop(from_row::<(Vec<u8>, u32)>)
-            .await
-            .map_err(|e| format!("{:?}", e))?;
-        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
+            .await?;
+        conn.disconnect().await?;
         Ok(rows)
     }
 }

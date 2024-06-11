@@ -3,6 +3,7 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::*;
 use crate::render::Render;
 use crate::render_params::RenderParams;
+use anyhow::Result;
 use async_trait::async_trait;
 
 /// Renders KML
@@ -15,7 +16,7 @@ impl Render for RenderKML {
         platform: &Platform,
         wiki: &str,
         entries: Vec<PageListEntry>,
-    ) -> Result<MyResponse, String> {
+    ) -> Result<MyResponse> {
         let params = RenderParams::new(platform, wiki).await?;
         let server = match params.state().site_matrix().get_server_url_for_wiki(wiki) {
             Ok(url) => url,

@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::form_parameters::FormParameters;
 use crate::platform::{ContentType, MyResponse, Platform};
+use anyhow::Result;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Bytes};
 use hyper::server::conn::http1;
@@ -31,7 +32,7 @@ impl WebServer {
             petscan_config: Arc::new(petscan_config),
         }
     }
-    pub async fn run(&self) -> Result<(), String> {
+    pub async fn run(&self) -> Result<()> {
         let listener = self.start_webserver().await;
 
         // We start a loop to continuously accept incoming connections
@@ -173,11 +174,13 @@ impl WebServer {
                     Ok(psid_query) => {
                         let psid_params = match FormParameters::outcome_from_query(&psid_query) {
                             Ok(pp) => pp,
-                            Err(e) => return self.app_state.render_error(e, &form_parameters),
+                            Err(e) => {
+                                return self.app_state.render_error(e.to_string(), &form_parameters)
+                            }
                         };
                         form_parameters.rebase(&psid_params);
                     }
-                    Err(e) => return self.app_state.render_error(e, &form_parameters),
+                    Err(e) => return self.app_state.render_error(e.to_string(), &form_parameters),
                 }
             }
         }
@@ -238,7 +241,9 @@ impl WebServer {
             Ok(_) => {}
             Err(error) => {
                 drop(platform);
-                return self.app_state.render_error(error, &form_parameters);
+                return self
+                    .app_state
+                    .render_error(error.to_string(), &form_parameters);
             }
         }
 
@@ -261,7 +266,7 @@ impl WebServer {
                     {
                         // Ignore error
                     }
-                    return self.app_state.render_error(e, &form_parameters);
+                    return self.app_state.render_error(e.to_string(), &form_parameters);
                 }
             },
         };
@@ -270,7 +275,9 @@ impl WebServer {
         // Render response
         let response = match platform.get_response().await {
             Ok(response) => response,
-            Err(error) => self.app_state.render_error(error, &form_parameters),
+            Err(error) => self
+                .app_state
+                .render_error(error.to_string(), &form_parameters),
         };
         drop(platform);
         response

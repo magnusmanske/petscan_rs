@@ -1,6 +1,7 @@
 use crate::datasource::DataSource;
-use crate::pagelist::*;
+use crate::pagelist_disk::PageListDisk;
 use crate::platform::Platform;
+use anyhow::Result;
 use async_trait::async_trait;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
@@ -18,7 +19,7 @@ impl DataSource for SourceLabels {
         platform.has_param("labels_yes") || platform.has_param("labels_any")
     }
 
-    async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+    async fn run(&mut self, platform: &Platform) -> Result<PageListDisk> {
         let sql = platform.get_label_sql();
         let mut conn = platform
             .state()
@@ -26,13 +27,11 @@ impl DataSource for SourceLabels {
             .await?;
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-            .await
-            .map_err(|e| format!("{:?}", e))?
+            .await?
             .map_and_drop(from_row::<(Vec<u8>,)>)
-            .await
-            .map_err(|e| format!("{:?}", e))?;
-        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
-        let ret = PageList::new_from_wiki_with_capacity("wikidatawiki", rows.len());
+            .await?;
+        conn.disconnect().await?;
+        let ret = PageListDisk::new_from_wiki("wikidatawiki");
         rows.iter()
             .map(|row| String::from_utf8_lossy(&row.0))
             .filter_map(|item| Platform::entry_from_entity(&item))

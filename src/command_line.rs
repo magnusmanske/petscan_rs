@@ -1,13 +1,14 @@
 use crate::app_state::AppState;
 use crate::form_parameters::FormParameters;
 use crate::platform::Platform;
+use anyhow::Result;
 use serde_json::Value;
 use std::env;
 use std::fs::File;
 use std::sync::Arc;
 use url::form_urlencoded;
 
-pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<(), String> {
+pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<()> {
     let mut args = std::env::args();
     let _ = args.next(); // the actual command
     let argument: String = args.next().unwrap();
@@ -49,7 +50,7 @@ pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<(), String>
 
     let response = match platform.get_response().await {
         Ok(response) => response,
-        Err(error) => app_state.render_error(error, &form_parameters),
+        Err(error) => app_state.render_error(error.to_string(), &form_parameters),
     };
     println!("{}", json!(response.s).as_str().unwrap());
 

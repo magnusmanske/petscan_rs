@@ -2,6 +2,7 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::*;
 use crate::render::Render;
 use crate::render_params::RenderParams;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -15,7 +16,7 @@ impl Render for RenderJSON {
         platform: &Platform,
         wiki: &str,
         entries: Vec<PageListEntry>,
-    ) -> Result<MyResponse, String> {
+    ) -> Result<MyResponse> {
         let mut params = RenderParams::new(platform, wiki).await?;
         let mut content_type = ContentType::JSON;
         if params.json_pretty() {
@@ -79,7 +80,7 @@ impl Render for RenderJSON {
         };
         match output {
             Ok(o) => out += &o,
-            Err(e) => return Err(format!("JSON encoding failed: {:?}", e)),
+            Err(e) => return Err(anyhow!("JSON encoding failed: {e}")),
         };
 
         if !params.json_callback().is_empty() {

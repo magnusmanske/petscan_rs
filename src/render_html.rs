@@ -3,6 +3,7 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::*;
 use crate::render::{Render, AUTOLIST_COMMONS, AUTOLIST_WIKIDATA};
 use crate::render_params::RenderParams;
+use anyhow::Result;
 use async_trait::async_trait;
 use htmlescape::encode_minimal;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,7 +21,7 @@ impl Render for RenderHTML {
         platform: &Platform,
         wiki: &str,
         mut entries: Vec<PageListEntry>,
-    ) -> Result<MyResponse, String> {
+    ) -> Result<MyResponse> {
         let mut params = RenderParams::new(platform, wiki).await?;
         let mut rows = vec![];
 
