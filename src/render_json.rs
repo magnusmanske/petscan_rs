@@ -139,7 +139,7 @@ impl RenderJSON {
                     "title":entry.title().with_underscores(),
                     "id":entry.page_id.unwrap_or(0),
                     "namespace":entry.title().namespace_id(),
-                    "len":entry.page_bytes.unwrap_or(0),
+                    "len":entry.page_bytes().unwrap_or(0),
                     "touched":entry.get_page_timestamp().unwrap_or_default(),
                     "nstext":params.api().get_canonical_namespace_name(entry.title().namespace_id()).unwrap_or("")
                 });
@@ -215,7 +215,7 @@ impl RenderJSON {
                         "page_namespace" : entry.title().namespace_id(),
                         "page_title" : entry.title().with_underscores(),
                         "page_latest" : entry.get_page_timestamp().unwrap_or_default(),
-                        "page_len" : entry.page_bytes.unwrap_or(0),
+                        "page_len" : entry.page_bytes().unwrap_or(0),
                         //"meta" : {}
                     });
                     if params.giu() || params.file_usage() {

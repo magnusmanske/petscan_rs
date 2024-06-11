@@ -2206,7 +2206,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id, Some(36995));
-        assert!(entry.page_bytes.is_some());
+        assert!(entry.page_bytes().is_some());
         assert!(entry.get_page_timestamp().is_some());
         assert_eq!(
             entry.get_page_image(),

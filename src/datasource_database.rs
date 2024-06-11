@@ -1005,7 +1005,7 @@ impl SourceDatabase {
                 let page_timestamp = String::from_utf8_lossy(page_timestamp).into_owned();
                 let mut entry = PageListEntry::new(Title::new(&page_title, *page_namespace));
                 entry.page_id = Some(*page_id);
-                entry.page_bytes = Some(*page_bytes);
+                entry.set_page_bytes(Some(*page_bytes));
                 entry.set_page_timestamp(Some(page_timestamp));
                 if self.params.gather_link_count {
                     entry.link_count = Some(*link_count);

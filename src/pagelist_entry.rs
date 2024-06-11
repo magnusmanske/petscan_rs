@@ -149,7 +149,7 @@ pub struct PageListEntry {
     title: Title,
     pub disambiguation: TriState,
     pub page_id: Option<u32>,
-    pub page_bytes: Option<u32>,
+    page_bytes: Option<u32>,
     pub incoming_links: Option<LinkCount>,
     pub link_count: Option<LinkCount>,
     redlink_count: Option<LinkCount>,
@@ -497,6 +497,14 @@ impl PageListEntry {
 
     pub fn set_redlink_count(&mut self, redlink_count: Option<LinkCount>) {
         self.redlink_count = redlink_count;
+    }
+
+    pub fn page_bytes(&self) -> Option<u32> {
+        self.page_bytes
+    }
+
+    pub fn set_page_bytes(&mut self, page_bytes: Option<u32>) {
+        self.page_bytes = page_bytes;
     }
 }
 

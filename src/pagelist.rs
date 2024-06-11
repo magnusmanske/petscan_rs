@@ -432,7 +432,7 @@ impl PageList {
             .par_iter()
             .any(|entry| {
                 entry.page_id.is_none()
-                    || entry.page_bytes.is_none()
+                    || entry.page_bytes().is_none()
                     || entry.get_page_timestamp().is_none()
             })
         {
@@ -459,7 +459,7 @@ impl PageList {
                     let page_last_rev_timestamp =
                         String::from_utf8_lossy(&page_last_rev_timestamp).into_owned();
                     entry.page_id = Some(page_id);
-                    entry.page_bytes = Some(page_len);
+                    entry.set_page_bytes(Some(page_len));
                     entry.set_page_timestamp(Some(page_last_rev_timestamp));
                 }
                 Err(_e) => {}

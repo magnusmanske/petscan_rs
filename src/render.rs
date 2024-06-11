@@ -157,7 +157,7 @@ pub trait Render {
                 "title" => self.render_cell_title(entry, params),
                 "page_id" => self.opt_u32(&entry.page_id),
                 "namespace" => self.render_cell_namespace(entry, params),
-                "size" => self.opt_u32(&entry.page_bytes),
+                "size" => self.opt_u32(&entry.page_bytes()),
                 "timestamp" => self.opt_string(&entry.get_page_timestamp()),
                 "wikidata_item" => self.render_cell_wikidata_item(entry, params),
                 "image" => self.render_cell_image(&entry.get_page_image(), params),
