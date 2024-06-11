@@ -165,7 +165,7 @@ pub trait Render {
                 "defaultsort" => self.opt_string(&entry.get_defaultsort()),
                 "disambiguation" => self.opt_bool(&entry.disambiguation.as_option_bool()),
                 "incoming_links" => self.opt_linkcount(&entry.incoming_links),
-                "sitelinks" => self.opt_linkcount(&entry.sitelink_count),
+                "sitelinks" => self.opt_linkcount(&entry.sitelink_count()),
 
                 "img_size" => match &entry.get_file_info() {
                     Some(fi) => self.opt_usize(&fi.img_size),

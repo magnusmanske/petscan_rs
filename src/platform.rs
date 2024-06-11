@@ -799,10 +799,11 @@ impl Platform {
                 };
             }
             if add_sitelinks {
-                entry.sitelink_count = match parts.remove(0) {
+                let sc = match parts.remove(0) {
                     my::Value::Int(i) => Some(i as LinkCount),
                     _ => None,
                 };
+                entry.set_sitelink_count(sc);
             }
         };
 

@@ -35,7 +35,7 @@ impl DataSource for SourceSitelinks {
             .map(|(page, sitelinks)| {
                 let mut ret = PageListEntry::new(Title::new(&page, 0));
                 if self.use_min_max {
-                    ret.sitelink_count = Some(sitelinks);
+                    ret.set_sitelink_count(Some(sitelinks));
                 }
                 ret
             })

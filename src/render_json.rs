@@ -312,7 +312,7 @@ impl RenderJSON {
                 "defaultsort" => entry.get_defaultsort().map(|s| json!(s)),
                 "disambiguation" => Some(entry.disambiguation.as_json()),
                 "incoming_links" => entry.incoming_links.as_ref().map(|s| json!(s)),
-                "sitelinks" => entry.sitelink_count.as_ref().map(|s| json!(s)),
+                "sitelinks" => entry.sitelink_count().map(|s| json!(s)),
                 "coordinates" => entry
                     .get_coordinates()
                     .as_ref()

@@ -153,7 +153,7 @@ pub struct PageListEntry {
     pub incoming_links: Option<LinkCount>,
     pub link_count: Option<LinkCount>,
     pub redlink_count: Option<LinkCount>,
-    pub sitelink_count: Option<LinkCount>,
+    sitelink_count: Option<LinkCount>,
     page_timestamp: Option<String>,
     page_image: Option<String>,
     wikidata_item: Option<String>,
@@ -481,6 +481,14 @@ impl PageListEntry {
         } else {
             ret
         }
+    }
+
+    pub fn sitelink_count(&self) -> Option<u32> {
+        self.sitelink_count
+    }
+
+    pub fn set_sitelink_count(&mut self, sitelink_count: Option<LinkCount>) {
+        self.sitelink_count = sitelink_count;
     }
 }
 
