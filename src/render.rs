@@ -155,7 +155,7 @@ pub trait Render {
         for (k, _) in header {
             let cell = match k.as_str() {
                 "title" => self.render_cell_title(entry, params),
-                "page_id" => self.opt_u32(&entry.page_id),
+                "page_id" => self.opt_u32(&entry.page_id()),
                 "namespace" => self.render_cell_namespace(entry, params),
                 "size" => self.opt_u32(&entry.page_bytes()),
                 "timestamp" => self.opt_string(&entry.get_page_timestamp()),
@@ -163,8 +163,8 @@ pub trait Render {
                 "image" => self.render_cell_image(&entry.get_page_image(), params),
                 "number" => params.row_number().to_string(),
                 "defaultsort" => self.opt_string(&entry.get_defaultsort()),
-                "disambiguation" => self.opt_bool(&entry.disambiguation.as_option_bool()),
-                "incoming_links" => self.opt_linkcount(&entry.incoming_links),
+                "disambiguation" => self.opt_bool(&entry.disambiguation().as_option_bool()),
+                "incoming_links" => self.opt_linkcount(&entry.incoming_links()),
                 "sitelinks" => self.opt_linkcount(&entry.sitelink_count()),
 
                 "img_size" => match &entry.get_file_info() {
@@ -205,8 +205,8 @@ pub trait Render {
                 },
 
                 "checkbox" => self.render_cell_checkbox(entry, params, platform),
-                "linknumber" => match &entry.link_count {
-                    Some(lc) => format!("{}", &lc),
+                "linknumber" => match entry.link_count() {
+                    Some(lc) => format!("{lc}"),
                     None => String::new(),
                 },
                 "redlink_count" => match entry.redlink_count() {

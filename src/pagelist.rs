@@ -431,7 +431,7 @@ impl PageList {
             .map_err(|e| format!("{:?}", e))?
             .par_iter()
             .any(|entry| {
-                entry.page_id.is_none()
+                entry.page_id().is_none()
                     || entry.page_bytes().is_none()
                     || entry.get_page_timestamp().is_none()
             })
@@ -458,7 +458,7 @@ impl PageList {
                 Ok((_page_title, _page_namespace, page_id, page_len, page_last_rev_timestamp)) => {
                     let page_last_rev_timestamp =
                         String::from_utf8_lossy(&page_last_rev_timestamp).into_owned();
-                    entry.page_id = Some(page_id);
+                    entry.set_page_id(Some(page_id));
                     entry.set_page_bytes(Some(page_len));
                     entry.set_page_timestamp(Some(page_last_rev_timestamp));
                 }
@@ -755,7 +755,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             .read()
             .map_err(|e| format!("{:?}", e))?
             .iter()
-            .filter_map(|entry| entry.page_id)
+            .filter_map(|entry| entry.page_id())
             .collect();
         let api = platform.state().get_api_for_wiki(wiki).await?;
         let mut futures = vec![];
@@ -782,7 +782,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             return Err("Filter searches have failed".to_string());
         }
 
-        self.retain_entries(&|entry: &PageListEntry| match entry.page_id {
+        self.retain_entries(&|entry: &PageListEntry| match entry.page_id() {
             Some(page_id) => retain_page_ids.contains(&page_id),
             None => false,
         })?;

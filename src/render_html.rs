@@ -283,7 +283,7 @@ impl Render for RenderHTML {
             }
         } else {
             if params.autolist_wiki_server() == AUTOLIST_COMMONS {
-                q = match entry.page_id {
+                q = match entry.page_id() {
                     Some(id) => id.to_string(),
                     None => String::new(),
                 }

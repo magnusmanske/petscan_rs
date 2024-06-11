@@ -147,11 +147,11 @@ impl TriState {
 #[derive(Debug, Clone)]
 pub struct PageListEntry {
     title: Title,
-    pub disambiguation: TriState,
-    pub page_id: Option<u32>,
+    disambiguation: TriState,
+    page_id: Option<u32>,
     page_bytes: Option<u32>,
-    pub incoming_links: Option<LinkCount>,
-    pub link_count: Option<LinkCount>,
+    incoming_links: Option<LinkCount>,
+    link_count: Option<LinkCount>,
     redlink_count: Option<LinkCount>,
     sitelink_count: Option<LinkCount>,
     page_timestamp: Option<String>,
@@ -505,6 +505,38 @@ impl PageListEntry {
 
     pub fn set_page_bytes(&mut self, page_bytes: Option<u32>) {
         self.page_bytes = page_bytes;
+    }
+
+    pub fn disambiguation(&self) -> &TriState {
+        &self.disambiguation
+    }
+
+    pub fn set_disambiguation(&mut self, disambiguation: TriState) {
+        self.disambiguation = disambiguation;
+    }
+
+    pub fn link_count(&self) -> Option<u32> {
+        self.link_count
+    }
+
+    pub fn set_link_count(&mut self, link_count: Option<LinkCount>) {
+        self.link_count = link_count;
+    }
+
+    pub fn incoming_links(&self) -> Option<u32> {
+        self.incoming_links
+    }
+
+    pub fn set_incoming_links(&mut self, incoming_links: Option<LinkCount>) {
+        self.incoming_links = incoming_links;
+    }
+
+    pub fn page_id(&self) -> Option<u32> {
+        self.page_id
+    }
+
+    pub fn set_page_id(&mut self, page_id: Option<u32>) {
+        self.page_id = page_id;
     }
 }
 

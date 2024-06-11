@@ -787,16 +787,18 @@ impl Platform {
                 });
             }
             if add_disambiguation {
-                entry.disambiguation = match parts.remove(0) {
+                let dis = match parts.remove(0) {
                     my::Value::NULL => TriState::No,
                     _ => TriState::Yes,
-                }
+                };
+                entry.set_disambiguation(dis);
             }
             if add_incoming_links {
-                entry.incoming_links = match parts.remove(0) {
+                let il = match parts.remove(0) {
                     my::Value::Int(i) => Some(i as LinkCount),
                     _ => None,
                 };
+                entry.set_incoming_links(il);
             }
             if add_sitelinks {
                 let sc = match parts.remove(0) {
@@ -2176,7 +2178,7 @@ mod tests {
             .collect::<Vec<PageListEntry>>();
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
-        assert_eq!(entry.page_id, Some(1340715));
+        assert_eq!(entry.page_id(), Some(1340715));
         let fi = entry.get_file_info();
         assert!(fi.is_some());
         let fi = fi.unwrap();
@@ -2205,16 +2207,15 @@ mod tests {
             .collect::<Vec<PageListEntry>>();
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
-        assert_eq!(entry.page_id, Some(36995));
+        assert_eq!(entry.page_id(), Some(36995));
         assert!(entry.page_bytes().is_some());
         assert!(entry.get_page_timestamp().is_some());
         assert_eq!(
             entry.get_page_image(),
             Some("Kings_College_(233225593).jpeg".to_string())
         );
-        assert_eq!(entry.disambiguation, TriState::No);
-        assert!(entry.incoming_links.is_some());
-        assert!(entry.incoming_links.unwrap() > 7500);
+        assert_eq!(*entry.disambiguation(), TriState::No);
+        assert!(entry.incoming_links().unwrap() > 7500);
         assert!(entry.get_coordinates().is_some());
     }
 
@@ -2232,7 +2233,7 @@ mod tests {
             .collect::<Vec<PageListEntry>>();
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
-        assert_eq!(entry.page_id, Some(239794));
+        assert_eq!(entry.page_id(), Some(239794));
         assert_eq!(entry.get_wikidata_item(), Some("Q12345".to_string()));
     }
 
@@ -2269,7 +2270,7 @@ mod tests {
             .collect::<Vec<PageListEntry>>();
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
-        assert_eq!(entry.page_id, Some(13925));
+        assert_eq!(entry.page_id(), Some(13925));
         assert_eq!(entry.get_wikidata_label(), Some("Graaf Tel".to_string()));
         assert_eq!(
             entry.get_wikidata_description(),

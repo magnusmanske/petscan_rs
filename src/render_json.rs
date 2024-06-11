@@ -137,7 +137,7 @@ impl RenderJSON {
                 let mut o = json!({
                     "n":"page",
                     "title":entry.title().with_underscores(),
-                    "id":entry.page_id.unwrap_or(0),
+                    "id":entry.page_id().unwrap_or(0),
                     "namespace":entry.title().namespace_id(),
                     "len":entry.page_bytes().unwrap_or(0),
                     "touched":entry.get_page_timestamp().unwrap_or_default(),
@@ -211,7 +211,7 @@ impl RenderJSON {
                 .iter()
                 .map(|entry| {
                     let mut o = json!({
-                        "page_id" : entry.page_id.unwrap_or(0),
+                        "page_id" : entry.page_id().unwrap_or(0),
                         "page_namespace" : entry.title().namespace_id(),
                         "page_title" : entry.title().with_underscores(),
                         "page_latest" : entry.get_page_timestamp().unwrap_or_default(),
@@ -307,11 +307,11 @@ impl RenderJSON {
                 "checkbox" | "number" | "page_id" | "title" | "namespace" | "size"
                 | "timestamp" => None,
                 "image" => entry.get_page_image().map(|s| json!(s)),
-                "linknumber" => entry.link_count.as_ref().map(|s| json!(s)),
+                "linknumber" => entry.link_count().map(|s| json!(s)),
                 "wikidata" => entry.get_wikidata_item().map(|s| json!(s)),
                 "defaultsort" => entry.get_defaultsort().map(|s| json!(s)),
-                "disambiguation" => Some(entry.disambiguation.as_json()),
-                "incoming_links" => entry.incoming_links.as_ref().map(|s| json!(s)),
+                "disambiguation" => Some(entry.disambiguation().as_json()),
+                "incoming_links" => entry.incoming_links().map(|s| json!(s)),
                 "sitelinks" => entry.sitelink_count().map(|s| json!(s)),
                 "coordinates" => entry
                     .get_coordinates()

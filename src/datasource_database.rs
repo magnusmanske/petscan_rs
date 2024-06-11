@@ -1004,11 +1004,11 @@ impl SourceDatabase {
                 let page_title = String::from_utf8_lossy(page_title).into_owned();
                 let page_timestamp = String::from_utf8_lossy(page_timestamp).into_owned();
                 let mut entry = PageListEntry::new(Title::new(&page_title, *page_namespace));
-                entry.page_id = Some(*page_id);
+                entry.set_page_id(Some(*page_id));
                 entry.set_page_bytes(Some(*page_bytes));
                 entry.set_page_timestamp(Some(page_timestamp));
                 if self.params.gather_link_count {
-                    entry.link_count = Some(*link_count);
+                    entry.set_link_count(Some(*link_count));
                 }
                 if pages_sublist.add_entry(entry).is_ok() {}
             },
