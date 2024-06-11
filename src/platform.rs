@@ -590,7 +590,7 @@ impl Platform {
                 .par_iter()
                 .map(|(k, redlink_count)| {
                     let mut ret = PageListEntry::new(k.to_owned());
-                    ret.redlink_count = Some(*redlink_count);
+                    ret.set_redlink_count(Some(*redlink_count));
                     ret
                 })
                 .collect(),

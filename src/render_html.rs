@@ -151,7 +151,7 @@ impl Render for RenderHTML {
             params,
             true,
             &entry.get_wikidata_description(),
-            entry.redlink_count.is_some(),
+            entry.redlink_count().is_some(),
         )
     }
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, params: &RenderParams) -> String {
@@ -163,7 +163,7 @@ impl Render for RenderHTML {
                 params,
                 false,
                 &entry.get_wikidata_description(),
-                entry.redlink_count.is_some(),
+                entry.redlink_count().is_some(),
             ),
             None => String::new(),
         }
@@ -223,7 +223,7 @@ impl Render for RenderHTML {
                             params,
                             false,
                             &entry.get_wikidata_description(),
-                            entry.redlink_count.is_some(),
+                            entry.redlink_count().is_some(),
                         )
                         + "</div>";
                     rows.push(html);

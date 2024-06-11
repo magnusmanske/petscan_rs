@@ -209,8 +209,8 @@ pub trait Render {
                     Some(lc) => format!("{}", &lc),
                     None => String::new(),
                 },
-                "redlink_count" => match &entry.redlink_count {
-                    Some(lc) => format!("{}", &lc),
+                "redlink_count" => match entry.redlink_count() {
+                    Some(lc) => format!("{lc}"),
                     None => String::new(),
                 },
                 "coordinates" => self.render_coordinates(entry, params),
