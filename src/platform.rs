@@ -2212,7 +2212,7 @@ mod tests {
         assert!(entry.get_page_timestamp().is_some());
         assert_eq!(
             entry.get_page_image(),
-            Some("Kings_College_(233225593).jpeg".to_string())
+            Some("Cambridge_-_Kings_College_vue_des_backs.jpg".to_string())
         );
         assert_eq!(*entry.disambiguation(), TriState::No);
         assert!(entry.incoming_links().unwrap() > 7500);
