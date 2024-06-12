@@ -164,16 +164,7 @@ impl PageListDisk {
             None => return Ok(()),
         };
 
-        let mut page_ids = vec![];
-        let entries = self.entries.read().map_err(|e| anyhow!("{e}"))?;
-        for key in entries.keys() {
-            if let Some(entry) = entries.get(key) {
-                if let Some(page_id) = entry.page_id() {
-                    page_ids.push(page_id);
-                }
-            }
-        }
-
+        let page_ids = self.get_page_ids_for_search_filter()?;
         let api = platform.state().get_api_for_wiki(wiki).await?;
         let mut futures = vec![];
         page_ids.iter().for_each(|page_id| {
@@ -206,10 +197,22 @@ impl PageListDisk {
         Ok(())
     }
 
-    async fn load_missing_page_metadata(&self, platform: &Platform) -> Result<()> {
+    fn get_page_ids_for_search_filter(&self) -> Result<Vec<u32>> {
+        let mut page_ids = vec![];
+        let entries = self.entries.read().map_err(|e| anyhow!("{e}"))?;
+        for key in entries.keys() {
+            if let Some(entry) = entries.get(key) {
+                if let Some(page_id) = entry.page_id() {
+                    page_ids.push(page_id);
+                }
+            }
+        }
+        Ok(page_ids)
+    }
+
+    fn needs_metadata(&self) -> Result<bool> {
         let mut needs_metadata = false;
         let entries = self.entries.read().map_err(|e| anyhow!("{e}"))?;
-
         for key in entries.keys() {
             if let Some(entry) = entries.get(key) {
                 if entry.page_id().is_none()
@@ -221,9 +224,15 @@ impl PageListDisk {
                 }
             }
         }
+        Ok(needs_metadata)
+    }
 
-        if needs_metadata {
-            let batches: Vec<SQLtuple> = self
+    async fn load_missing_page_metadata(&self, platform: &Platform) -> Result<()> {
+        if !self.needs_metadata()? {
+            return Ok(());
+        }
+
+        let batches: Vec<SQLtuple> = self
                 .to_sql_batches(PAGE_BATCH_SIZE)?
                 .par_iter_mut()
                 .map(|sql_batch| {
@@ -234,7 +243,8 @@ impl PageListDisk {
                 })
                 .collect::<Vec<SQLtuple>>();
 
-            let the_f = |row: my::Row, entry: &mut PageListEntry| match my::from_row_opt::<(
+        let parse_row_for_metadata =
+            |row: my::Row, entry: &mut PageListEntry| match my::from_row_opt::<(
                 Vec<u8>,
                 NamespaceID,
                 u32,
@@ -251,26 +261,25 @@ impl PageListDisk {
                 }
                 Err(_e) => {}
             };
-            let col_title = 0;
-            let col_ns = 1;
-            self.run_batch_queries(&platform.state(), batches)
-                .await?
-                .iter()
-                .filter_map(|row| {
-                    self.entry_from_row(row, col_title, col_ns)
-                        .map(|entry| (row, entry))
-                })
-                .filter_map(|(row, entry)| {
-                    match self.entries.read() {
-                        Ok(entries) => entries.get(entry.hash_key()).map(|e| (row, e.clone())),
-                        _ => None, // TODO error?
-                    }
-                })
-                .for_each(|(row, mut entry)| {
-                    the_f(row.clone(), &mut entry);
-                    self.add_entry(entry).unwrap_or(());
-                });
-        }
+        let col_title = 0;
+        let col_ns = 1;
+        self.run_batch_queries(&platform.state(), batches)
+            .await?
+            .iter()
+            .filter_map(|row| {
+                self.entry_from_row(row, col_title, col_ns)
+                    .map(|entry| (row, entry))
+            })
+            .filter_map(|(row, entry)| {
+                match self.entries.read() {
+                    Ok(entries) => entries.get(entry.hash_key()).map(|e| (row, e.clone())),
+                    _ => None, // TODO error?
+                }
+            })
+            .for_each(|(row, mut entry)| {
+                parse_row_for_metadata(row.clone(), &mut entry);
+                self.add_entry(entry).unwrap_or(());
+            });
         Ok(())
     }
 
