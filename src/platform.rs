@@ -9,7 +9,6 @@ use crate::datasource_sitelinks::SourceSitelinks;
 use crate::datasource_sparql::SourceSparql;
 use crate::datasource_wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
-use crate::pagelist::*;
 use crate::pagelist_disk::PageListDisk;
 use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, PageListSort, TriState};
 use crate::render::*;
@@ -834,7 +833,7 @@ impl Platform {
                 .collect::<Vec<SQLtuple>>();
 
             let the_f = |row: my::Row, entry: &mut PageListEntry| {
-                if let Some(gil_group) = PageList::string_from_row(&row, 2) {
+                if let Some(gil_group) = PageListDisk::string_from_row(&row, 2) {
                     let fi = FileInfo::new_from_gil_group(&gil_group);
                     entry.set_file_info(Some(fi));
                 }
@@ -2173,14 +2172,8 @@ mod tests {
         let platform = run_psid(10137125).await;
         let result = platform.result.unwrap();
         let entries = result
-            .to_pagelist()
-            .unwrap()
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+            .drain_into_sorted_vec(PageListSort::Default(false))
+            .unwrap();
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id(), Some(1340715));
@@ -2204,14 +2197,8 @@ mod tests {
         let platform = run_psid(10136716).await;
         let result = platform.result.unwrap();
         let entries = result
-            .to_pagelist()
-            .unwrap()
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+            .drain_into_sorted_vec(PageListSort::Default(false))
+            .unwrap();
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id(), Some(36995));
@@ -2232,14 +2219,8 @@ mod tests {
         let platform = run_psid(10137767).await;
         let result = platform.result.unwrap();
         let entries = result
-            .to_pagelist()
-            .unwrap()
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+            .drain_into_sorted_vec(PageListSort::Default(false))
+            .unwrap();
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id(), Some(239794));
@@ -2252,14 +2233,8 @@ mod tests {
         let platform = run_psid(10138030).await;
         let result = platform.result.unwrap();
         let entries = result
-            .to_pagelist()
-            .unwrap()
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+            .drain_into_sorted_vec(PageListSort::Default(false))
+            .unwrap();
         assert!(entries.len() > 100);
         // Try to find pages with no '/'
         assert!(!entries
@@ -2273,14 +2248,8 @@ mod tests {
         let platform = run_psid(10138979).await;
         let result = platform.result.unwrap();
         let entries = result
-            .to_pagelist()
-            .unwrap()
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+            .drain_into_sorted_vec(PageListSort::Default(false))
+            .unwrap();
         assert_eq!(entries.len(), 1);
         let entry = entries.get(0).unwrap();
         assert_eq!(entry.page_id(), Some(13925));
@@ -2350,16 +2319,6 @@ mod tests {
     //     check_results_for_psid(15960820, "frwiki", vec![Title::new("Magnus Manske", 0)]).await;
     // }
 
-    fn entries_from_result(result: PageList) -> Vec<PageListEntry> {
-        result
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>()
-    }
-
     // Deactivated: connection to enwikiquote_p required
     // #[tokio::test]
     // async fn test_trim_extended_whitespace() {
@@ -2372,8 +2331,11 @@ mod tests {
     #[tokio::test]
     async fn test_template_talk_pages() {
         let platform = run_psid(15059382).await;
-        let result = platform.result.unwrap().to_pagelist().unwrap();
-        let entries = entries_from_result(result);
+        let entries = platform
+            .result
+            .unwrap()
+            .drain_into_sorted_vec(PageListSort::Default(false))
+            .unwrap();
         assert!(!entries.is_empty());
         for entry in entries {
             assert_eq!(entry.title().namespace_id(), 0);

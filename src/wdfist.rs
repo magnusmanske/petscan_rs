@@ -1,7 +1,6 @@
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
-use crate::pagelist::PageList;
 use crate::pagelist_disk::PageListDisk;
 use crate::platform::*;
 use anyhow::{anyhow, Result};
@@ -116,7 +115,7 @@ impl WDfist {
         });
 
         // Run batches
-        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let pagelist = PageListDisk::new_from_wiki("wikidatawiki");
         let rows = pagelist.run_batch_queries(&self.state, batches).await?;
 
         // Collect pages and items, per wiki
@@ -163,7 +162,7 @@ impl WDfist {
         });
 
         // Run batches
-        let pagelist = PageList::new_from_wiki(wiki);
+        let pagelist = PageListDisk::new_from_wiki(wiki);
         let rows = pagelist.run_batch_queries(&self.state, batches).await?;
         let ret: Vec<(String, String)> = rows
             .par_iter()
@@ -214,7 +213,7 @@ impl WDfist {
             sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks where page_id=cl_from and cl_to='Crop_for_Wikidata')" ; // To-be-cropped
             batches.push(sql);
         });
-        let rows = PageList::new_from_wiki("commonswiki")
+        let rows = PageListDisk::new_from_wiki("commonswiki")
             .run_batch_queries(&self.state, batches)
             .await?;
         let page_file: Vec<(String, String)> = rows
@@ -244,7 +243,7 @@ impl WDfist {
         });
 
         // Run batches
-        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let pagelist = PageListDisk::new_from_wiki("wikidatawiki");
         let rows = pagelist.run_batch_queries(&self.state, batches).await?;
 
         // Process results
@@ -328,7 +327,7 @@ impl WDfist {
 
     async fn follow_search_commons(&mut self) -> Result<()> {
         let batches = self.follow_search_commons_prepare_batches();
-        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let pagelist = PageListDisk::new_from_wiki("wikidatawiki");
         let rows = pagelist.run_batch_queries(&self.state, batches).await?;
         let item2label = self.follow_search_commons_get_item2label(rows);
 
@@ -497,7 +496,7 @@ impl WDfist {
         });
 
         // Run batches
-        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let pagelist = PageListDisk::new_from_wiki("wikidatawiki");
         let rows = pagelist.run_batch_queries(&self.state, batches).await?;
 
         self.items = rows
@@ -665,7 +664,7 @@ impl WDfist {
         });
 
         // Run batches, and get a list of files to remove
-        let pagelist = PageList::new_from_wiki("wikidatawiki");
+        let pagelist = PageListDisk::new_from_wiki("wikidatawiki");
         let rows = pagelist.run_batch_queries(&self.state, batches).await?;
         *files_to_remove = rows
             .par_iter()

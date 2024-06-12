@@ -1,8 +1,8 @@
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
+use crate::pagelist_entry::PageListEntry;
 use crate::pagelist_entry::PageListSort;
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
-use crate::{pagelist::PageList, pagelist_entry::PageListEntry};
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use mysql_async as my;
@@ -92,19 +92,6 @@ impl PageListDisk {
             .write()
             .map_err(|e| anyhow!("{e}"))?
             .insert(key, entry)
-    }
-
-    pub fn to_pagelist(&self) -> Result<PageList> {
-        let entries = self.entries.read().map_err(|e| anyhow!("{e}"))?;
-        let wiki = self.wiki()?.ok_or_else(|| anyhow!("NO WIKI SET"))?;
-        let has_sitelink_counts = self.has_sitelink_counts()?;
-        let pagelist = PageList::new_from_wiki_with_capacity(&wiki, entries.len());
-        pagelist.set_has_sitelink_counts(has_sitelink_counts)?;
-        for key in entries.keys() {
-            let entry = entries.get(key).unwrap();
-            pagelist.add_entry(entry)?;
-        }
-        Ok(pagelist)
     }
 
     pub fn set_entries(&self, entries: HashSet<PageListEntry>) -> Result<()> {
