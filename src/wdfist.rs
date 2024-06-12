@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
+use crate::pagelist_disk::PageListDisk;
 use crate::platform::*;
 use anyhow::{anyhow, Result};
 use mysql_async as my;
@@ -31,26 +32,28 @@ pub struct WDfist {
 }
 
 impl WDfist {
-    pub fn new(platform: &Platform, result: &Option<PageList>) -> Option<Self> {
+    pub fn new(platform: &Platform, result: &Option<PageListDisk>) -> Result<Self> {
         let mut items: Vec<String> = match result {
             Some(pagelist) => {
                 if !pagelist.is_wikidata() {
-                    return None;
+                    return Err(anyhow!("WDfist only works with Wikidata"));
                 }
-                pagelist
-                    .entries()
-                    .read()
-                    .unwrap()
-                    .par_iter()
-                    .filter(|e| e.title().namespace_id() == 0)
-                    .map(|e| e.title().pretty().to_owned())
-                    .collect()
+                let entries = pagelist.entries().read().map_err(|e| anyhow!("{e}"))?;
+                let mut items: Vec<String> = vec![];
+                for key in entries.keys() {
+                    if let Some(entry) = entries.get(key) {
+                        if entry.title().namespace_id() == 0 {
+                            items.push(entry.title().pretty().to_owned());
+                        }
+                    }
+                }
+                items
             }
             None => vec![],
         };
         items.par_sort();
         items.dedup();
-        Some(Self {
+        Ok(Self {
             item2files: HashMap::new(),
             items,
             files2ignore: HashSet::new(),

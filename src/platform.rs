@@ -105,7 +105,7 @@ pub enum CombinationSequential {
 pub struct Platform {
     form_parameters: FormParameters,
     state: Arc<AppState>,
-    result: Option<PageList>,
+    result: Option<PageListDisk>,
     pub psid: Option<u64>,
     existing_labels: RwLock<HashSet<String>>,
     combination: Combination,
@@ -321,8 +321,7 @@ impl Platform {
                 }
                 None => return Err(anyhow!("No result set for WDfist")),
             }
-            let mut wdfist =
-                WDfist::new(self, &self.result).ok_or_else(|| anyhow!("Cannot create WDfist"))?;
+            let mut wdfist = WDfist::new(self, &self.result)?;
             self.result = None; // Safe space
             self.wdfist_result = Some(wdfist.run().await?);
         }
@@ -367,6 +366,7 @@ impl Platform {
                 Some(result.len()?),
             );
         }
+
         self.process_by_wikidata_item(result).await?;
         Platform::profile("after process_by_wikidata_item", Some(result.len()?));
         self.process_files(result).await?;
@@ -388,6 +388,7 @@ impl Platform {
             .load_missing_metadata(Some(wikidata_label_language), self)
             .await?;
         Platform::profile("after load_missing_metadata", Some(result.len()?));
+
         if let Some(regexp) = self.get_param("rxp_filter") {
             result.regexp_filter(&regexp)?;
         }
@@ -406,7 +407,7 @@ impl Platform {
         self.state.clone()
     }
 
-    async fn convert_to_common_wiki(&self, result: &PageList) -> Result<()> {
+    async fn convert_to_common_wiki(&self, result: &PageListDisk) -> Result<()> {
         // Find best wiki to convert to
         match self.get_param_default("common_wiki", "auto").as_str() {
             "auto" => {}
@@ -473,7 +474,7 @@ impl Platform {
 
     // Prepares for JS "creator" mode
     // Chackes which labels already exist on Wikidata
-    async fn process_creator(&self, result: &PageList) -> Result<()> {
+    async fn process_creator(&self, result: &PageListDisk) -> Result<()> {
         if result.is_empty()? || result.is_wikidata() {
             return Ok(());
         }
@@ -528,7 +529,7 @@ impl Platform {
         Ok(())
     }
 
-    async fn process_redlinks(&self, result: &PageList) -> Result<()> {
+    async fn process_redlinks(&self, result: &PageListDisk) -> Result<()> {
         if result.is_empty()? || !self.do_output_redlinks() || result.is_wikidata() {
             return Ok(());
         }
@@ -609,32 +610,39 @@ impl Platform {
         Ok(())
     }
 
-    async fn process_namespace_conversion(&self, result: &PageList) -> Result<()> {
+    async fn process_namespace_conversion(&self, result: &PageListDisk) -> Result<()> {
         let namespace_conversion = self.get_param_default("namespace_conversion", "keep");
         let add = match namespace_conversion.as_str() {
             "topic" => 0,
             "talk" => 1,
             _ => return Ok(()),
         };
-        // Need tmp to avoid permanent double-lock on entries
-        let tmp = result
-            .entries()
-            .read()
-            .map_err(|e| anyhow!("{:?}", e))?
-            .par_iter()
-            .map(|entry| {
+        let entries = result.entries().read().map_err(|e| anyhow!("{:?}", e))?;
+        for key in entries.keys() {
+            if let Some(entry) = entries.get(key) {
                 let mut nsid = entry.title().namespace_id();
                 nsid = nsid - (nsid & 1) + add; // Change "talk" bit
                 let t = entry.title().pretty();
                 let new_title = Title::new(t, nsid);
-                PageListEntry::new(new_title)
-            })
-            .collect();
-        *(result.entries().write().map_err(|e| anyhow!("{:?}", e))?) = tmp;
+                result.add_entry(PageListEntry::new(new_title))?;
+            }
+        }
+
+        // Need tmp to avoid permanent double-lock on entries
+        // .par_iter()
+        // .map(|entry| {
+        //     let mut nsid = entry.title().namespace_id();
+        //     nsid = nsid - (nsid & 1) + add; // Change "talk" bit
+        //     let t = entry.title().pretty();
+        //     let new_title = Title::new(t, nsid);
+        //     PageListEntry::new(new_title)
+        // })
+        // .collect();
+        // *(result.entries().write().map_err(|e| anyhow!("{:?}", e))?) = tmp;
         Ok(())
     }
 
-    async fn process_subpages(&self, result: &PageList) -> Result<()> {
+    async fn process_subpages(&self, result: &PageListDisk) -> Result<()> {
         let add_subpages = self.has_param("add_subpages");
         let subpage_filter = self.get_param_default("subpage_filter", "either");
         if !add_subpages && subpage_filter != "subpages" && subpage_filter != "no_subpages" {
@@ -642,18 +650,7 @@ impl Platform {
         }
 
         if add_subpages {
-            let title_ns: Vec<(String, NamespaceID)> = result
-                .entries()
-                .read()
-                .map_err(|e| anyhow!("{:?}", e))?
-                .par_iter()
-                .map(|entry| {
-                    (
-                        entry.title().with_underscores(),
-                        entry.title().namespace_id(),
-                    )
-                })
-                .collect();
+            let title_ns = self.process_subpages_get_title_ns(result)?;
 
             let wiki = match result.wiki()? {
                 Some(wiki) => wiki.to_owned(),
@@ -690,20 +687,15 @@ impl Platform {
         }
 
         let keep_subpages = subpage_filter == "subpages";
-        result.retain_entries(&|entry: &PageListEntry| {
-            let has_slash = entry.title().pretty().find('/').is_some();
-            has_slash == keep_subpages
-        })?;
-        /*
-        result.entries.retain(|entry| {
+        let mut entries = result.entries().write().map_err(|e| anyhow!("{e}"))?;
+        entries.retain(|_key, entry| {
             let has_slash = entry.title().pretty().find('/').is_some();
             has_slash == keep_subpages
         });
-        */
         Ok(())
     }
 
-    async fn process_pages(&self, result: &PageList) -> Result<()> {
+    async fn process_pages(&self, result: &PageListDisk) -> Result<()> {
         let is_kml = self.get_param_blank("format") == "kml";
         let is_wikidata = result.wiki()? == Some("wikidatawiki".to_string());
         let add_coordinates = self.has_param("add_coordinates") || is_kml;
@@ -798,29 +790,29 @@ impl Platform {
 
         let col_title: usize = 0;
         let col_ns: usize = 1;
-        result
-            .run_batch_queries(&self.state(), batches)
-            .await?
+        let tmp = result.run_batch_queries(&self.state(), batches).await?;
+        let entries = result.entries().read().map_err(|e| anyhow!("{:?}", e))?;
+        let tmp2 = tmp
             .iter()
             .filter_map(|row| {
                 result
                     .entry_from_row(row, col_title, col_ns)
                     .map(|entry| (row, entry))
             })
-            .filter_map(|(row, entry)| {
-                match result.entries().read() {
-                    Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
-                    _ => None, // TODO error?
-                }
-            })
-            .for_each(|(row, mut entry)| {
+            .filter_map(|(row, entry)| entries.get(entry.hash_key()).map(|e| (row, e.clone())))
+            .map(|(row, mut entry)| {
                 the_f(row.clone(), &mut entry);
-                result.add_entry(entry).unwrap_or(());
-            });
+                entry
+            })
+            .collect::<Vec<_>>();
+        drop(entries);
+        tmp2.into_iter().for_each(|entry| {
+            result.add_entry(entry).unwrap_or(());
+        });
         Ok(())
     }
 
-    async fn file_usage(&self, result: &PageList, file_usage_data_ns0: bool) -> Result<()> {
+    async fn file_usage(&self, result: &PageListDisk, file_usage_data_ns0: bool) -> Result<()> {
         let mut batch_size = PAGE_BATCH_SIZE;
         loop {
             if batch_size == 0 {
@@ -869,7 +861,7 @@ impl Platform {
                 })
                 .filter_map(|(row, entry)| {
                     match result.entries().read() {
-                        Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
+                        Ok(entries) => entries.get(entry.hash_key()).map(|e| (row, e.clone())),
                         _ => None, // TODO error?
                     }
                 })
@@ -881,7 +873,7 @@ impl Platform {
         }
     }
 
-    async fn process_files(&self, result: &PageList) -> Result<()> {
+    async fn process_files(&self, result: &PageListDisk) -> Result<()> {
         let giu = self.has_param("giu");
         let file_data = self.has_param("ext_image_data")
             || self.get_param("sortby") == Some("filesize".to_string())
@@ -959,7 +951,7 @@ impl Platform {
                 })
                 .filter_map(|(row, entry)| {
                     match result.entries().read() {
-                        Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
+                        Ok(entries) => entries.get(entry.hash_key()).map(|e| (row, e.clone())),
                         _ => None, // TODO error?
                     }
                 })
@@ -971,7 +963,7 @@ impl Platform {
         Ok(())
     }
 
-    async fn annotate_with_wikidata_item(&self, result: &PageList) -> Result<()> {
+    async fn annotate_with_wikidata_item(&self, result: &PageListDisk) -> Result<()> {
         if result.is_wikidata() {
             return Ok(());
         }
@@ -983,13 +975,7 @@ impl Platform {
         let api = self.state.get_api_for_wiki(wiki.to_owned()).await?;
 
         // Using Wikidata
-        let titles: Vec<String> = result
-            .entries()
-            .read()
-            .map_err(|e| anyhow!("{e}"))?
-            .par_iter()
-            .filter_map(|entry| entry.title().full_pretty(&api))
-            .collect();
+        let titles = self.annotate_with_wikidata_item_get_titles(result, &api)?;
 
         let mut batches: Vec<SQLtuple> = vec![];
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -1050,8 +1036,8 @@ impl Platform {
                 Ok(ru) => ru,
                 Err(_e) => return, // TODO error log?
             };
-            let mut entry = match ru.get(&tmp_entry) {
-                Some(e) => (*e).clone(),
+            let mut entry = match ru.get(tmp_entry.hash_key()) {
+                Some(e) => e,
                 None => return,
             };
             drop(ru);
@@ -1089,7 +1075,7 @@ impl Platform {
     }
 
     /// Filters on whether a page has a Wikidata item, depending on the "wikidata_item"
-    async fn process_by_wikidata_item(&self, result: &PageList) -> Result<()> {
+    async fn process_by_wikidata_item(&self, result: &PageListDisk) -> Result<()> {
         if result.is_wikidata() {
             return Ok(());
         }
@@ -1098,32 +1084,29 @@ impl Platform {
             return Ok(());
         }
         self.annotate_with_wikidata_item(result).await?;
+        let mut entries = result.entries().write().map_err(|e| anyhow!("{e}"))?;
         if wdi == "with" {
-            result.retain_entries(&|entry| entry.get_wikidata_item().is_some())?;
+            entries.retain(|_key, entry| entry.get_wikidata_item().is_some());
         }
         if wdi == "without" {
-            result.retain_entries(&|entry| entry.get_wikidata_item().is_none())?;
+            entries.retain(|_key, entry| entry.get_wikidata_item().is_none());
         }
         Ok(())
     }
 
     /// Adds page properties that might be missing if none of the original sources was "categories"
-    async fn process_missing_database_filters(&self, result: &PageList) -> Result<()> {
+    async fn process_missing_database_filters(&self, result: &PageListDisk) -> Result<()> {
         let mut params = SourceDatabaseParameters::db_params(self).await;
         params.set_wiki(Some(result.wiki()?.ok_or_else(|| {
             anyhow!("Platform::process_missing_database_filters: result has no wiki".to_string())
         })?));
         let mut db = SourceDatabase::new(params);
-        let result_disk = result.to_pagelist_disk()?;
-        let new_result = db
-            .get_pages(&self.state, Some(&result_disk))
-            .await?
-            .to_pagelist()?;
+        let new_result = db.get_pages(&self.state, Some(result)).await?;
         result.set_from(new_result)?;
         Ok(())
     }
 
-    async fn process_labels_old(&self, result: &PageList) -> Result<()> {
+    async fn process_labels_old(&self, result: &PageListDisk) -> Result<()> {
         let mut sql = self.get_label_sql();
         if sql.1.is_empty() {
             return Ok(());
@@ -1270,7 +1253,7 @@ impl Platform {
     }
 
     /// Using new wbt_item_terms
-    async fn process_labels_new(&self, result: &PageList) -> Result<()> {
+    async fn process_labels_new(&self, result: &PageListDisk) -> Result<()> {
         if self.get_label_sql_new(&0).is_none() {
             return Ok(());
         }
@@ -1316,7 +1299,7 @@ impl Platform {
         Ok(())
     }
 
-    async fn process_labels(&self, result: &PageList) -> Result<()> {
+    async fn process_labels(&self, result: &PageListDisk) -> Result<()> {
         if false {
             self.process_labels_old(result).await
         } else {
@@ -1324,7 +1307,7 @@ impl Platform {
         }
     }
 
-    async fn process_sitelinks(&self, result: &PageList) -> Result<()> {
+    async fn process_sitelinks(&self, result: &PageListDisk) -> Result<()> {
         if result.is_empty()? {
             return Ok(());
         }
@@ -1424,7 +1407,7 @@ impl Platform {
         Ok(())
     }
 
-    async fn filter_wikidata(&self, result: &PageList) -> Result<()> {
+    async fn filter_wikidata(&self, result: &PageListDisk) -> Result<()> {
         if result.is_empty()? {
             return Ok(());
         }
@@ -1941,7 +1924,7 @@ impl Platform {
         &self,
         results: &mut HashMap<String, PageListDisk>,
         combination: Vec<CombinationSequential>,
-    ) -> Result<PageList> {
+    ) -> Result<PageListDisk> {
         let mut registers: Vec<PageListDisk> = vec![];
         for command in combination {
             match command {
@@ -1993,20 +1976,54 @@ impl Platform {
             }
         }
         if registers.len() == 1 {
-            let ret = registers
+            registers
                 .pop()
-                .ok_or_else(|| anyhow!("combine_results registers.len()"))?;
-            return ret.to_pagelist();
+                .ok_or_else(|| anyhow!("combine_results registers.len()"))
+        } else {
+            Err(anyhow!("combine_results:{} registers set", registers.len()))
         }
-        Err(anyhow!("combine_results:{} registers set", registers.len()))
     }
 
-    pub fn result(&self) -> &Option<PageList> {
+    pub fn result(&self) -> &Option<PageListDisk> {
         &self.result
     }
 
     pub fn form_parameters(&self) -> &FormParameters {
         &self.form_parameters
+    }
+
+    fn process_subpages_get_title_ns(
+        &self,
+        result: &PageListDisk,
+    ) -> Result<Vec<(String, i64)>, anyhow::Error> {
+        let entries = result.entries().read().map_err(|e| anyhow!("{:?}", e))?;
+        let title_ns: Vec<(String, NamespaceID)> = entries
+            .keys()
+            .par_iter()
+            .filter_map(|key| entries.get(key))
+            .map(|entry| {
+                (
+                    entry.title().with_underscores(),
+                    entry.title().namespace_id(),
+                )
+            })
+            .collect();
+        Ok(title_ns)
+    }
+
+    fn annotate_with_wikidata_item_get_titles(
+        &self,
+        result: &PageListDisk,
+        api: &wikimisc::mediawiki::Api,
+    ) -> Result<Vec<String>, anyhow::Error> {
+        let entries = result.entries().read().map_err(|e| anyhow!("{e}"))?;
+        let titles: Vec<String> = entries
+            .keys()
+            .par_iter()
+            .filter_map(|key| entries.get(key))
+            .filter_map(|entry| entry.title().full_pretty(api))
+            .collect();
+        Ok(titles)
     }
 }
 
@@ -2156,6 +2173,8 @@ mod tests {
         let platform = run_psid(10137125).await;
         let result = platform.result.unwrap();
         let entries = result
+            .to_pagelist()
+            .unwrap()
             .entries()
             .read()
             .unwrap()
@@ -2185,6 +2204,8 @@ mod tests {
         let platform = run_psid(10136716).await;
         let result = platform.result.unwrap();
         let entries = result
+            .to_pagelist()
+            .unwrap()
             .entries()
             .read()
             .unwrap()
@@ -2211,6 +2232,8 @@ mod tests {
         let platform = run_psid(10137767).await;
         let result = platform.result.unwrap();
         let entries = result
+            .to_pagelist()
+            .unwrap()
             .entries()
             .read()
             .unwrap()
@@ -2229,6 +2252,8 @@ mod tests {
         let platform = run_psid(10138030).await;
         let result = platform.result.unwrap();
         let entries = result
+            .to_pagelist()
+            .unwrap()
             .entries()
             .read()
             .unwrap()
@@ -2248,6 +2273,8 @@ mod tests {
         let platform = run_psid(10138979).await;
         let result = platform.result.unwrap();
         let entries = result
+            .to_pagelist()
+            .unwrap()
             .entries()
             .read()
             .unwrap()
@@ -2345,7 +2372,7 @@ mod tests {
     #[tokio::test]
     async fn test_template_talk_pages() {
         let platform = run_psid(15059382).await;
-        let result = platform.result.unwrap();
+        let result = platform.result.unwrap().to_pagelist().unwrap();
         let entries = entries_from_result(result);
         assert!(!entries.is_empty());
         for entry in entries {

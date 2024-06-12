@@ -119,15 +119,17 @@ impl PageListDisk {
     pub fn regexp_filter(&self, regexp: &str) -> Result<()> {
         let regexp_all = "^".to_string() + regexp + "$";
         let is_wikidata = self.is_wikidata();
-        if let Ok(re) = Regex::new(&regexp_all) {
-            self.retain_entries(&|_key, entry| match is_wikidata {
+        let re = Regex::new(&regexp_all)?;
+        self.entries
+            .write()
+            .map_err(|e| anyhow!("{e}"))?
+            .retain(|_key, entry| match is_wikidata {
                 true => match &entry.get_wikidata_label() {
                     Some(s) => re.is_match(s.as_str()),
                     None => false,
                 },
                 false => re.is_match(entry.title().pretty()),
-            })?
-        }
+            });
         Ok(())
     }
 
@@ -190,10 +192,13 @@ impl PageListDisk {
             return Err(anyhow!("Filter searches have failed"));
         }
 
-        self.retain_entries(&|_key, entry| match entry.page_id() {
-            Some(page_id) => retain_page_ids.contains(&page_id),
-            None => false,
-        })?;
+        self.entries
+            .write()
+            .map_err(|e| anyhow!("{e}"))?
+            .retain(|_key, entry| match entry.page_id() {
+                Some(page_id) => retain_page_ids.contains(&page_id),
+                None => false,
+            });
         Ok(())
     }
 
@@ -481,11 +486,6 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         }
         ret.par_sort_by(|a, b| a.compare(b, &sorter, self.is_wikidata()));
         Ok(ret)
-    }
-
-    pub fn retain_entries(&self, f: &dyn Fn(&String, &PageListEntry) -> bool) -> Result<()> {
-        self.entries.write().map_err(|e| anyhow!("{e}"))?.retain(f);
-        Ok(())
     }
 
     pub fn set_from(&self, other: Self) -> Result<()> {
