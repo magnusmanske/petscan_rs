@@ -1082,10 +1082,10 @@ impl SourceDatabase {
         }
         match self.params.last_edit_flagged.as_str() {
             "yes" => sql.0 +=
-                " AND NOT EXISTS (SELECT * FROM flaggedpage_pending WHERE p.page_id=fpp_page_id)",
+                " AND NOT EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)",
             "no" => {
                 sql.0 +=
-                    " AND EXISTS (SELECT * FROM flaggedpage_pending WHERE p.page_id=fpp_page_id)"
+                    " AND EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)"
             }
             _ => {}
         }

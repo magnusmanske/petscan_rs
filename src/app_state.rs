@@ -159,10 +159,10 @@ impl AppState {
     pub fn db_host_and_schema_for_wiki(&self, wiki: &str) -> Result<(String, String), String> {
         // TESTING
         /*
-        ssh magnus@tools-login.wmflabs.org -L 3307:dewiki.web.db.svc.eqiad.wmflabs:3306 -N &
-        ssh magnus@tools-login.wmflabs.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
-        ssh magnus@tools-login.wmflabs.org -L 3305:commonswiki.web.db.svc.eqiad.wmflabs:3306 -N &
-        ssh magnus@tools-login.wmflabs.org -L 3310:enwiki.web.db.svc.eqiad.wmflabs:3306 -N &
+        ssh magnus@login.toolforge.org -L 3307:dewiki.web.db.svc.eqiad.wmflabs:3306 -N &
+        ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
+        ssh magnus@login.toolforge.org -L 3305:commonswiki.web.db.svc.eqiad.wmflabs:3306 -N &
+        ssh magnus@login.toolforge.org -L 3310:enwiki.web.db.svc.eqiad.wmflabs:3306 -N &
          */
         let wiki = self.fix_wiki_name(wiki);
         let host = match self.config["host"].as_str() {
@@ -177,7 +177,7 @@ impl AppState {
     /// Returns the server and database name for the tool db, as a tuple
     pub fn db_host_and_schema_for_tool_db(&self) -> (String, String) {
         // TESTING
-        // ssh magnus@tools-login.wmflabs.org -L 3308:tools-db:3306 -N &
+        // ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
         let host = self.config["host"]
             .as_str()
             .expect("No host key in config file")
