@@ -75,10 +75,7 @@ impl Render for RenderTSV {
     }
 
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
-        match entry.get_wikidata_item() {
-            Some(q) => q,
-            None => String::new(),
-        }
+        entry.get_wikidata_item().unwrap_or_default()
     }
 
     fn render_user_name(&self, user: &str, _params: &RenderParams) -> String {

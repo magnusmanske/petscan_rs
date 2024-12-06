@@ -21,50 +21,8 @@ impl Render for RenderJSON {
         if params.json_pretty() {
             content_type = ContentType::Plain;
         }
-        params.set_file_usage(params.giu() || params.file_usage());
-        if params.giu() {
-            params.set_json_sparse(false);
-        }
 
-        // Header
-        let mut header: Vec<(&str, &str)> = vec![
-            ("title", "Title"),
-            ("page_id", "Page ID"),
-            ("namespace", "Namespace"),
-            ("size", "Size (bytes)"),
-            ("timestamp", "Last change"),
-        ];
-        if params.show_wikidata_item() {
-            header.push(("wikidata_item", "Wikidata"));
-        }
-        let mut header: Vec<(String, String)> = header
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        for col in self.get_initial_columns(&params) {
-            if !header.iter().any(|(k, _)| col == k) && col != "number" {
-                header.push((col.to_string(), col.to_string()));
-            }
-        }
-        let mut header: Vec<(String, String)> = header
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        for col in self.get_initial_columns(&params) {
-            if !header.iter().any(|(k, _)| col == k) && col != "number" {
-                header.push((col.to_string(), col.to_string()));
-            }
-        }
-        if params.file_data() {
-            self.file_data_keys()
-                .iter()
-                .for_each(|k| header.push((k.to_string(), k.to_string())));
-        }
-
-        let value: Value = match params.json_output_compatability() {
-            "quick-intersection" => self.quick_intersection(platform, entries, &params, &header),
-            _ => self.cat_scan(platform, entries, &params, &header), // Default
-        };
+        let value = self.generate_json(platform, &mut params, entries).await?;
 
         let mut out: String = String::new();
         if !params.json_callback().is_empty() {
@@ -114,6 +72,59 @@ impl RenderJSON {
         Box::new(Self {})
     }
 
+    pub async fn generate_json(
+        &self,
+        platform: &Platform,
+        params: &mut RenderParams,
+        entries: Vec<PageListEntry>,
+    ) -> Result<Value, String> {
+        params.set_file_usage(params.giu() || params.file_usage());
+        if params.giu() {
+            params.set_json_sparse(false);
+        }
+
+        // Header
+        let mut header: Vec<(&str, &str)> = vec![
+            ("title", "Title"),
+            ("page_id", "Page ID"),
+            ("namespace", "Namespace"),
+            ("size", "Size (bytes)"),
+            ("timestamp", "Last change"),
+        ];
+        if params.show_wikidata_item() {
+            header.push(("wikidata_item", "Wikidata"));
+        }
+        let mut header: Vec<(String, String)> = header
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        for col in self.get_initial_columns(params) {
+            if !header.iter().any(|(k, _)| col == k) && col != "number" {
+                header.push((col.to_string(), col.to_string()));
+            }
+        }
+        let mut header: Vec<(String, String)> = header
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        for col in self.get_initial_columns(params) {
+            if !header.iter().any(|(k, _)| col == k) && col != "number" {
+                header.push((col.to_string(), col.to_string()));
+            }
+        }
+        if params.file_data() {
+            self.file_data_keys()
+                .iter()
+                .for_each(|k| header.push((k.to_string(), k.to_string())));
+        }
+
+        let value: Value = match params.json_output_compatability() {
+            "quick-intersection" => self.quick_intersection(platform, entries, params, &header),
+            _ => self.cat_scan(platform, entries, params, &header), // Default
+        };
+        Ok(value)
+    }
+
     fn get_query_string(&self, platform: &Platform) -> String {
         "https://petscan.wmflabs.org/?".to_string() + &platform.form_parameters().to_string()
     }
@@ -149,15 +160,9 @@ impl RenderJSON {
                 }
                 self.add_metadata(&mut o, entry, header);
                 if params.file_data() {
-                    match &o["metadata"].get("fileusage") {
-                        Some(_) => o["gil"] = o["metadata"]["fileusage"].to_owned(),
-                        None => {}
-                    }
+                    if o["metadata"].get("fileusage").is_some() { o["gil"] = o["metadata"]["fileusage"].to_owned() }
                     self.file_data_keys().iter().for_each(|k|{
-                        match &o["metadata"].get(k) {
-                            Some(_) => o[k] = o["metadata"][k].to_owned(),
-                            None => {}
-                        }
+                        if o["metadata"].get(k).is_some() { o[k] = o["metadata"][k].to_owned() }
                     });
                 }
                 o

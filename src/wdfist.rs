@@ -450,7 +450,7 @@ impl WDfist {
         };
         // TODO only rows starting with '*'?
         wikitext.split('\n').for_each(|filename| {
-            let filename = filename.trim_start_matches(|c| c == ' ' || c == '*');
+            let filename = filename.trim_start_matches([' ', '*']);
             let filename = self.normalize_filename(filename);
             if self.is_valid_filename(&filename) {
                 self.files2ignore.insert(filename);
@@ -844,10 +844,7 @@ mod tests {
     fn set_item2files(wdfist: &mut WDfist, q: &str, files: Vec<(&str, usize)>) {
         wdfist.item2files.insert(
             q.to_string(),
-            files
-                .par_iter()
-                .map(|x| (x.0.to_string(), x.1 as usize))
-                .collect(),
+            files.par_iter().map(|x| (x.0.to_string(), x.1)).collect(),
         );
     }
 
@@ -904,20 +901,20 @@ mod tests {
     async fn test_is_valid_filename() {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec![]).await;
-        assert!(wdfist.is_valid_filename(&"foobar.jpg".to_string()));
-        assert!(!wdfist.is_valid_filename(&"foobar.GIF".to_string()));
-        assert!(!wdfist.is_valid_filename(&"foobar.pdf".to_string()));
-        assert!(!wdfist.is_valid_filename(&"foobar.DjVU".to_string()));
-        assert!(wdfist.is_valid_filename(&"some_600px_bs.jpg".to_string()));
-        assert!(!wdfist.is_valid_filename(&"some_600px_bs.png".to_string()));
-        assert!(!wdfist.is_valid_filename(&"Flag_of_foobar.jpg".to_string()));
-        assert!(!wdfist.is_valid_filename(&"fooCrystal_Clear_bar.jpg".to_string()));
-        assert!(!wdfist.is_valid_filename(&"fooNuvola_bar.jpg".to_string()));
-        assert!(!wdfist.is_valid_filename(&"fooKit_bar.jpg".to_string()));
+        assert!(wdfist.is_valid_filename("foobar.jpg"));
+        assert!(!wdfist.is_valid_filename("foobar.GIF"));
+        assert!(!wdfist.is_valid_filename("foobar.pdf"));
+        assert!(!wdfist.is_valid_filename("foobar.DjVU"));
+        assert!(wdfist.is_valid_filename("some_600px_bs.jpg"));
+        assert!(!wdfist.is_valid_filename("some_600px_bs.png"));
+        assert!(!wdfist.is_valid_filename("Flag_of_foobar.jpg"));
+        assert!(!wdfist.is_valid_filename("fooCrystal_Clear_bar.jpg"));
+        assert!(!wdfist.is_valid_filename("fooNuvola_bar.jpg"));
+        assert!(!wdfist.is_valid_filename("fooKit_bar.jpg"));
         wdfist.wdf_allow_svg = true;
-        assert!(wdfist.is_valid_filename(&"foobar.svg".to_string()));
+        assert!(wdfist.is_valid_filename("foobar.svg"));
         wdfist.wdf_allow_svg = false;
-        assert!(!wdfist.is_valid_filename(&"foobar.svg".to_string()));
+        assert!(!wdfist.is_valid_filename("foobar.svg"));
     }
 
     // Deactivated: connection to cewiki_p required
@@ -959,14 +956,10 @@ mod tests {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec!["Q350"]).await;
         wdfist.follow_coords().await.unwrap();
-        assert!(wdfist.item2files.get(&"Q350".to_string()).unwrap().len() > 40);
-        assert!(wdfist
-            .item2files
-            .get(&"Q350".to_string())
-            .unwrap()
-            .contains_key(
-                &"Cycling_down_Malcolm_Street_-_geograph.org.uk_-_3751839.jpg".to_string()
-            ));
+        assert!(wdfist.item2files.get("Q350").unwrap().len() > 40);
+        assert!(wdfist.item2files.get("Q350").unwrap().contains_key(
+            &"Cycling_down_Malcolm_Street_-_geograph.org.uk_-_3751839.jpg".to_string()
+        ));
     }
 
     #[tokio::test]
@@ -974,17 +967,10 @@ mod tests {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec!["Q66711783"]).await;
         wdfist.follow_search_commons().await.unwrap();
-        assert!(
-            wdfist
-                .item2files
-                .get(&"Q66711783".to_string())
-                .unwrap()
-                .len()
-                > 3
-        );
+        assert!(wdfist.item2files.get("Q66711783").unwrap().len() > 3);
         assert!(wdfist
             .item2files
-            .get(&"Q66711783".to_string())
+            .get("Q66711783")
             .unwrap()
             .contains_key(&"Walter_Archer_and_family.jpg".to_string()));
     }

@@ -26,6 +26,7 @@ pub mod platform;
 pub mod render;
 pub mod render_html;
 pub mod render_json;
+pub mod render_jsonl;
 pub mod render_kml;
 pub mod render_pagepile;
 pub mod render_params;

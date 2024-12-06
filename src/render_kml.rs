@@ -17,10 +17,11 @@ impl Render for RenderKML {
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse, String> {
         let params = RenderParams::new(platform, wiki).await?;
-        let server = match params.state().site_matrix().get_server_url_for_wiki(wiki) {
-            Ok(url) => url,
-            Err(_e) => String::new(),
-        };
+        let server = params
+            .state()
+            .site_matrix()
+            .get_server_url_for_wiki(wiki)
+            .unwrap_or_default();
         let mut kml = String::new();
         kml += r#"<?xml version="1.0" encoding="UTF-8"?>
         <kml xmlns="http://www.opengis.net/kml/2.2"><Document>"#;

@@ -14,6 +14,7 @@ use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, PageListSort, Tr
 use crate::render::*;
 use crate::render_html::RenderHTML;
 use crate::render_json::RenderJSON;
+use crate::render_jsonl::RenderJSONL;
 use crate::render_kml::RenderKML;
 use crate::render_pagepile::RenderPagePile;
 use crate::render_plaintext::RenderPlainText;
@@ -1614,6 +1615,7 @@ impl Platform {
             "csv" => RenderTSV::new(",").response(self, &wiki, pages).await,
             "tsv" => RenderTSV::new("\t").response(self, &wiki, pages).await,
             "json" => RenderJSON::new().response(self, &wiki, pages).await,
+            "jsonl" => RenderJSONL::new().response(self, &wiki, pages).await,
             "pagepile" => RenderPagePile::new().response(self, &wiki, pages).await,
             "kml" => RenderKML::new().response(self, &wiki, pages).await,
             "plain" => RenderPlainText::new().response(self, &wiki, pages).await,
