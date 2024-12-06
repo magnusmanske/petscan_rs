@@ -551,20 +551,18 @@ mod tests {
     fn file_usage() {
         // 3 instead of 4 parts
         assert_eq!(
-            FileUsage::new_from_part(&"the_wiki:7:12345:the_namespace_name".to_string()),
+            FileUsage::new_from_part("the_wiki:7:12345:the_namespace_name"),
             None
         );
         // String instead of namespace ID
         assert_eq!(
             FileUsage::new_from_part(
-                &"the_wiki:the_namespace_id:the_page_id:the_namespace_name:The:page".to_string()
+                "the_wiki:the_namespace_id:the_page_id:the_namespace_name:The:page"
             ),
             None
         );
         // This should work
-        let fu =
-            FileUsage::new_from_part(&"the_wiki:7:12345:the_namespace_name:The:page".to_string())
-                .unwrap();
+        let fu = FileUsage::new_from_part("the_wiki:7:12345:the_namespace_name:The:page").unwrap();
         assert_eq!(fu.wiki(), "the_wiki");
         assert_eq!(fu.namespace_name(), "the_namespace_name");
         assert_eq!(*fu.title(), Title::new("The:page", 7));
@@ -573,12 +571,9 @@ mod tests {
 
     #[test]
     fn file_info() {
-        let fu =
-            FileUsage::new_from_part(&"the_wiki:7:12345:the_namespace_name:The:page".to_string())
-                .unwrap();
+        let fu = FileUsage::new_from_part("the_wiki:7:12345:the_namespace_name:The:page").unwrap();
         let fi = FileInfo::new_from_gil_group(
-            &"|somesuch|the_wiki:7:12345:the_namespace_name:The:page|the_wiki:7:the_namespace_name"
-                .to_string(),
+            "|somesuch|the_wiki:7:12345:the_namespace_name:The:page|the_wiki:7:the_namespace_name",
         );
         assert_eq!(fi.file_usage, vec![fu]);
     }

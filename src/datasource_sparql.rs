@@ -71,7 +71,7 @@ impl DataSource for SourceSparql {
                         .to_string();
                 }
                 "    }, {" | "    } ]" => match mode {
-                    0 => header += &line,
+                    0 => header += line,
                     1 => {
                         binding = "{".to_string() + &binding + "}";
                         let j: Value = serde_json::from_str(&binding).unwrap_or_else(|_| json!({}));

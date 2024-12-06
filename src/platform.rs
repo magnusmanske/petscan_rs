@@ -21,6 +21,7 @@ use crate::render_tsv::RenderTSV;
 use crate::render_wikitext::RenderWiki;
 use crate::wdfist::*;
 use futures::future::join_all;
+use my::Value::Bytes;
 use mysql_async as my;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
@@ -767,13 +768,13 @@ impl Platform {
             parts.remove(0); // page_namespace
             if add_image {
                 entry.set_page_image(match parts.remove(0) {
-                    my::Value::Bytes(s) => String::from_utf8(s).ok(),
+                    Bytes(s) => String::from_utf8(s).ok(),
                     _ => None,
                 });
             }
             if add_coordinates {
                 let coordinates = match parts.remove(0) {
-                    my::Value::Bytes(s) => match String::from_utf8(s) {
+                    Bytes(s) => match String::from_utf8(s) {
                         Ok(lat_lon) => wikimisc::lat_lon::LatLon::from_str(&lat_lon).ok(),
                         _ => None,
                     },
@@ -783,7 +784,7 @@ impl Platform {
             }
             if add_defaultsort {
                 entry.set_defaultsort(match parts.remove(0) {
-                    my::Value::Bytes(s) => String::from_utf8(s).ok(),
+                    Bytes(s) => String::from_utf8(s).ok(),
                     _ => None,
                 });
             }
@@ -1046,7 +1047,7 @@ impl Platform {
             let full_page_title = match row.get(0) {
                 /* trunk-ignore(clippy/collapsible_match) */
                 Some(title) => match title {
-                    my::Value::Bytes(uv) => match String::from_utf8(uv) {
+                    Bytes(uv) => match String::from_utf8(uv) {
                         Ok(s) => s,
                         Err(_) => return,
                     },
@@ -1583,13 +1584,10 @@ impl Platform {
 
     pub async fn get_response(&self) -> Result<MyResponse, String> {
         // Shortcut: WDFIST
-        match &self.wdfist_result {
-            Some(j) => {
-                return Ok(self
-                    .state
-                    .output_json(j, self.form_parameters.params.get("callback")));
-            }
-            None => {}
+        if let Some(j) = &self.wdfist_result {
+            return Ok(self
+                .state
+                .output_json(j, self.form_parameters.params.get("callback")));
         }
 
         let result = match &self.result {
@@ -1870,7 +1868,7 @@ impl Platform {
 
     /// Checks is the parameter is set, and non-blank
     pub fn has_param(&self, param: &str) -> bool {
-        match self.form_parameters().params.get(&param.to_string()) {
+        match self.form_parameters().params.get(param) {
             Some(s) => !s.is_empty(),
             None => false,
         }
@@ -1880,7 +1878,7 @@ impl Platform {
         if self.has_param(param) {
             self.form_parameters()
                 .params
-                .get(&param.to_string())
+                .get(param)
                 .map(|s| s.to_string())
         } else {
             None
@@ -2106,8 +2104,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parse_combination_string() {
-        let res =
-            Platform::parse_combination_string(&"categories NOT (sparql OR pagepile)".to_string());
+        let res = Platform::parse_combination_string("categories NOT (sparql OR pagepile)");
         let expected = Combination::Not((
             Box::new(Combination::Source("categories".to_string())),
             Box::new(Combination::Union((
@@ -2178,7 +2175,7 @@ mod tests {
             .cloned()
             .collect::<Vec<PageListEntry>>();
         assert_eq!(entries.len(), 1);
-        let entry = entries.get(0).unwrap();
+        let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(1340715));
         let fi = entry.get_file_info();
         assert!(fi.is_some());
@@ -2207,7 +2204,7 @@ mod tests {
             .cloned()
             .collect::<Vec<PageListEntry>>();
         assert_eq!(entries.len(), 1);
-        let entry = entries.get(0).unwrap();
+        let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(36995));
         assert!(entry.page_bytes().is_some());
         assert!(entry.get_page_timestamp().is_some());
@@ -2233,7 +2230,7 @@ mod tests {
             .cloned()
             .collect::<Vec<PageListEntry>>();
         assert_eq!(entries.len(), 1);
-        let entry = entries.get(0).unwrap();
+        let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(239794));
         assert_eq!(entry.get_wikidata_item(), Some("Q12345".to_string()));
     }
@@ -2270,7 +2267,7 @@ mod tests {
             .cloned()
             .collect::<Vec<PageListEntry>>();
         assert_eq!(entries.len(), 1);
-        let entry = entries.get(0).unwrap();
+        let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(13925));
         assert_eq!(entry.get_wikidata_label(), Some("Graaf Tel".to_string()));
         assert_eq!(

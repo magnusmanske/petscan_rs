@@ -360,9 +360,8 @@ impl RenderHTML {
         // TODO properties?
         if is_page_link && wiki == "wikidatawiki" && title.namespace_id() == 0 {
             ret += &format!("&nbsp;<small><tt>[{}]</tt></small>", title.pretty());
-            match &wikidata_description {
-                Some(desc) => ret += &format!("<div class='smaller'>{}</div>", &desc),
-                None => {}
+            if let Some(desc) = &wikidata_description {
+                ret += &format!("<div class='smaller'>{desc}</div>")
             }
         }
         ret
@@ -387,7 +386,7 @@ impl RenderHTML {
                 ret += class_name;
                 ret += "'>";
             }
-            ret += &item;
+            ret += item;
             ret += "</td>";
         }
         ret += "</tr>";

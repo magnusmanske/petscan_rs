@@ -506,13 +506,13 @@ mod tests {
         assert_eq!(
             state
                 .site_matrix
-                .get_wiki_for_server_url(&"https://am.wiktionary.org".to_string()),
+                .get_wiki_for_server_url("https://am.wiktionary.org"),
             Some("amwiktionary".to_string())
         );
         assert_eq!(
             state
                 .site_matrix
-                .get_wiki_for_server_url(&"https://outreach.wikimedia.org".to_string()),
+                .get_wiki_for_server_url("https://outreach.wikimedia.org"),
             Some("outreachwiki".to_string())
         );
     }
@@ -522,15 +522,12 @@ mod tests {
         let state = get_state().await;
         assert_eq!(
             "enwiki_p".to_string(),
-            state
-                .db_host_and_schema_for_wiki(&"enwiki".to_string())
-                .unwrap()
-                .1
+            state.db_host_and_schema_for_wiki("enwiki").unwrap().1
         );
         assert_eq!(
             "be_x_oldwiki_p".to_string(),
             state
-                .db_host_and_schema_for_wiki(&"be-taraskwiki".to_string())
+                .db_host_and_schema_for_wiki("be-taraskwiki")
                 .unwrap()
                 .1
         );

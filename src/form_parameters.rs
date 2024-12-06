@@ -110,11 +110,11 @@ impl FormParameters {
     }
 
     fn has_param(&self, key: &str) -> bool {
-        self.params.contains_key(&key.to_string())
+        self.params.contains_key(key)
     }
 
     fn has_param_with_value(&self, key: &str) -> bool {
-        match self.params.get(&key.to_string()) {
+        match self.params.get(key) {
             Some(s) => !s.trim().is_empty(),
             None => false,
         }
@@ -215,8 +215,8 @@ mod tests {
     fn test_has_param_with_value() {
         let mut form_params = FormParameters::new();
         form_params.set_param("test", "value");
-        assert_eq!(form_params.has_param_with_value("test"), true);
-        assert_eq!(form_params.has_param_with_value("test2"), false);
+        assert!(form_params.has_param_with_value("test"));
+        assert!(!form_params.has_param_with_value("test2"));
     }
 
     #[test]
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn test_outcome_from_query() {
         let form_params = FormParameters::outcome_from_query("test=value&test2=value2");
-        assert_eq!(form_params.is_ok(), true);
+        assert!(form_params.is_ok());
         let form_params = form_params.unwrap();
         assert_eq!(form_params.params.get("test"), Some(&"value".to_string()));
         assert_eq!(form_params.params.get("test2"), Some(&"value2".to_string()));
@@ -254,8 +254,8 @@ mod tests {
     fn test_has_param() {
         let mut form_params = FormParameters::new();
         form_params.set_param("test", "value");
-        assert_eq!(form_params.has_param("test"), true);
-        assert_eq!(form_params.has_param("test2"), false);
+        assert!(form_params.has_param("test"));
+        assert!(!form_params.has_param("test2"));
     }
 
     #[test]
@@ -272,9 +272,9 @@ mod tests {
         params.insert("ns[1]".to_string(), "1".to_string());
         params.insert("ns[2]".to_string(), "1".to_string());
         let form_params = FormParameters::new_from_pairs(params);
-        assert_eq!(form_params.ns.contains(&0), true);
-        assert_eq!(form_params.ns.contains(&1), true);
-        assert_eq!(form_params.ns.contains(&2), true);
+        assert!(form_params.ns.contains(&0));
+        assert!(form_params.ns.contains(&1));
+        assert!(form_params.ns.contains(&2));
     }
 
     #[test]

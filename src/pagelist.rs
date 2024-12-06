@@ -801,15 +801,15 @@ mod tests {
     #[test]
     fn page_list_sort() {
         assert_eq!(
-            PageListSort::new_from_params(&"incoming_links".to_string(), true),
+            PageListSort::new_from_params("incoming_links", true),
             PageListSort::IncomingLinks(true)
         );
         assert_eq!(
-            PageListSort::new_from_params(&"ns_title".to_string(), false),
+            PageListSort::new_from_params("ns_title", false),
             PageListSort::NsTitle(false)
         );
         assert_eq!(
-            PageListSort::new_from_params(&"this is not a sort parameter".to_string(), true),
+            PageListSort::new_from_params("this is not a sort parameter", true),
             PageListSort::Default(true)
         );
     }
