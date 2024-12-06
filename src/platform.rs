@@ -30,6 +30,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex as TokioMutex;
@@ -773,7 +774,7 @@ impl Platform {
             if add_coordinates {
                 let coordinates = match parts.remove(0) {
                     my::Value::Bytes(s) => match String::from_utf8(s) {
-                        Ok(lat_lon) => wikimisc::lat_lon::LatLon::from_str(&lat_lon),
+                        Ok(lat_lon) => wikimisc::lat_lon::LatLon::from_str(&lat_lon).ok(),
                         _ => None,
                     },
                     _ => None,
@@ -843,7 +844,7 @@ impl Platform {
                 .to_sql_batches_namespace(batch_size,6)?
                 .par_iter_mut()
                 .map(|sql_batch| {
-                    sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
+                    sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
                     sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len()) ;
                     sql_batch.0 += ")";
                     if file_usage_data_ns0  {sql_batch.0 += " AND gil_page_namespace_id=0" ;}
@@ -1724,11 +1725,11 @@ impl Platform {
         let langs_any = self.get_param_as_vec("langs_labels_any", ",");
         let langs_no = self.get_param_as_vec("langs_labels_no", ",");
 
-        ret.0 = "SELECT DISTINCT concat('Q',wbit_item_id) AS term_full_entity_id 
-            FROM wbt_text,wbt_item_terms wbt_item_terms1,wbt_type,wbt_term_in_lang,wbt_text_in_lang 
-            WHERE wbit_term_in_lang_id = wbtl_id 
-            AND wbtl_type_id = wby_id 
-            AND wbtl_text_in_lang_id = wbxl_id 
+        ret.0 = "SELECT DISTINCT concat('Q',wbit_item_id) AS term_full_entity_id
+            FROM wbt_text,wbt_item_terms wbt_item_terms1,wbt_type,wbt_term_in_lang,wbt_text_in_lang
+            WHERE wbit_term_in_lang_id = wbtl_id
+            AND wbtl_type_id = wby_id
+            AND wbtl_text_in_lang_id = wbxl_id
             AND wbxl_text_id = wbx_id"
             .to_string();
 
@@ -1771,17 +1772,17 @@ impl Platform {
 
         no.iter().for_each(|s| {
             ret.0 += " AND NOT EXISTS (
-                SELECT * FROM 
+                SELECT * FROM
                 wbt_text wbt_text2,
                 wbt_item_terms wbt_item_terms2,
                 wbt_type wbt_type2,
                 wbt_term_in_lang wbt_term_in_lang2,
                 wbt_text_in_lang wbt_text_in_lang2
-                WHERE wbt_item_terms2.wbit_term_in_lang_id = wbt_term_in_lang2.wbtl_id 
-                AND wbt_term_in_lang2.wbtl_type_id = wbt_type2.wby_id 
-                AND wbt_term_in_lang2.wbtl_text_in_lang_id = wbt_text_in_lang2.wbxl_id 
+                WHERE wbt_item_terms2.wbit_term_in_lang_id = wbt_term_in_lang2.wbtl_id
+                AND wbt_term_in_lang2.wbtl_type_id = wbt_type2.wby_id
+                AND wbt_term_in_lang2.wbtl_text_in_lang_id = wbt_text_in_lang2.wbxl_id
                 AND wbt_text_in_lang2.wbxl_text_id = wbt_text2.wbx_id
-                AND wbt_item_terms1.wbit_item_id=wbt_item_terms2.wbit_item_id 
+                AND wbt_item_terms1.wbit_item_id=wbt_item_terms2.wbit_item_id
                 AND wbt_type2.wby_name='item'";
             if s != "%" {
                 ret.0 += " AND wbt_text2.wbx_text LIKE ?";
