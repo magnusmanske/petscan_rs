@@ -625,27 +625,12 @@ impl Platform {
 
     async fn process_namespace_conversion(&self, result: &PageList) -> Result<(), String> {
         let namespace_conversion = self.get_param_default("namespace_conversion", "keep");
-        let add = match namespace_conversion.as_str() {
-            "topic" => 0,
-            "talk" => 1,
+        let use_talk = match namespace_conversion.as_str() {
+            "topic" => false,
+            "talk" => true,
             _ => return Ok(()),
         };
-        // Need tmp to avoid permanent double-lock on entries
-        let tmp = result
-            .entries()
-            .read()
-            .map_err(|e| format!("{:?}", e))?
-            .par_iter()
-            .map(|entry| {
-                let mut nsid = entry.title().namespace_id();
-                nsid = nsid - (nsid & 1) + add; // Change "talk" bit
-                let t = entry.title().pretty();
-                let new_title = Title::new(t, nsid);
-                PageListEntry::new(new_title)
-            })
-            .collect();
-        *(result.entries().write().map_err(|e| format!("{:?}", e))?) = tmp;
-        Ok(())
+        result.change_namespaces(use_talk)
     }
 
     async fn process_subpages(&self, result: &PageList) -> Result<(), String> {
@@ -656,19 +641,7 @@ impl Platform {
         }
 
         if add_subpages {
-            let title_ns: Vec<(String, NamespaceID)> = result
-                .entries()
-                .read()
-                .map_err(|e| format!("{:?}", e))?
-                .par_iter()
-                .map(|entry| {
-                    (
-                        entry.title().with_underscores(),
-                        entry.title().namespace_id(),
-                    )
-                })
-                .collect();
-
+            let title_ns = result.to_titles_namepsaces()?;
             let wiki = match result.wiki()? {
                 Some(wiki) => wiki.to_owned(),
                 None => return Err("Platform::process_redlinks: no wiki set in result".to_string()),
@@ -823,12 +796,7 @@ impl Platform {
                     .entry_from_row(row, col_title, col_ns)
                     .map(|entry| (row, entry))
             })
-            .filter_map(|(row, entry)| {
-                match result.entries().read() {
-                    Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
-                    _ => None, // TODO error?
-                }
-            })
+            .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
             .for_each(|(row, mut entry)| {
                 the_f(row.clone(), &mut entry);
                 result.add_entry(entry).unwrap_or(());
@@ -881,12 +849,7 @@ impl Platform {
                         .entry_from_row(row, col_title, col_ns)
                         .map(|entry| (row, entry))
                 })
-                .filter_map(|(row, entry)| {
-                    match result.entries().read() {
-                        Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
-                        _ => None, // TODO error?
-                    }
-                })
+                .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
                 .for_each(|(row, mut entry)| {
                     the_f(row.clone(), &mut entry);
                     result.add_entry(entry).unwrap_or(());
@@ -971,12 +934,7 @@ impl Platform {
                         .entry_from_row(row, col_title, col_ns)
                         .map(|entry| (row, entry))
                 })
-                .filter_map(|(row, entry)| {
-                    match result.entries().read() {
-                        Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
-                        _ => None, // TODO error?
-                    }
-                })
+                .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
                 .for_each(|(row, mut entry)| {
                     the_f(row.clone(), &mut entry);
                     result.add_entry(entry).unwrap_or(());
@@ -997,13 +955,7 @@ impl Platform {
         let api = self.state.get_api_for_wiki(wiki.to_owned()).await?;
 
         // Using Wikidata
-        let titles: Vec<String> = result
-            .entries()
-            .read()
-            .map_err(|e| format!("{:?}", e))?
-            .par_iter()
-            .filter_map(|entry| entry.title().full_pretty(&api))
-            .collect();
+        let titles = result.to_full_pretty_titles(&api)?;
 
         let mut batches: Vec<SQLtuple> = vec![];
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -1066,15 +1018,10 @@ impl Platform {
             };
             let title = Title::new_from_full(&full_page_title, &api);
             let tmp_entry = PageListEntry::new(title);
-            let ru = match result.entries().read() {
-                Ok(ru) => ru,
-                Err(_e) => return, // TODO error log?
-            };
-            let mut entry = match ru.get(&tmp_entry) {
-                Some(e) => (*e).clone(),
+            let mut entry = match result.get_entry(&tmp_entry) {
+                Some(entry) => entry,
                 None => return,
             };
-            drop(ru);
 
             let q = "Q".to_string() + &ips_item_id.to_string();
             entry.set_wikidata_item(Some(q));
@@ -2169,13 +2116,7 @@ mod tests {
         // Manual list [[File:KingsCollegeChapelWest.jpg]] on commons
         let platform = run_psid(10137125).await;
         let result = platform.result.unwrap();
-        let entries = result
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+        let entries = result.as_vec().unwrap();
         assert_eq!(entries.len(), 1);
         let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(1340715));
@@ -2198,13 +2139,7 @@ mod tests {
         // Manual list [[Cambridge]] on enwiki
         let platform = run_psid(10136716).await;
         let result = platform.result.unwrap();
-        let entries = result
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+        let entries = result.as_vec().unwrap();
         assert_eq!(entries.len(), 1);
         let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(36995));
@@ -2224,13 +2159,7 @@ mod tests {
         // Manual list [[Count von Count]] on enwiki
         let platform = run_psid(10137767).await;
         let result = platform.result.unwrap();
-        let entries = result
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+        let entries = result.as_vec().unwrap();
         assert_eq!(entries.len(), 1);
         let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(239794));
@@ -2242,13 +2171,7 @@ mod tests {
         // Manual list [[User:Magnus Manske]] on enwiki, subpages, not "root page"
         let platform = run_psid(10138030).await;
         let result = platform.result.unwrap();
-        let entries = result
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+        let entries = result.as_vec().unwrap();
         assert!(entries.len() > 100);
         // Try to find pages with no '/'
         assert!(!entries
@@ -2261,13 +2184,7 @@ mod tests {
         // Manual list [[Q12345]], nl label/desc
         let platform = run_psid(10138979).await;
         let result = platform.result.unwrap();
-        let entries = result
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>();
+        let entries = result.as_vec().unwrap();
         assert_eq!(entries.len(), 1);
         let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(13925));
@@ -2338,13 +2255,7 @@ mod tests {
     // }
 
     fn entries_from_result(result: PageList) -> Vec<PageListEntry> {
-        result
-            .entries()
-            .read()
-            .unwrap()
-            .iter()
-            .cloned()
-            .collect::<Vec<PageListEntry>>()
+        result.as_vec().unwrap()
     }
 
     // Deactivated: connection to enwikiquote_p required

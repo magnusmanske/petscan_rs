@@ -1323,8 +1323,7 @@ mod tests {
         assert_eq!(result.wiki(), Ok(Some("enwiki".to_string())));
         assert!(result.len().unwrap() < 5); // This may change as more articles are written/categories added, please adjust!
         assert!(result
-            .entries()
-            .read()
+            .as_vec()
             .unwrap()
             .iter()
             .any(|entry| entry.title().pretty() == "Magnus Manske"));

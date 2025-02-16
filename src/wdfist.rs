@@ -37,8 +37,7 @@ impl WDfist {
                     return None;
                 }
                 pagelist
-                    .entries()
-                    .read()
+                    .as_vec()
                     .unwrap()
                     .par_iter()
                     .filter(|e| e.title().namespace_id() == 0)

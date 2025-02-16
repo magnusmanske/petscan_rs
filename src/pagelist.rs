@@ -20,18 +20,6 @@ pub struct PageList {
     has_sitelink_counts: RwLock<bool>,
 }
 
-impl PartialEq for PageList {
-    fn eq(&self, other: &Self) -> bool {
-        if self.wiki() != other.wiki() {
-            return false;
-        }
-        match (self.entries.read(), other.entries.read()) {
-            (Ok(a), Ok(b)) => *a == *b,
-            _ => false,
-        }
-    }
-}
-
 impl PageList {
     pub fn new_from_wiki(wiki: &str) -> Self {
         Self {
@@ -86,10 +74,6 @@ impl PageList {
         Ok(ret)
     }
 
-    pub fn entries(&self) -> &RwLock<HashSet<PageListEntry>> {
-        &self.entries
-    }
-
     pub fn set_entries(&self, entries: HashSet<PageListEntry>) -> Result<(), String> {
         *self.entries.write().map_err(|e| format!("{:?}", e))? = entries;
         Ok(())
@@ -101,6 +85,60 @@ impl PageList {
             .map_err(|e| format!("{:?}", e))?
             .retain(f);
         Ok(())
+    }
+
+    pub fn get_entry(&self, entry: &PageListEntry) -> Option<PageListEntry> {
+        self.entries.read().ok()?.get(entry).map(|e| e.clone())
+    }
+
+    pub fn to_titles_namepsaces(&self) -> Result<Vec<(String, NamespaceID)>, String> {
+        let title_ns = self
+            .entries
+            .read()
+            .map_err(|e| format!("{:?}", e))?
+            .par_iter()
+            .map(|entry| {
+                (
+                    entry.title().with_underscores(),
+                    entry.title().namespace_id(),
+                )
+            })
+            .collect();
+        Ok(title_ns)
+    }
+
+    pub fn to_full_pretty_titles(&self, api: &Api) -> Result<Vec<String>, String> {
+        let ret = self
+            .entries
+            .read()
+            .map_err(|e| format!("{:?}", e))?
+            .par_iter()
+            .filter_map(|entry| entry.title().full_pretty(api))
+            .collect();
+        Ok(ret)
+    }
+
+    pub fn change_namespaces(&self, to_talk: bool) -> Result<(), String> {
+        let add = to_talk as i64;
+        let tmp = self
+            .entries
+            .read()
+            .map_err(|e| format!("{:?}", e))?
+            .par_iter()
+            .map(|entry| {
+                let mut nsid = entry.title().namespace_id();
+                nsid = nsid - (nsid & 1) + add; // Change "talk" bit
+                let t = entry.title().pretty();
+                let new_title = Title::new(t, nsid);
+                PageListEntry::new(new_title)
+            })
+            .collect();
+        *(self.entries.write().map_err(|e| format!("{:?}", e))?) = tmp;
+        Ok(())
+    }
+
+    pub fn as_vec(&self) -> Result<Vec<PageListEntry>, String> {
+        Ok(self.entries.read().unwrap().iter().cloned().collect())
     }
 
     pub fn set_wiki(&self, wiki: Option<String>) -> Result<(), String> {
@@ -214,7 +252,7 @@ impl PageList {
         let mut me = self.entries.write().map_err(|e| format!("{:?}", e))?;
         if me.is_empty() {
             *me = pagelist
-                .entries()
+                .entries
                 .read()
                 .map_err(|e| format!("{:?}", e))?
                 .clone();
@@ -222,7 +260,7 @@ impl PageList {
         }
         Platform::profile("PageList::union START UNION/2", None);
         pagelist
-            .entries()
+            .entries
             .read()
             .map_err(|e| format!("{:?}", e))?
             .iter()
@@ -239,8 +277,7 @@ impl PageList {
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         self.check_before_merging(pagelist, platform).await?;
-        let other_entries = pagelist.entries();
-        let other_entries = other_entries.read().map_err(|e| format!("{:?}", e))?;
+        let other_entries = pagelist.entries.read().map_err(|e| format!("{:?}", e))?;
         self.entries
             .write()
             .map_err(|e| format!("{:?}", e))?
@@ -254,8 +291,7 @@ impl PageList {
         platform: Option<&Platform>,
     ) -> Result<(), String> {
         self.check_before_merging(pagelist, platform).await?;
-        let other_entries = pagelist.entries();
-        let other_entries = other_entries.read().map_err(|e| format!("{:?}", e))?;
+        let other_entries = pagelist.entries.read().map_err(|e| format!("{:?}", e))?;
         self.entries
             .write()
             .map_err(|e| format!("{:?}", e))?
