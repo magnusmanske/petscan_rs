@@ -20,6 +20,18 @@ pub struct PageList {
     has_sitelink_counts: RwLock<bool>,
 }
 
+impl PartialEq for PageList {
+    fn eq(&self, other: &Self) -> bool {
+        if self.wiki() != other.wiki() {
+            return false;
+        }
+        match (self.entries.read(), other.entries.read()) {
+            (Ok(a), Ok(b)) => *a == *b,
+            _ => false,
+        }
+    }
+}
+
 impl PageList {
     pub fn new_from_wiki(wiki: &str) -> Self {
         Self {
