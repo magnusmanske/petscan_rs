@@ -12,25 +12,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
-//________________________________________________________________________________________________________________________
 
 #[derive(Debug)]
 pub struct PageList {
     wiki: RwLock<Option<String>>,
     entries: RwLock<HashSet<PageListEntry>>,
     has_sitelink_counts: RwLock<bool>,
-}
-
-impl PartialEq for PageList {
-    fn eq(&self, other: &Self) -> bool {
-        if self.wiki() != other.wiki() {
-            return false;
-        }
-        match (self.entries.read(), other.entries.read()) {
-            (Ok(a), Ok(b)) => *a == *b,
-            _ => false,
-        }
-    }
 }
 
 impl PageList {
