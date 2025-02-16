@@ -5,7 +5,7 @@ use mysql_async as my;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use mysql_async::Value as MyValue;
-use rand::prelude::thread_rng;
+use rand::rng;
 use rand::seq::SliceRandom;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -88,7 +88,7 @@ impl AppState {
                     pool.push((user.to_string(), pass.to_string()));
                 }
             }
-            pool.shuffle(&mut thread_rng());
+            pool.shuffle(&mut rng());
         }
         if ret.db_pool.lock().await.is_empty() {
             panic!("No database access config available");
