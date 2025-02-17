@@ -37,7 +37,7 @@ impl DataSource for SourceLabels {
         rows.iter()
             .map(|row| String::from_utf8_lossy(&row.0))
             .filter_map(|item| Platform::entry_from_entity(&item))
-            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
+            .for_each(|entry| ret.add_entry(entry));
         Ok(ret)
     }
 }

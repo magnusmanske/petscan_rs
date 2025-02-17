@@ -29,7 +29,7 @@ impl DataSource for SourceSitelinks {
         let rows = self.get_result_rows(platform, sql).await?;
         let ret = PageList::new_from_wiki_with_capacity(&self.main_wiki, rows.len());
         if self.use_min_max {
-            ret.set_has_sitelink_counts(true)?;
+            ret.set_has_sitelink_counts(true);
         }
         rows.iter()
             .map(|row| (String::from_utf8_lossy(&row.0), row.1))
@@ -40,7 +40,7 @@ impl DataSource for SourceSitelinks {
                 }
                 ret
             })
-            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
+            .for_each(|entry| ret.add_entry(entry));
         Ok(ret)
     }
 }

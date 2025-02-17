@@ -249,7 +249,7 @@ impl DataSource for SourceDatabase {
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList> {
         let ret = self.get_pages(&platform.state(), None).await?;
-        if ret.is_empty()? {
+        if ret.is_empty() {
             platform.warn("<span tt=\'warn_categories\'></span>".to_string())?;
         }
         Ok(ret)
@@ -601,8 +601,8 @@ impl SourceDatabase {
     ) -> Result<DsdbParams> {
         // Take wiki from given pagelist
         if let Some(pl) = primary_pagelist {
-            if self.params.wiki.is_none() && pl.wiki()?.is_some() {
-                self.params.wiki = pl.wiki()?;
+            if self.params.wiki.is_none() && pl.wiki().is_some() {
+                self.params.wiki = pl.wiki();
             }
         }
 
@@ -742,7 +742,7 @@ impl SourceDatabase {
 
         Platform::profile(
             "DSDB::get_pages [primary:categories] RESULTS end",
-            Some(ret.len()?),
+            Some(ret.len()),
         );
         Ok(ret)
     }
@@ -756,13 +756,13 @@ impl SourceDatabase {
         let ret = PageList::new_from_wiki(&params.wiki);
         let primary_pagelist = primary_pagelist
             .ok_or_else(|| anyhow!("SourceDatabase::get_pages: pagelist: No primary_pagelist"))?;
-        ret.set_wiki(primary_pagelist.wiki()?)?;
-        if primary_pagelist.is_empty()? {
+        ret.set_wiki(primary_pagelist.wiki());
+        if primary_pagelist.is_empty() {
             // Nothing to do, but that's OK
             return Ok(ret);
         }
 
-        let nslist = primary_pagelist.group_by_namespace()?;
+        let nslist = primary_pagelist.group_by_namespace();
         let mut batches: Vec<SQLtuple> = vec![];
         nslist.iter().for_each(|nsgroup| {
             nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
@@ -786,7 +786,7 @@ impl SourceDatabase {
         params.is_before_after_done = true;
 
         let wiki = primary_pagelist
-            .wiki()?
+            .wiki()
             .ok_or_else(|| anyhow!("No wiki given in datasource_database::get_pages_pagelist"))?;
 
         let mut futures: Vec<_> = vec![];
@@ -968,8 +968,8 @@ impl SourceDatabase {
         let rows = self.get_pages_for_primary_run_query(sql, conn).await?;
         Platform::profile("DSDB::get_pages_for_primary RUN FINISHED", Some(sql_1_len));
 
-        pages_sublist.set_wiki(Some(wiki))?;
-        pages_sublist.clear_entries()?;
+        pages_sublist.set_wiki(Some(wiki));
+        pages_sublist.clear_entries();
 
         Platform::profile(
             "DSDB::get_pages_for_primary RETRIEVING RESULT",
@@ -1010,7 +1010,7 @@ impl SourceDatabase {
                 if self.params.gather_link_count {
                     entry.set_link_count(Some(*link_count));
                 }
-                if pages_sublist.add_entry(entry).is_ok() {}
+                pages_sublist.add_entry(entry);
             },
         );
     }
@@ -1320,11 +1320,10 @@ mod tests {
             ("project", "wikipedia"),
         ];
         let result = simulate_category_query(params).await.unwrap();
-        assert_eq!(result.wiki().unwrap(), Some("enwiki".to_string()));
-        assert!(result.len().unwrap() < 5); // This may change as more articles are written/categories added, please adjust!
+        assert_eq!(result.wiki(), Some("enwiki".to_string()));
+        assert!(result.len() < 5); // This may change as more articles are written/categories added, please adjust!
         assert!(result
             .as_vec()
-            .unwrap()
             .iter()
             .any(|entry| entry.title().pretty() == "Magnus Manske"));
     }
@@ -1350,8 +1349,8 @@ mod tests {
             ("combination", "union"),
         ];
         let result = simulate_category_query(params).await.unwrap();
-        assert!(result.len().unwrap() > result_size1.unwrap());
-        assert!(result.len().unwrap() > result_size2.unwrap());
+        assert!(result.len() > result_size1);
+        assert!(result.len() > result_size2);
     }
 
     // Deactivated: connection to frwiktionary_p required
@@ -1374,6 +1373,6 @@ mod tests {
             ("project", "wikipedia"),
         ];
         let result = simulate_category_query(params).await.unwrap();
-        assert!(result.len().unwrap() > 0);
+        assert!(result.len() > 0);
     }
 }

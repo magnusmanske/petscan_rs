@@ -73,8 +73,8 @@ impl DataSource for SourceSearch {
         titles
             .iter()
             .map(|title| PageListEntry::new(title.to_owned()))
-            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
-        if ret.is_empty()? {
+            .for_each(|entry| ret.add_entry(entry));
+        if ret.is_empty() {
             platform.warn("<span tt=\'warn_search\'></span>".to_string())?;
         }
         Ok(ret)

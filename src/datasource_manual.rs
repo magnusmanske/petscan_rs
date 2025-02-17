@@ -39,7 +39,7 @@ impl DataSource for SourceManual {
                     None
                 }
             })
-            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
+            .for_each(|entry| ret.add_entry(entry));
         Ok(ret)
     }
 }

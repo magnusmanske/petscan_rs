@@ -38,8 +38,8 @@ impl DataSource for SourcePagePile {
             .iter()
             .filter_map(|title| title.as_str())
             .map(|title| PageListEntry::new(Title::new_from_full(title, &api)))
-            .for_each(|entry| ret.add_entry(entry).unwrap_or(()));
-        if ret.is_empty()? {
+            .for_each(|entry| ret.add_entry(entry));
+        if ret.is_empty() {
             platform.warn("<span tt=\'warn_pagepile\'></span>".to_string())?;
         }
         Ok(ret)

@@ -285,11 +285,7 @@ impl Platform {
 
         self.wiki_by_source = results
             .iter()
-            .filter_map(|(name, data)| {
-                data.wiki()
-                    .unwrap_or(None)
-                    .map(|wiki| (name.to_string(), wiki))
-            })
+            .filter_map(|(name, data)| data.wiki().map(|wiki| (name.to_string(), wiki)))
             .collect();
         Platform::profile("end futures 1", None);
 
@@ -309,14 +305,8 @@ impl Platform {
 
         if self.has_param("wdf_main") {
             match &self.result {
-                Some(pagelist) => {
-                    pagelist
-                        .convert_to_wiki("wikidatawiki", self)
-                        .await
-                        .map_err(|e| {
-                            anyhow!("Failed to convert result to Wikidata for WDfist: {e}")
-                        })?;
-                }
+                Some(pagelist) => pagelist.convert_to_wiki("wikidatawiki", self).await?,
+
                 None => return Err(anyhow!("No result set for WDfist")),
             }
             //self.result = Some(pagelist);
@@ -344,40 +334,37 @@ impl Platform {
         };
 
         // Filter and post-process
-        Platform::profile("before filter_wikidata", Some(result.len()?));
+        Platform::profile("before filter_wikidata", Some(result.len()));
         self.filter_wikidata(result).await?;
-        Platform::profile("after filter_wikidata", Some(result.len()?));
+        Platform::profile("after filter_wikidata", Some(result.len()));
         if available_sources.to_vec() != vec!["sitelinks".to_string()] {
             self.process_sitelinks(result).await?;
             Platform::profile("after process_sitelinks", None);
         }
         if available_sources.to_vec() != vec!["labels".to_string()] {
             self.process_labels(result).await?;
-            Platform::profile("after process_labels", Some(result.len()?));
+            Platform::profile("after process_labels", Some(result.len()));
         }
 
         self.convert_to_common_wiki(result).await?;
-        Platform::profile("after convert_to_common_wiki", Some(result.len()?));
+        Platform::profile("after convert_to_common_wiki", Some(result.len()));
 
         if !available_sources.contains(&"categories".to_string()) {
             self.process_missing_database_filters(result).await?;
-            Platform::profile(
-                "after process_missing_database_filters",
-                Some(result.len()?),
-            );
+            Platform::profile("after process_missing_database_filters", Some(result.len()));
         }
         self.process_by_wikidata_item(result).await?;
-        Platform::profile("after process_by_wikidata_item", Some(result.len()?));
+        Platform::profile("after process_by_wikidata_item", Some(result.len()));
         self.process_files(result).await?;
-        Platform::profile("after process_files", Some(result.len()?));
+        Platform::profile("after process_files", Some(result.len()));
         self.process_pages(result).await?;
-        Platform::profile("after process_pages", Some(result.len()?));
+        Platform::profile("after process_pages", Some(result.len()));
         self.process_namespace_conversion(result).await?;
-        Platform::profile("after process_namespace_conversion", Some(result.len()?));
+        Platform::profile("after process_namespace_conversion", Some(result.len()));
         self.process_subpages(result).await?;
-        Platform::profile("after process_subpages", Some(result.len()?));
+        Platform::profile("after process_subpages", Some(result.len()));
         self.annotate_with_wikidata_item(result).await?;
-        Platform::profile("after annotate_with_wikidata_item [2]", Some(result.len()?));
+        Platform::profile("after annotate_with_wikidata_item [2]", Some(result.len()));
 
         let wikidata_label_language = self.get_param_default(
             "wikidata_label_language",
@@ -386,17 +373,17 @@ impl Platform {
         result
             .load_missing_metadata(Some(wikidata_label_language), self)
             .await?;
-        Platform::profile("after load_missing_metadata", Some(result.len()?));
+        Platform::profile("after load_missing_metadata", Some(result.len()));
         if let Some(regexp) = self.get_param("rxp_filter") {
-            result.regexp_filter(&regexp)?;
+            result.regexp_filter(&regexp);
         }
         if let Some(search) = self.get_param("search_filter") {
             result.search_filter(self, &search).await?;
         }
         self.process_redlinks(result).await?;
-        Platform::profile("after process_redlinks", Some(result.len()?));
+        Platform::profile("after process_redlinks", Some(result.len()));
         self.process_creator(result).await?;
-        Platform::profile("after process_creator", Some(result.len()?));
+        Platform::profile("after process_creator", Some(result.len()));
 
         Ok(())
     }
@@ -473,7 +460,7 @@ impl Platform {
     // Prepares for JS "creator" mode
     // Chackes which labels already exist on Wikidata
     async fn process_creator(&self, result: &PageList) -> Result<()> {
-        if result.is_empty()? || result.is_wikidata() {
+        if result.is_empty() || result.is_wikidata() {
             return Ok(());
         }
         if !self.has_param("show_redlinks") && self.get_param_blank("wikidata_item") != "without" {
@@ -481,7 +468,7 @@ impl Platform {
         }
 
         let batches: Vec<SQLtuple> = result
-            .to_sql_batches(PAGE_BATCH_SIZE)?
+            .to_sql_batches(PAGE_BATCH_SIZE)
             .par_iter_mut()
             .map(|sql_batch| {
                 // Text for any label or alias used in an item
@@ -528,14 +515,14 @@ impl Platform {
     }
 
     async fn process_redlinks(&self, result: &PageList) -> Result<()> {
-        if result.is_empty()? || !self.do_output_redlinks() || result.is_wikidata() {
+        if result.is_empty() || !self.do_output_redlinks() || result.is_wikidata() {
             return Ok(());
         }
         let ns0_only = self.has_param("article_redlinks_only");
         let remove_template_redlinks = self.has_param("remove_template_redlinks");
 
         let batches: Vec<SQLtuple> = result
-                .to_sql_batches(PAGE_BATCH_SIZE/20)? // ???
+                .to_sql_batches(PAGE_BATCH_SIZE/20) // ???
                 .par_iter_mut()
                 .map(|sql_batch| {
                     let mut sql = "SELECT lt0.lt_title,lt0.lt_namespace,(SELECT COUNT(*) FROM page p1 WHERE p1.page_title=lt0.lt_title AND p1.page_namespace=lt0.lt_namespace) AS cnt from page p0,pagelinks pl0,linktarget lt0 WHERE pl0.pl_target_id=lt0.lt_id AND pl_from=p0.page_id AND ".to_string() ;
@@ -556,7 +543,7 @@ impl Platform {
         let mut redlink_counter: HashMap<Title, LinkCount> = HashMap::new();
         //let redlink_counter = RwLock::new(redlink_counter);
 
-        let wiki = match result.wiki()? {
+        let wiki = match result.wiki() {
             Some(wiki) => wiki.to_owned(),
             None => return Err(anyhow!("Platform::process_redlinks: no wiki set in result")),
         };
@@ -565,13 +552,13 @@ impl Platform {
             .state
             .get_wiki_db_connection(&wiki)
             .await
-            .map_err(|e| anyhow!("{e}"))?;
+            .map_err(|e| anyhow!(e))?;
 
         for sql in batches {
             self.process_redlinks_batch(&mut conn, sql, &mut redlink_counter)
                 .await?;
         }
-        conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
+        conn.disconnect().await.map_err(|e| anyhow!(e))?;
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
@@ -588,7 +575,7 @@ impl Platform {
                     ret
                 })
                 .collect(),
-        )?;
+        );
         Ok(())
     }
 
@@ -621,7 +608,8 @@ impl Platform {
             "talk" => true,
             _ => return Ok(()),
         };
-        result.change_namespaces(use_talk)
+        result.change_namespaces(use_talk);
+        Ok(())
     }
 
     async fn process_subpages(&self, result: &PageList) -> Result<()> {
@@ -632,8 +620,8 @@ impl Platform {
         }
 
         if add_subpages {
-            let title_ns = result.to_titles_namepsaces()?;
-            let wiki = match result.wiki()? {
+            let title_ns = result.to_titles_namepsaces();
+            let wiki = match result.wiki() {
                 Some(wiki) => wiki.to_owned(),
                 None => return Err(anyhow!("Platform::process_redlinks: no wiki set in result")),
             };
@@ -656,9 +644,7 @@ impl Platform {
 
                 for (page_title, page_namespace) in rows {
                     let page_title = String::from_utf8_lossy(&page_title);
-                    result
-                        .add_entry(PageListEntry::new(Title::new(&page_title, page_namespace)))
-                        .unwrap_or(());
+                    result.add_entry(PageListEntry::new(Title::new(&page_title, page_namespace)));
                 }
             }
             conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
@@ -673,13 +659,7 @@ impl Platform {
         result.retain_entries(&|entry: &PageListEntry| {
             let has_slash = entry.title().pretty().find('/').is_some();
             has_slash == keep_subpages
-        })?;
-        /*
-        result.entries.retain(|entry| {
-            let has_slash = entry.title().pretty().find('/').is_some();
-            has_slash == keep_subpages
         });
-        */
         Ok(())
     }
 
@@ -693,7 +673,7 @@ impl Platform {
         let add_disambiguation = self.has_param("add_disambiguation");
         let add_incoming_links = self.get_param_blank("sortby") == "incoming_links";
         let add_sitelinks =
-            self.get_param_blank("sortby") == "sitelinks" && !result.has_sitelink_counts()?;
+            self.get_param_blank("sortby") == "sitelinks" && !result.has_sitelink_counts();
         if !add_coordinates
             && !add_image
             && !add_defaultsort
@@ -705,7 +685,7 @@ impl Platform {
         }
 
         let batches: Vec<SQLtuple> = result
-                .to_sql_batches(PAGE_BATCH_SIZE)?
+                .to_sql_batches(PAGE_BATCH_SIZE)
                 .par_iter_mut()
                 .map(|sql_batch| {
                     let mut sql ="SELECT page_title,page_namespace".to_string();
@@ -790,7 +770,7 @@ impl Platform {
             .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
             .for_each(|(row, mut entry)| {
                 the_f(row.clone(), &mut entry);
-                result.add_entry(entry).unwrap_or(());
+                result.add_entry(entry);
             });
         Ok(())
     }
@@ -804,7 +784,7 @@ impl Platform {
                 ));
             }
             let batches: Vec<SQLtuple> = result
-                .to_sql_batches_namespace(batch_size,6)?
+                .to_sql_batches_namespace(batch_size,6)
                 .par_iter_mut()
                 .map(|sql_batch| {
                     sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
@@ -829,7 +809,7 @@ impl Platform {
                 Err(e) => {
                     if e.to_string().contains("packet too large") {
                         // Happens for heavily used files, try again with half batch size
-                        batch_size = std::cmp::min(batch_size, result.len().unwrap()) / 2;
+                        batch_size = std::cmp::min(batch_size, result.len()) / 2;
                         continue;
                     }
                     return Err(e); // Some other error
@@ -845,7 +825,7 @@ impl Platform {
                 .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
                 .for_each(|(row, mut entry)| {
                     the_f(row.clone(), &mut entry);
-                    result.add_entry(entry).unwrap_or(());
+                    result.add_entry(entry);
                 });
             return Ok(());
         }
@@ -865,7 +845,7 @@ impl Platform {
 
         if file_data {
             let batches: Vec<SQLtuple> = result
-                .to_sql_batches(PAGE_BATCH_SIZE)?
+                .to_sql_batches(PAGE_BATCH_SIZE)
                 .par_iter_mut()
                 .map(|sql_batch| {
                     sql_batch.0 = "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN (".to_string() ;
@@ -930,7 +910,7 @@ impl Platform {
                 .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
                 .for_each(|(row, mut entry)| {
                     the_f(row.clone(), &mut entry);
-                    result.add_entry(entry).unwrap_or(());
+                    result.add_entry(entry);
                 });
         }
         Ok(())
@@ -941,14 +921,14 @@ impl Platform {
             return Ok(());
         }
 
-        let wiki = match result.wiki()? {
+        let wiki = match result.wiki() {
             Some(wiki) => wiki.to_string(),
             None => return Ok(()), // TODO is it OK to just ignore? Error for "no wiki set"?
         };
         let api = self.state.get_api_for_wiki(wiki.to_owned()).await?;
 
         // Using Wikidata
-        let titles = result.to_full_pretty_titles(&api)?;
+        let titles = result.to_full_pretty_titles(&api);
 
         let mut batches: Vec<SQLtuple> = vec![];
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -1019,7 +999,7 @@ impl Platform {
             let q = "Q".to_string() + &ips_item_id.to_string();
             entry.set_wikidata_item(Some(q));
 
-            result.add_entry(entry).unwrap_or(());
+            result.add_entry(entry);
         });
         Ok(())
 
@@ -1059,10 +1039,10 @@ impl Platform {
         }
         self.annotate_with_wikidata_item(result).await?;
         if wdi == "with" {
-            result.retain_entries(&|entry| entry.get_wikidata_item().is_some())?;
+            result.retain_entries(&|entry| entry.get_wikidata_item().is_some());
         }
         if wdi == "without" {
-            result.retain_entries(&|entry| entry.get_wikidata_item().is_none())?;
+            result.retain_entries(&|entry| entry.get_wikidata_item().is_none());
         }
         Ok(())
     }
@@ -1070,12 +1050,12 @@ impl Platform {
     /// Adds page properties that might be missing if none of the original sources was "categories"
     async fn process_missing_database_filters(&self, result: &PageList) -> Result<()> {
         let mut params = SourceDatabaseParameters::db_params(self).await;
-        params.set_wiki(Some(result.wiki()?.ok_or_else(|| {
+        params.set_wiki(Some(result.wiki().ok_or_else(|| {
             anyhow!("Platform::process_missing_database_filters: result has no wiki")
         })?));
         let mut db = SourceDatabase::new(params);
         let new_result = db.get_pages(&self.state, Some(result)).await?;
-        result.set_from(new_result)?;
+        result.set_from(new_result);
         Ok(())
     }
 
@@ -1085,14 +1065,14 @@ impl Platform {
             return Ok(());
         }
         result.convert_to_wiki("wikidatawiki", self).await?;
-        if result.is_empty()? {
+        if result.is_empty() {
             return Ok(());
         }
         sql.0 += " AND term_full_entity_id IN (";
 
         // Batches
         let batches: Vec<SQLtuple> = result
-            .to_sql_batches(PAGE_BATCH_SIZE)?
+            .to_sql_batches(PAGE_BATCH_SIZE)
             .par_iter_mut()
             .map(|sql_batch| {
                 let question_marks = Platform::get_placeholders(sql.1.len());
@@ -1102,7 +1082,7 @@ impl Platform {
             })
             .collect::<Vec<SQLtuple>>();
 
-        result.clear_entries()?;
+        result.clear_entries();
         let the_f = |row: my::Row| {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
@@ -1112,7 +1092,7 @@ impl Platform {
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
-            .for_each(|entry| result.add_entry(entry).unwrap_or(()));
+            .for_each(|entry| result.add_entry(entry));
         Ok(())
     }
 
@@ -1231,13 +1211,13 @@ impl Platform {
             return Ok(());
         }
         result.convert_to_wiki("wikidatawiki", self).await?;
-        if result.is_empty()? {
+        if result.is_empty() {
             return Ok(());
         }
 
         // Batches
         let batches: Vec<SQLtuple> = result
-            .group_by_namespace()?
+            .group_by_namespace()
             .par_iter()
             .filter_map(|(namespace_id, titles)| {
                 let mut sql = self.get_label_sql_new(namespace_id)?;
@@ -1258,7 +1238,7 @@ impl Platform {
             })
             .collect();
 
-        result.clear_entries()?;
+        result.clear_entries();
         let the_f = |row: my::Row| {
             let term_full_entity_id = my::from_row::<String>(row);
             Platform::entry_from_entity(&term_full_entity_id)
@@ -1268,7 +1248,7 @@ impl Platform {
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
-            .for_each(|entry| result.add_entry(entry).unwrap_or(()));
+            .for_each(|entry| result.add_entry(entry));
         Ok(())
     }
 
@@ -1281,7 +1261,7 @@ impl Platform {
     }
 
     async fn process_sitelinks(&self, result: &PageList) -> Result<()> {
-        if result.is_empty()? {
+        if result.is_empty() {
             return Ok(());
         }
 
@@ -1299,9 +1279,9 @@ impl Platform {
         {
             return Ok(());
         }
-        let old_wiki = result.wiki()?.to_owned();
+        let old_wiki = result.wiki().to_owned();
         result.convert_to_wiki("wikidatawiki", self).await?;
-        if result.is_empty()? {
+        if result.is_empty() {
             return Ok(());
         }
 
@@ -1351,7 +1331,7 @@ impl Platform {
 
         // Batches
         let batches: Vec<SQLtuple> = result
-            .to_sql_batches(PAGE_BATCH_SIZE)?
+            .to_sql_batches(PAGE_BATCH_SIZE)
             .par_iter_mut()
             .map(|sql_batch| {
                 sql_batch.0 = sql.0.to_owned() + &sql_batch.0 + &sql_post;
@@ -1360,7 +1340,7 @@ impl Platform {
             })
             .collect::<Vec<SQLtuple>>();
 
-        result.clear_entries()?;
+        result.clear_entries();
         let state = self.state();
         let the_f = |row: my::Row| {
             let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
@@ -1372,16 +1352,16 @@ impl Platform {
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
-            .for_each(|entry| result.add_entry(entry).unwrap_or(()));
+            .for_each(|entry| result.add_entry(entry));
 
         if let Some(wiki) = old_wiki {
-            result.convert_to_wiki(&wiki, self).await?
+            result.convert_to_wiki(&wiki, self).await?;
         }
         Ok(())
     }
 
     async fn filter_wikidata(&self, result: &PageList) -> Result<()> {
-        if result.is_empty()? {
+        if result.is_empty() {
             return Ok(());
         }
         let no_statements = self.has_param("wpiu_no_statements");
@@ -1392,16 +1372,13 @@ impl Platform {
         if list.is_empty() && !no_statements && !no_sitelinks {
             return Ok(());
         }
-        let original_wiki = result.wiki()?;
-        Platform::profile(
-            "before filter_wikidata:convert_to_wiki",
-            Some(result.len()?),
-        );
+        let original_wiki = result.wiki();
+        Platform::profile("before filter_wikidata:convert_to_wiki", Some(result.len()));
         result.convert_to_wiki("wikidatawiki", self).await?;
-        Platform::profile("after filter_wikidata:convert_to_wiki", Some(result.len()?));
-        if result.is_empty()? {
+        Platform::profile("after filter_wikidata:convert_to_wiki", Some(result.len()));
+        if result.is_empty() {
             if let Some(wiki) = original_wiki {
-                result.convert_to_wiki(&wiki, self).await?
+                result.convert_to_wiki(&wiki, self).await?;
             }
             return Ok(());
         }
@@ -1456,7 +1433,7 @@ impl Platform {
 
         // Batches
         let batches: Vec<SQLtuple> = result
-            .to_sql_batches(PAGE_BATCH_SIZE)?
+            .to_sql_batches(PAGE_BATCH_SIZE)
             .iter_mut()
             .map(|sql| {
                 sql.0 = "SELECT DISTINCT page_title FROM page WHERE ".to_owned()
@@ -1467,7 +1444,7 @@ impl Platform {
             })
             .collect::<Vec<SQLtuple>>();
 
-        result.clear_entries()?;
+        result.clear_entries();
         let state = self.state();
         let the_f = |row: my::Row| {
             let pp_value: String = my::from_row(row);
@@ -1478,10 +1455,10 @@ impl Platform {
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
-            .for_each(|entry| result.add_entry(entry).unwrap_or(()));
+            .for_each(|entry| result.add_entry(entry));
 
         if let Some(wiki) = original_wiki {
-            result.convert_to_wiki(&wiki, self).await?
+            result.convert_to_wiki(&wiki, self).await?;
         }
         Ok(())
     }
@@ -1535,7 +1512,7 @@ impl Platform {
             Some(result) => result,
             None => return Err(anyhow!("Platform::get_response: No result")),
         };
-        let wiki = match result.wiki()? {
+        let wiki = match result.wiki() {
             Some(wiki) => wiki,
             None => return Err(anyhow!("Platform::get_response: No wiki in result")),
         };
@@ -1547,7 +1524,7 @@ impl Platform {
             sort_order = true;
         }
         let mut pages =
-            result.drain_into_sorted_vec(PageListSort::new_from_params(&sortby, sort_order))?;
+            result.drain_into_sorted_vec(PageListSort::new_from_params(&sortby, sort_order));
         self.apply_results_limit(&mut pages);
 
         match self.get_param_blank("format").as_str() {
@@ -2024,12 +2001,11 @@ mod tests {
 
         let result = platform.result.unwrap();
         let some_wiki = result.wiki();
-        assert_eq!(some_wiki.unwrap().unwrap(), wiki);
+        assert_eq!(some_wiki.unwrap(), wiki);
 
         // Sort/crop results
-        let mut entries = result
-            .drain_into_sorted_vec(PageListSort::new_from_params(&s1, s2 == "descending"))
-            .unwrap();
+        let mut entries =
+            result.drain_into_sorted_vec(PageListSort::new_from_params(&s1, s2 == "descending"));
         platform.result = Some(result);
         platform.apply_results_limit(&mut entries);
 
@@ -2107,7 +2083,7 @@ mod tests {
         // Manual list [[File:KingsCollegeChapelWest.jpg]] on commons
         let platform = run_psid(10137125).await;
         let result = platform.result.unwrap();
-        let entries = result.as_vec().unwrap();
+        let entries = result.as_vec();
         assert_eq!(entries.len(), 1);
         let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(1340715));
@@ -2130,7 +2106,7 @@ mod tests {
         // Manual list [[Cambridge]] on enwiki
         let platform = run_psid(10136716).await;
         let result = platform.result.unwrap();
-        let entries = result.as_vec().unwrap();
+        let entries = result.as_vec();
         assert_eq!(entries.len(), 1);
         let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(36995));
@@ -2150,7 +2126,7 @@ mod tests {
         // Manual list [[Count von Count]] on enwiki
         let platform = run_psid(10137767).await;
         let result = platform.result.unwrap();
-        let entries = result.as_vec().unwrap();
+        let entries = result.as_vec();
         assert_eq!(entries.len(), 1);
         let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(239794));
@@ -2162,7 +2138,7 @@ mod tests {
         // Manual list [[User:Magnus Manske]] on enwiki, subpages, not "root page"
         let platform = run_psid(10138030).await;
         let result = platform.result.unwrap();
-        let entries = result.as_vec().unwrap();
+        let entries = result.as_vec();
         assert!(entries.len() > 100);
         // Try to find pages with no '/'
         assert!(!entries
@@ -2175,7 +2151,7 @@ mod tests {
         // Manual list [[Q12345]], nl label/desc
         let platform = run_psid(10138979).await;
         let result = platform.result.unwrap();
-        let entries = result.as_vec().unwrap();
+        let entries = result.as_vec();
         assert_eq!(entries.len(), 1);
         let entry = entries.first().unwrap();
         assert_eq!(entry.page_id(), Some(13925));
@@ -2246,7 +2222,7 @@ mod tests {
     // }
 
     fn entries_from_result(result: PageList) -> Vec<PageListEntry> {
-        result.as_vec().unwrap()
+        result.as_vec()
     }
 
     // Deactivated: connection to enwikiquote_p required

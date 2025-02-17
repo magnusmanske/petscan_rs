@@ -76,7 +76,7 @@ impl DataSource for SourceSparql {
                         if let Some(entity_url) = j[&first_var]["value"].as_str() {
                             if let Ok(entity) = api.extract_entity_from_uri(entity_url) {
                                 if let Some(entry) = Platform::entry_from_entity(&entity) {
-                                    ret.add_entry(entry).unwrap_or(())
+                                    ret.add_entry(entry);
                                 }
                             }
                         }
