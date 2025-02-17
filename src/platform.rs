@@ -620,7 +620,7 @@ impl Platform {
         }
 
         if add_subpages {
-            let title_ns = result.to_titles_namepsaces();
+            let title_ns = result.to_titles_namespaces();
             let wiki = match result.wiki() {
                 Some(wiki) => wiki.to_owned(),
                 None => return Err(anyhow!("Platform::process_redlinks: no wiki set in result")),

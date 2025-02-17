@@ -66,7 +66,7 @@ impl PageList {
         self.entries.read().ok()?.get(entry).map(|e| e.clone())
     }
 
-    pub fn to_titles_namepsaces(&self) -> Vec<(String, NamespaceID)> {
+    pub fn to_titles_namespaces(&self) -> Vec<(String, NamespaceID)> {
         self.entries
             .read()
             .unwrap()
