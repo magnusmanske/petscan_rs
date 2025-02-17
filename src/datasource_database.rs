@@ -5,6 +5,7 @@ use crate::pagelist::*;
 use crate::pagelist_entry::LinkCount;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::prelude::*;
 use chrono::Duration;
@@ -246,7 +247,7 @@ impl DataSource for SourceDatabase {
             || platform.has_param("links_to_any")
     }
 
-    async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+    async fn run(&mut self, platform: &Platform) -> Result<PageList> {
         let ret = self.get_pages(&platform.state(), None).await?;
         if ret.is_empty()? {
             platform.warn("<span tt=\'warn_categories\'></span>".to_string())?;
@@ -300,7 +301,7 @@ impl SourceDatabase {
         state: &AppState,
         wiki: &str,
         categories: &[String],
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>> {
         let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
         Platform::append_sql(&mut sql, Platform::prep_quote(categories));
         sql.0 += ")";
@@ -309,10 +310,10 @@ impl SourceDatabase {
             .await?
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<Vec<u8>>)
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!(e))?;
         let result: Vec<String> = result
             .iter()
             .map(|row| String::from_utf8_lossy(row).into_owned())
@@ -329,7 +330,7 @@ impl SourceDatabase {
         wiki: &str,
         title: &str,
         depth: u16,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>> {
         let is_cs = self.params.category_namespace_is_case_insensitive;
         let mut categories_done = HashSet::new();
         let title = SourceDatabaseParameters::s2u_ucfirst(title, is_cs);
@@ -361,7 +362,7 @@ impl SourceDatabase {
             }
             // println!("Depth {remaining_depth} adding {} new sub-categories",categories_new.len());
             if categories_done.len() > MAX_SUBCATEGORIES_IN_TREE {
-                return Err(format!("Sub-categories for \"{title}\" exceed {}, please limit that category depth, or fix the category tree",MAX_SUBCATEGORIES_IN_TREE));
+                return Err(anyhow!("Sub-categories for \"{title}\" exceed {MAX_SUBCATEGORIES_IN_TREE}, please limit that category depth, or fix the category tree"));
             }
             categories_todo = categories_new.drain().collect();
         }
@@ -373,7 +374,7 @@ impl SourceDatabase {
         state: &AppState,
         wiki: &str,
         input: &[SourceDatabaseCatDepth],
-    ) -> Result<Vec<Vec<String>>, String> {
+    ) -> Result<Vec<Vec<String>>> {
         let mut futures = vec![];
         for i in input {
             let future = self.get_categories_in_tree(state, wiki, &i.name, i.depth);
@@ -390,17 +391,17 @@ impl SourceDatabase {
         Ok(ret)
     }
 
-    async fn get_talk_namespace_ids(&self, conn: &mut my::Conn) -> Result<String, String> {
+    async fn get_talk_namespace_ids(&self, conn: &mut my::Conn) -> Result<String> {
         let rows = conn
             .exec_iter(
                 "SELECT DISTINCT page_namespace FROM page WHERE MOD(page_namespace,2)=1",
                 (),
             )
             .await
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<NamespaceID>)
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!(e))?;
         Ok(rows
             .iter()
             .map(|ns| ns.to_string())
@@ -532,7 +533,7 @@ impl SourceDatabase {
         category_batch: &[Vec<String>],
         state: &AppState,
         ret: &PageList,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let mut sql = Platform::sql_tuple();
         match self.params.combine.as_str() {
             "subset" => {
@@ -565,7 +566,7 @@ impl SourceDatabase {
                 sql.0 += ")) cl0";
             }
             other => {
-                return Err(format!("self.params.combine is '{}'", &other));
+                return Err(anyhow!("self.params.combine is '{other}'"));
             }
         }
         sql.0 += " INNER JOIN (page p";
@@ -597,7 +598,7 @@ impl SourceDatabase {
         &mut self,
         state: &AppState,
         primary_pagelist: Option<&PageList>,
-    ) -> Result<DsdbParams, String> {
+    ) -> Result<DsdbParams> {
         // Take wiki from given pagelist
         if let Some(pl) = primary_pagelist {
             if self.params.wiki.is_none() && pl.wiki()?.is_some() {
@@ -607,12 +608,12 @@ impl SourceDatabase {
 
         // Paranoia
         if self.params.wiki.is_none() || self.params.wiki == Some("wiki".to_string()) {
-            return Err(format!("SourceDatabase: Bad wiki '{:?}'", self.params.wiki));
+            return Err(anyhow!("SourceDatabase: Bad wiki '{:?}'", self.params.wiki));
         }
 
         let wiki = match &self.params.wiki {
             Some(wiki) => wiki.to_owned(),
-            None => return Err("SourceDatabase::get_pages: No wiki in params".to_string()),
+            None => return Err(anyhow!("SourceDatabase::get_pages: No wiki in params")),
         };
 
         // Get positive categories serial list
@@ -635,7 +636,7 @@ impl SourceDatabase {
 
         let mut conn = state.get_wiki_db_connection(&wiki).await?;
         self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn).await?;
-        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
+        conn.disconnect().await.map_err(|e| anyhow!(e))?;
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
@@ -691,7 +692,7 @@ impl SourceDatabase {
         })
     }
 
-    fn get_primary(&mut self, primary_pagelist: Option<&PageList>) -> Result<String, String> {
+    fn get_primary(&mut self, primary_pagelist: Option<&PageList>) -> Result<String> {
         let primary = if !self.cat_pos.is_empty() {
             "categories"
         } else if self.has_pos_templates {
@@ -703,7 +704,7 @@ impl SourceDatabase {
         } else if self.params.page_wikidata_item == "without" {
             "no_wikidata"
         } else {
-            return Err("SourceDatabase: Missing primary".to_string());
+            return Err(anyhow!("SourceDatabase: Missing primary"));
         };
         Ok(primary.to_string())
     }
@@ -712,7 +713,7 @@ impl SourceDatabase {
         &mut self,
         params: &DsdbParams,
         state: &AppState,
-    ) -> Result<PageList, String> {
+    ) -> Result<PageList> {
         let category_batches = if self.params.use_new_category_mode {
             Self::iterate_category_batches(&self.cat_pos, 0)
         } else {
@@ -751,11 +752,10 @@ impl SourceDatabase {
         mut params: DsdbParams,
         state: &AppState,
         primary_pagelist: Option<&PageList>,
-    ) -> Result<PageList, String> {
+    ) -> Result<PageList> {
         let ret = PageList::new_from_wiki(&params.wiki);
-        let primary_pagelist = primary_pagelist.ok_or_else(|| {
-            "SourceDatabase::get_pages: pagelist: No primary_pagelist".to_string()
-        })?;
+        let primary_pagelist = primary_pagelist
+            .ok_or_else(|| anyhow!("SourceDatabase::get_pages: pagelist: No primary_pagelist"))?;
         ret.set_wiki(primary_pagelist.wiki()?)?;
         if primary_pagelist.is_empty()? {
             // Nothing to do, but that's OK
@@ -785,9 +785,9 @@ impl SourceDatabase {
         // Either way, it's done
         params.is_before_after_done = true;
 
-        let wiki = primary_pagelist.wiki()?.ok_or_else(|| {
-            "No wiki given in datasource_database::get_pages_pagelist".to_string()
-        })?;
+        let wiki = primary_pagelist
+            .wiki()?
+            .ok_or_else(|| anyhow!("No wiki given in datasource_database::get_pages_pagelist"))?;
 
         let mut futures: Vec<_> = vec![];
         for sql in batches {
@@ -810,7 +810,7 @@ impl SourceDatabase {
         sql: SQLtuple,
         state: &AppState,
         params: &DsdbParams,
-    ) -> Result<PageList, String> {
+    ) -> Result<PageList> {
         let mut conn = state.get_wiki_db_connection(&wiki).await?;
         let sql_before_after = params.sql_before_after.clone();
         let mut is_before_after_done = params.is_before_after_done;
@@ -834,7 +834,7 @@ impl SourceDatabase {
         &mut self,
         state: &AppState,
         primary_pagelist: Option<&PageList>,
-    ) -> Result<PageList, String> {
+    ) -> Result<PageList> {
         let mut params = self
             .get_pages_initialize_query(state, primary_pagelist)
             .await?;
@@ -871,9 +871,8 @@ impl SourceDatabase {
                 sql.0 += " WHERE 1=1";
             }
             other => {
-                return Err(format!(
-                    "SourceDatabase::get_pages: other primary '{}'",
-                    &other
+                return Err(anyhow!(
+                    "SourceDatabase::get_pages: other primary '{other}'"
                 ));
             }
         }
@@ -890,7 +889,7 @@ impl SourceDatabase {
             state.get_api_for_wiki(params.wiki.clone()).await?,
         )
         .await?;
-        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
+        conn.disconnect().await.map_err(|e| anyhow!(e))?;
         Ok(ret)
     }
 
@@ -905,7 +904,7 @@ impl SourceDatabase {
         pages_sublist: &mut PageList,
         is_before_after_done: &mut bool,
         api: Api,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let mut conn = state.get_wiki_db_connection(wiki).await?;
         Platform::profile(
             "DSDB::get_pages_for_primary_new_connection STARTING",
@@ -922,7 +921,7 @@ impl SourceDatabase {
                 api,
             )
             .await;
-        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
+        conn.disconnect().await.map_err(|e| anyhow!(e))?;
         ret
     }
 
@@ -936,7 +935,7 @@ impl SourceDatabase {
         pages_sublist: &mut PageList,
         is_before_after_done: &mut bool,
         api: Api,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
 
         self.get_pages_for_primary_namespaces(primary, &mut sql);
@@ -959,8 +958,9 @@ impl SourceDatabase {
             .wiki
             .as_ref()
             .ok_or_else(|| {
-                "SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params"
-                    .to_string()
+                anyhow!(
+                    "SourceDatabase::get_pages_for_primary: no wiki parameter set in self.params"
+                )
             })?
             .to_string();
 
@@ -1260,7 +1260,7 @@ impl SourceDatabase {
         &self,
         sql: (String, Vec<MyValue>),
         conn: &mut my::Conn,
-    ) -> Result<Vec<PrimaryResultRow>, String> {
+    ) -> Result<Vec<PrimaryResultRow>> {
         Platform::profile(
             "DSDB::get_pages_for_primary STARTING RUN",
             Some(sql.1.len()),
@@ -1268,10 +1268,10 @@ impl SourceDatabase {
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>)
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!(e))?;
         Ok(rows)
     }
 }
@@ -1299,7 +1299,7 @@ mod tests {
         Arc::new(AppState::new_from_config(&petscan_config).await)
     }
 
-    async fn simulate_category_query(url_params: Vec<(&str, &str)>) -> Result<PageList, String> {
+    async fn simulate_category_query(url_params: Vec<(&str, &str)>) -> Result<PageList> {
         let state = get_state().await;
         let mut fp = FormParameters::new();
         fp.params = url_params
@@ -1320,7 +1320,7 @@ mod tests {
             ("project", "wikipedia"),
         ];
         let result = simulate_category_query(params).await.unwrap();
-        assert_eq!(result.wiki(), Ok(Some("enwiki".to_string())));
+        assert_eq!(result.wiki().unwrap(), Some("enwiki".to_string()));
         assert!(result.len().unwrap() < 5); // This may change as more articles are written/categories added, please adjust!
         assert!(result
             .as_vec()
@@ -1350,8 +1350,8 @@ mod tests {
             ("combination", "union"),
         ];
         let result = simulate_category_query(params).await.unwrap();
-        assert!(result.len() > result_size1);
-        assert!(result.len() > result_size2);
+        assert!(result.len().unwrap() > result_size1.unwrap());
+        assert!(result.len().unwrap() > result_size2.unwrap());
     }
 
     // Deactivated: connection to frwiktionary_p required

@@ -1,6 +1,7 @@
 use crate::datasource::DataSource;
 use crate::pagelist::*;
 use crate::platform::Platform;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::value::Value;
 use std::collections::HashMap;
@@ -20,20 +21,16 @@ impl DataSource for SourceSparql {
         platform.has_param("sparql")
     }
 
-    async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+    async fn run(&mut self, platform: &Platform) -> Result<PageList> {
         let sparql = platform
             .get_param("sparql")
-            .ok_or_else(|| "Missing parameter \'sparql\'".to_string())?;
+            .ok_or_else(|| anyhow!("Missing parameter \'sparql\'"))?;
 
         let timeout = time::Duration::from_secs(120);
         let builder = reqwest::ClientBuilder::new().timeout(timeout);
-        let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder)
-            .await
-            .map_err(|e| format!("SourceSparql::run:1 {:?}", e))?;
+        let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder).await?;
 
-        let sparql_url = api
-            .get_site_info_string("general", "wikibase-sparql")
-            .map_err(|e| e.to_string())?;
+        let sparql_url = api.get_site_info_string("general", "wikibase-sparql")?;
         let mut params: HashMap<String, String> = HashMap::new();
         params.insert("query".to_string(), sparql.to_string());
         params.insert("format".to_string(), "json".to_string());
@@ -47,11 +44,11 @@ impl DataSource for SourceSparql {
             .await
         {
             Ok(resp) => resp,
-            Err(e) => return Err(format!("SPARL: {:?}", e)),
+            Err(e) => return Err(anyhow!("SPARQL: {e}")),
         };
 
         let ret = PageList::new_from_wiki("wikidatawiki");
-        let response = response.text().await.map_err(|e| format!("{:?}", e))?;
+        let response = response.text().await.map_err(|e| anyhow!(e))?;
         let mut mode: u8 = 0;
         let mut header = String::new();
         let mut binding = String::new();
@@ -67,7 +64,7 @@ impl DataSource for SourceSparql {
                     let j: Value = serde_json::from_str(&header).unwrap_or_else(|_| json!({}));
                     first_var = j["head"]["vars"][0]
                         .as_str()
-                        .ok_or_else(|| "No variables found in SPARQL result".to_string())?
+                        .ok_or_else(|| anyhow!("No variables found in SPARQL result"))?
                         .to_string();
                 }
                 "    }, {" | "    } ]" => match mode {
@@ -99,7 +96,7 @@ impl DataSource for SourceSparql {
 
     /*
     // using serde, obsolete because of high memory usage
-    fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+    fn run(&mut self, platform: &Platform) -> Result<PageList> {
         let sparql = platform
             .get_param("sparql")
             .ok_or(format!("Missing parameter 'sparql'"))?;

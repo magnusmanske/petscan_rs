@@ -2,6 +2,7 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::*;
 use crate::render::Render;
 use crate::render_params::RenderParams;
+use anyhow::Result;
 use async_trait::async_trait;
 
 /// Renders CSV and TSV
@@ -16,7 +17,7 @@ impl Render for RenderTSV {
         platform: &Platform,
         wiki: &str,
         entries: Vec<PageListEntry>,
-    ) -> Result<MyResponse, String> {
+    ) -> Result<MyResponse> {
         let mut params = RenderParams::new(platform, wiki).await?;
         let mut rows: Vec<String> = vec![];
         let mut header: Vec<(&str, &str)> = vec![

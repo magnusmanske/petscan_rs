@@ -2,6 +2,7 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::*;
 use crate::render::Render;
 use crate::render_params::RenderParams;
+use anyhow::Result;
 use async_trait::async_trait;
 
 /// Renders PlainText
@@ -14,7 +15,7 @@ impl Render for RenderPlainText {
         platform: &Platform,
         wiki: &str,
         entries: Vec<PageListEntry>,
-    ) -> Result<MyResponse, String> {
+    ) -> Result<MyResponse> {
         let params = RenderParams::new(platform, wiki).await?;
         let output = entries
             .iter()

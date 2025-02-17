@@ -1,5 +1,6 @@
 use crate::form_parameters::FormParameters;
 use crate::platform::{ContentType, MyResponse};
+use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use mysql_async as my;
 use mysql_async::from_row;
@@ -100,12 +101,7 @@ impl AppState {
         self.config["restart-code"].as_str()
     }
 
-    fn get_mysql_opts_for_wiki(
-        &self,
-        wiki: &str,
-        user: &str,
-        pass: &str,
-    ) -> Result<my::Opts, String> {
+    fn get_mysql_opts_for_wiki(&self, wiki: &str, user: &str, pass: &str) -> Result<my::Opts> {
         let (host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
         let port: u16 = match self.port_mapping.get(wiki) {
             Some(port) => *port,
@@ -156,7 +152,7 @@ impl AppState {
     }
 
     /// Returns the server and database name for the wiki, as a tuple
-    pub fn db_host_and_schema_for_wiki(&self, wiki: &str) -> Result<(String, String), String> {
+    pub fn db_host_and_schema_for_wiki(&self, wiki: &str) -> Result<(String, String)> {
         // TESTING
         /*
         ssh magnus@login.toolforge.org -L 3307:dewiki.web.db.svc.eqiad.wmflabs:3306 -N &
@@ -189,21 +185,16 @@ impl AppState {
         (host, schema)
     }
 
-    async fn set_group_concat_max_len(
-        &self,
-        wiki: &str,
-        conn: &mut my::Conn,
-    ) -> Result<(), String> {
+    async fn set_group_concat_max_len(&self, wiki: &str, conn: &mut my::Conn) -> Result<()> {
         if wiki == "commonswiki" {
             conn.exec_drop("SET SESSION group_concat_max_len = 1000000000", ())
-                .await
-                .map_err(|e| format!("{:?}", e))?;
+                .await?;
         }
         Ok(())
     }
 
     #[instrument(skip(self), err)]
-    pub async fn get_wiki_db_connection(&self, wiki: &str) -> Result<my::Conn, String> {
+    pub async fn get_wiki_db_connection(&self, wiki: &str) -> Result<my::Conn> {
         let mut pool = self.db_pool.lock().await;
         if pool.is_empty() {
             panic!("pool is empty");
@@ -226,7 +217,7 @@ impl AppState {
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         continue;
                     }
-                    return Err(s);
+                    return Err(anyhow!(s));
                 }
             };
             self.set_group_concat_max_len(wiki, &mut conn).await?;
@@ -287,17 +278,11 @@ impl AppState {
         }
     }
 
-    pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api, String> {
-        self.site_matrix
-            .get_api_for_wiki(&wiki)
-            .await
-            .map_err(|e| format!("{e}"))
+    pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api> {
+        self.site_matrix.get_api_for_wiki(&wiki).await
     }
 
-    pub async fn get_tool_db_connection(
-        &self,
-        tool_db_user_pass: DbUserPass,
-    ) -> Result<my::Conn, String> {
+    pub async fn get_tool_db_connection(&self, tool_db_user_pass: DbUserPass) -> Result<my::Conn> {
         let (host, schema) = self.db_host_and_schema_for_tool_db();
         let (user, pass) = tool_db_user_pass.clone();
         let port: u16 = match self.config["host"].as_str() {
@@ -314,9 +299,8 @@ impl AppState {
 
         match my::Conn::new(opts).await {
             Ok(conn) => Ok(conn),
-            Err(e) => Err(format!(
-                "AppState::get_tool_db_connection can't get DB connection to {}:{} : '{}'",
-                &host, port, &e
+            Err(e) => Err(anyhow!(
+                "AppState::get_tool_db_connection can't get DB connection to {host}:{port} : '{e}'"
             )),
         }
     }
@@ -325,32 +309,32 @@ impl AppState {
         &self.tool_db_mutex
     }
 
-    pub async fn get_query_from_psid(&self, psid: &str) -> Result<String, String> {
+    pub async fn get_query_from_psid(&self, psid: &str) -> Result<String> {
         let mut conn = self
             .get_tool_db_connection(self.tool_db_mutex.lock().await.clone())
             .await?;
 
         let psid = match psid.parse::<usize>() {
             Ok(psid) => psid,
-            Err(e) => return Err(format!("{:?}", e)),
+            Err(e) => return Err(anyhow!(e)),
         };
         let sql = format!("SELECT querystring FROM query WHERE id={}", psid);
 
         let rows = conn
             .exec_iter(sql.as_str(), ())
             .await
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<Vec<u8>>)
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!(e))?;
 
         match rows.first() {
             Some(ret) => Ok(String::from_utf8_lossy(ret).into_owned()),
-            None => Err("No such PSID in the database".to_string()),
+            None => Err(anyhow!("No such PSID in the database")),
         }
     }
 
-    pub async fn log_query_start(&self, query_string: &str) -> Result<u64, String> {
+    pub async fn log_query_start(&self, query_string: &str) -> Result<u64> {
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
         let sql = (
@@ -369,12 +353,12 @@ impl AppState {
             .await?;
         conn.exec_drop(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!(e))?;
         conn.last_insert_id()
-            .ok_or_else(|| "AppState::log_query_start: Could not insert".to_string())
+            .ok_or_else(|| anyhow!("AppState::log_query_start: Could not insert"))
     }
 
-    pub async fn log_query_end(&self, query_id: u64) -> Result<(), String> {
+    pub async fn log_query_end(&self, query_id: u64) -> Result<()> {
         let sql = (
             "DELETE FROM `started_queries` WHERE id=?",
             vec![MyValue::UInt(query_id)],
@@ -382,14 +366,14 @@ impl AppState {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
         self.get_tool_db_connection(tool_db_user_pass.clone())
             .await
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!(e))?
             .exec_drop(sql.0, mysql_async::Params::Positional(sql.1))
             .await
-            .map_err(|e| format!("{:?}", e))
+            .map_err(|e| anyhow!(e))
     }
 
     #[instrument(skip_all, ret)]
-    pub async fn get_or_create_psid_for_query(&self, query_string: &str) -> Result<u64, String> {
+    pub async fn get_or_create_psid_for_query(&self, query_string: &str) -> Result<u64> {
         let tool_db_user_pass = self.tool_db_mutex.lock().await;
         let mut conn = self
             .get_tool_db_connection(tool_db_user_pass.clone())
@@ -404,10 +388,10 @@ impl AppState {
         let rows = conn
             .exec_iter(sql.0, mysql_async::Params::Positional(sql.1))
             .await
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<u64>)
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!(e))?;
 
         if let Some(id) = rows.first() {
             return Ok(*id);
@@ -426,10 +410,12 @@ impl AppState {
 
         conn.exec_drop(sql.0, mysql_async::Params::Positional(sql.1))
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!(e))?;
         match conn.last_insert_id() {
             Some(id) => Ok(id),
-            None => Err("get_or_create_psid_for_query: Could not insert new PSID".to_string()),
+            None => Err(anyhow!(
+                "get_or_create_psid_for_query: Could not insert new PSID"
+            )),
         }
     }
 

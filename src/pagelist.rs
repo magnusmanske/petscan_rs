@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::pagelist_entry::{PageListEntry, PageListSort};
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
+use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use mysql_async as my;
 use mysql_async::prelude::Queryable;
@@ -37,53 +38,38 @@ impl PageList {
         }
     }
 
-    pub fn clear(&mut self) -> Result<(), String> {
-        *self.wiki.write().map_err(|e| format!("{:?}", e))? = None;
-        self.entries
-            .write()
-            .map_err(|e| format!("{:?}", e))?
-            .clear();
-        Ok(())
-    }
-
-    pub fn set_from(&self, other: Self) -> Result<(), String> {
-        *self.wiki.write().map_err(|e| format!("{:?}", e))? =
-            other.wiki.read().map_err(|e| format!("{:?}", e))?.clone();
-        *self.entries.write().map_err(|e| format!("{:?}", e))? = other
-            .entries
-            .read()
-            .map_err(|e| format!("{:?}", e))?
-            .clone();
+    pub fn set_from(&self, other: Self) -> Result<()> {
+        *self.wiki.write().map_err(|e| anyhow!("{e}"))? =
+            other.wiki.read().map_err(|e| anyhow!("{e}"))?.clone();
+        *self.entries.write().map_err(|e| anyhow!("{e}"))? =
+            other.entries.read().map_err(|e| anyhow!("{e}"))?.clone();
         self.set_has_sitelink_counts(other.has_sitelink_counts()?)?;
         Ok(())
     }
 
-    pub fn set_has_sitelink_counts(&self, new_state: bool) -> Result<(), String> {
+    pub fn set_has_sitelink_counts(&self, new_state: bool) -> Result<()> {
         *self
             .has_sitelink_counts
             .write()
-            .map_err(|e| format!("{:?}", e))? = new_state;
+            .map_err(|e| anyhow!("{e}"))? = new_state;
         Ok(())
     }
 
-    pub fn has_sitelink_counts(&self) -> Result<bool, String> {
+    pub fn has_sitelink_counts(&self) -> Result<bool> {
         let ret: bool = *self
             .has_sitelink_counts
             .read()
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!("{e}"))?;
         Ok(ret)
     }
 
-    pub fn set_entries(&self, entries: HashSet<PageListEntry>) -> Result<(), String> {
-        *self.entries.write().map_err(|e| format!("{:?}", e))? = entries;
+    pub fn set_entries(&self, entries: HashSet<PageListEntry>) -> Result<()> {
+        *self.entries.write().map_err(|e| anyhow!("{e}"))? = entries;
         Ok(())
     }
 
-    pub fn retain_entries(&self, f: &dyn Fn(&PageListEntry) -> bool) -> Result<(), String> {
-        self.entries
-            .write()
-            .map_err(|e| format!("{:?}", e))?
-            .retain(f);
+    pub fn retain_entries(&self, f: &dyn Fn(&PageListEntry) -> bool) -> Result<()> {
+        self.entries.write().map_err(|e| anyhow!("{e}"))?.retain(f);
         Ok(())
     }
 
@@ -91,11 +77,11 @@ impl PageList {
         self.entries.read().ok()?.get(entry).map(|e| e.clone())
     }
 
-    pub fn to_titles_namepsaces(&self) -> Result<Vec<(String, NamespaceID)>, String> {
+    pub fn to_titles_namepsaces(&self) -> Result<Vec<(String, NamespaceID)>> {
         let title_ns = self
             .entries
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .par_iter()
             .map(|entry| {
                 (
@@ -107,23 +93,23 @@ impl PageList {
         Ok(title_ns)
     }
 
-    pub fn to_full_pretty_titles(&self, api: &Api) -> Result<Vec<String>, String> {
+    pub fn to_full_pretty_titles(&self, api: &Api) -> Result<Vec<String>> {
         let ret = self
             .entries
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .par_iter()
             .filter_map(|entry| entry.title().full_pretty(api))
             .collect();
         Ok(ret)
     }
 
-    pub fn change_namespaces(&self, to_talk: bool) -> Result<(), String> {
+    pub fn change_namespaces(&self, to_talk: bool) -> Result<()> {
         let add = to_talk as i64;
         let tmp = self
             .entries
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .par_iter()
             .map(|entry| {
                 let mut nsid = entry.title().namespace_id();
@@ -133,42 +119,45 @@ impl PageList {
                 PageListEntry::new(new_title)
             })
             .collect();
-        *(self.entries.write().map_err(|e| format!("{:?}", e))?) = tmp;
+        *(self.entries.write().map_err(|e| anyhow!("{e}"))?) = tmp;
         Ok(())
     }
 
-    pub fn as_vec(&self) -> Result<Vec<PageListEntry>, String> {
-        Ok(self.entries.read().unwrap().iter().cloned().collect())
+    pub fn as_vec(&self) -> Result<Vec<PageListEntry>> {
+        Ok(self
+            .entries
+            .read()
+            .map_err(|e| anyhow!("{e}"))?
+            .iter()
+            .cloned()
+            .collect())
     }
 
-    pub fn set_wiki(&self, wiki: Option<String>) -> Result<(), String> {
-        *self.wiki.write().map_err(|e| format!("{:?}", e))? = wiki;
+    pub fn set_wiki(&self, wiki: Option<String>) -> Result<()> {
+        *self.wiki.write().map_err(|e| anyhow!("{e}"))? = wiki;
         Ok(())
     }
 
-    pub fn wiki(&self) -> Result<Option<String>, String> {
-        Ok(self.wiki.read().map_err(|e| format!("{:?}", e))?.clone())
+    pub fn wiki(&self) -> Result<Option<String>> {
+        Ok(self.wiki.read().map_err(|e| anyhow!("{e}"))?.clone())
     }
 
-    pub fn drain_into_sorted_vec(
-        &self,
-        sorter: PageListSort,
-    ) -> Result<Vec<PageListEntry>, String> {
+    pub fn drain_into_sorted_vec(&self, sorter: PageListSort) -> Result<Vec<PageListEntry>> {
         let mut ret: Vec<PageListEntry> = self
             .entries
             .write()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .drain()
             .collect();
         ret.par_sort_by(|a, b| a.compare(b, &sorter, self.is_wikidata()));
         Ok(ret)
     }
 
-    pub fn group_by_namespace(&self) -> Result<HashMap<NamespaceID, Vec<String>>, String> {
+    pub fn group_by_namespace(&self) -> Result<HashMap<NamespaceID, Vec<String>>> {
         let mut ret: HashMap<NamespaceID, Vec<String>> = HashMap::new();
         self.entries
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .iter()
             .for_each(|entry| {
                 ret.entry(entry.title().namespace_id())
@@ -178,22 +167,18 @@ impl PageList {
         Ok(ret)
     }
 
-    pub fn is_empty(&self) -> Result<bool, String> {
-        Ok(self
-            .entries
-            .read()
-            .map_err(|e| format!("{:?}", e))?
-            .is_empty())
+    pub fn is_empty(&self) -> Result<bool> {
+        Ok(self.entries.read().map_err(|e| anyhow!("{e}"))?.is_empty())
     }
 
-    pub fn len(&self) -> Result<usize, String> {
-        Ok(self.entries.read().map_err(|e| format!("{:?}", e))?.len())
+    pub fn len(&self) -> Result<usize> {
+        Ok(self.entries.read().map_err(|e| anyhow!("{e}"))?.len())
     }
 
-    pub fn add_entry(&self, entry: PageListEntry) -> Result<(), String> {
+    pub fn add_entry(&self, entry: PageListEntry) -> Result<()> {
         self.entries
             .write()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .replace(entry);
         Ok(())
     }
@@ -202,13 +187,19 @@ impl PageList {
         &self,
         pagelist: &PageList,
         platform: Option<&Platform>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let my_wiki = match self.wiki()? {
             Some(wiki) => wiki,
-            None => return Err("PageList::check_before_merging self.wiki is not set".to_string()),
+            None => {
+                return Err(anyhow!(
+                    "PageList::check_before_merging self.wiki is not set"
+                ))
+            }
         };
         if pagelist.wiki()?.is_none() {
-            return Err("PageList::check_before_merging pagelist.wiki is not set".to_string());
+            return Err(anyhow!(
+                "PageList::check_before_merging pagelist.wiki is not set"
+            ));
         }
         if self.wiki()? != pagelist.wiki()? {
             match platform {
@@ -228,7 +219,7 @@ impl PageList {
                     pagelist.convert_to_wiki(&my_wiki, platform).await?;
                 }
                 None => {
-                    return Err(format!(
+                    return Err(anyhow!(
                         "PageList::check_before_merging wikis are not identical: {}/{}",
                         self.wiki()?
                             .unwrap_or_else(|| "PageList::check_before_merging:1".to_string()),
@@ -242,27 +233,19 @@ impl PageList {
         Ok(())
     }
 
-    pub async fn union(
-        &self,
-        pagelist: &PageList,
-        platform: Option<&Platform>,
-    ) -> Result<(), String> {
+    pub async fn union(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
         Platform::profile("PageList::union START UNION/1", None);
-        let mut me = self.entries.write().map_err(|e| format!("{:?}", e))?;
+        let mut me = self.entries.write().map_err(|e| anyhow!("{e}"))?;
         if me.is_empty() {
-            *me = pagelist
-                .entries
-                .read()
-                .map_err(|e| format!("{:?}", e))?
-                .clone();
+            *me = pagelist.entries.read().map_err(|e| anyhow!("{e}"))?.clone();
             return Ok(());
         }
         Platform::profile("PageList::union START UNION/2", None);
         pagelist
             .entries
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .iter()
             .for_each(|x| {
                 me.insert(x.to_owned());
@@ -275,31 +258,27 @@ impl PageList {
         &self,
         pagelist: &PageList,
         platform: Option<&Platform>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
-        let other_entries = pagelist.entries.read().map_err(|e| format!("{:?}", e))?;
+        let other_entries = pagelist.entries.read().map_err(|e| anyhow!("{e}"))?;
         self.entries
             .write()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .retain(|page_list_entry| other_entries.contains(page_list_entry));
         Ok(())
     }
 
-    pub async fn difference(
-        &self,
-        pagelist: &PageList,
-        platform: Option<&Platform>,
-    ) -> Result<(), String> {
+    pub async fn difference(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
-        let other_entries = pagelist.entries.read().map_err(|e| format!("{:?}", e))?;
+        let other_entries = pagelist.entries.read().map_err(|e| anyhow!("{e}"))?;
         self.entries
             .write()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .retain(|page_list_entry| !other_entries.contains(page_list_entry));
         Ok(())
     }
 
-    pub fn to_sql_batches(&self, chunk_size: usize) -> Result<Vec<SQLtuple>, String> {
+    pub fn to_sql_batches(&self, chunk_size: usize) -> Result<Vec<SQLtuple>> {
         let mut ret: Vec<SQLtuple> = vec![];
         if self.is_empty()? {
             return Ok(ret);
@@ -319,7 +298,7 @@ impl PageList {
         &self,
         chunk_size: usize,
         namespace_id: NamespaceID,
-    ) -> Result<Vec<SQLtuple>, String> {
+    ) -> Result<Vec<SQLtuple>> {
         let mut ret: Vec<SQLtuple> = vec![];
         if self.is_empty()? {
             return Ok(ret);
@@ -337,19 +316,16 @@ impl PageList {
         Ok(ret)
     }
 
-    pub fn clear_entries(&self) -> Result<(), String> {
-        self.entries
-            .write()
-            .map_err(|e| format!("{:?}", e))?
-            .clear();
+    pub fn clear_entries(&self) -> Result<()> {
+        self.entries.write().map_err(|e| anyhow!("{e}"))?.clear();
         Ok(())
     }
 
-    pub fn replace_entries(&self, other: &PageList) -> Result<(), String> {
+    pub fn replace_entries(&self, other: &PageList) -> Result<()> {
         other
             .entries
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .iter()
             .for_each(|entry| {
                 if let Ok(mut entries) = self.entries.write() {
@@ -364,19 +340,17 @@ impl PageList {
         state: &AppState,
         sql: SQLtuple,
         wiki: &str,
-    ) -> Result<Vec<my::Row>, String> {
+    ) -> Result<Vec<my::Row>> {
         let mut conn = state
             .get_wiki_db_connection(wiki)
             .await
-            .map_err(|e| format!("PageList::run_batch_query: get_wiki_db_connection: {:?}", e))?;
+            .map_err(|e| anyhow!(e))?;
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-            .await // TODO fix to_owned
-            .map_err(|e| format!("PageList::run_batch_query: SQL query error[1]: {:?}", e))?
+            .await? // TODO fix to_owned?
             .collect_and_drop()
-            .await
-            .map_err(|e| format!("PageList::run_batch_query: SQL query error[2]: {:?}", e))?;
-        conn.disconnect().await.map_err(|e| format!("{:?}", e))?;
+            .await?;
+        conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
 
         Ok(rows)
     }
@@ -386,10 +360,10 @@ impl PageList {
         &self,
         state: &AppState,
         batches: Vec<SQLtuple>,
-    ) -> Result<Vec<my::Row>, String> {
+    ) -> Result<Vec<my::Row>> {
         let wiki = self
             .wiki()?
-            .ok_or_else(|| "PageList::run_batch_queries: No wiki".to_string())?;
+            .ok_or_else(|| anyhow!("PageList::run_batch_queries: No wiki"))?;
 
         if true {
             self.run_batch_queries_mutex(state, batches, wiki).await
@@ -405,7 +379,7 @@ impl PageList {
         state: &AppState,
         batches: Vec<SQLtuple>,
         wiki: String,
-    ) -> Result<Vec<my::Row>, String> {
+    ) -> Result<Vec<my::Row>> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
         let mut rows: Vec<my::Row> = vec![];
         for sql in batches {
@@ -422,7 +396,7 @@ impl PageList {
         state: &AppState,
         batches: Vec<SQLtuple>,
         wiki: String,
-    ) -> Result<Vec<my::Row>, String> {
+    ) -> Result<Vec<my::Row>> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
 
         // TODO parallel
@@ -459,11 +433,11 @@ impl PageList {
         Some(PageListEntry::new(Title::new(&page_title, namespace_id)))
     }
 
-    async fn load_missing_page_metadata(&self, platform: &Platform) -> Result<(), String> {
+    async fn load_missing_page_metadata(&self, platform: &Platform) -> Result<()> {
         if self
             .entries
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .par_iter()
             .any(|entry| {
                 entry.page_id().is_none()
@@ -502,7 +476,8 @@ impl PageList {
             let col_title = 0;
             let col_ns = 1;
             self.run_batch_queries(&platform.state(), batches)
-                .await?
+                .await
+                .unwrap()
                 .iter()
                 .filter_map(|row| {
                     self.entry_from_row(row, col_title, col_ns)
@@ -526,7 +501,7 @@ impl PageList {
         &self,
         wikidata_language: Option<String>,
         platform: &Platform,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         Platform::profile("begin load_missing_metadata", None);
         Platform::profile("before load_missing_page_metadata", None);
         self.load_missing_page_metadata(platform).await?;
@@ -558,7 +533,7 @@ impl PageList {
         entity_type: &str,
         wikidata_language: &str,
         platform: &Platform,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let batches: Vec<SQLtuple> = self
             .to_sql_batches_namespace(PAGE_BATCH_SIZE,namespace_id)?
             .iter_mut()
@@ -636,7 +611,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         Ok(())
     }
 
-    pub async fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
+    pub async fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<()> {
         // Already that wiki?
         if self.wiki()?.is_none() || self.wiki()? == Some(wiki.to_string()) {
             return Ok(());
@@ -648,7 +623,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         Ok(())
     }
 
-    async fn convert_to_wikidata(&self, platform: &Platform) -> Result<(), String> {
+    async fn convert_to_wikidata(&self, platform: &Platform) -> Result<()> {
         if self.wiki()?.is_none() || self.is_wikidata() {
             return Ok(());
         }
@@ -681,7 +656,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         Ok(())
     }
 
-    async fn convert_from_wikidata(&self, wiki: &str, platform: &Platform) -> Result<(), String> {
+    async fn convert_from_wikidata(&self, wiki: &str, platform: &Platform) -> Result<()> {
         if !self.is_wikidata() {
             return Ok(());
         }
@@ -701,7 +676,11 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         );
 
         self.clear_entries()?;
-        let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
+        let api = platform
+            .state()
+            .get_api_for_wiki(wiki.to_string())
+            .await
+            .map_err(|e| anyhow!(e))?;
         Platform::profile("PageList::convert_from_wikidata STARTING BATCHES", None);
 
         let batches = batches.chunks(5).collect::<Vec<_>>();
@@ -735,7 +714,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         Ok(())
     }
 
-    pub fn regexp_filter(&self, regexp: &str) -> Result<(), String> {
+    pub fn regexp_filter(&self, regexp: &str) -> Result<()> {
         let regexp_all = "^".to_string() + regexp + "$";
         let is_wikidata = self.is_wikidata();
         if let Ok(re) = Regex::new(&regexp_all) {
@@ -750,7 +729,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         Ok(())
     }
 
-    async fn search_entry(&self, api: &Api, search: &str, page_id: u32) -> Result<bool, String> {
+    async fn search_entry(&self, api: &Api, search: &str, page_id: u32) -> Result<bool> {
         let params = [
             ("action".to_string(), "query".to_string()),
             ("list".to_string(), "search".to_string()),
@@ -766,19 +745,18 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         .collect();
         let result = match api.get_query_api_json(&params).await {
             Ok(result) => result,
-            Err(e) => return Err(format!("{:?}", e)),
+            Err(e) => return Err(anyhow!("{e}")),
         };
         let titles = Api::result_array_to_titles(&result);
         Ok(!titles.is_empty())
     }
 
-    pub async fn search_filter(&self, platform: &Platform, search: &str) -> Result<(), String> {
+    pub async fn search_filter(&self, platform: &Platform, search: &str) -> Result<()> {
         let max_page_number: usize = 10000;
         if self.len()? > max_page_number {
-            return Err(format!(
-                "Too many pages ({}), maximum is {}",
-                self.len()?,
-                &max_page_number
+            return Err(anyhow!(
+                "Too many pages ({}), maximum is {max_page_number}",
+                self.len()?
             ));
         }
         let wiki = match self.wiki()? {
@@ -788,11 +766,15 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
         let page_ids: Vec<u32> = self
             .entries
             .read()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .iter()
             .filter_map(|entry| entry.page_id())
             .collect();
-        let api = platform.state().get_api_for_wiki(wiki).await?;
+        let api = platform
+            .state()
+            .get_api_for_wiki(wiki)
+            .await
+            .map_err(|e| anyhow!(e))?;
         let mut futures = vec![];
         page_ids.iter().for_each(|page_id| {
             let fut = self.search_entry(&api, search, page_id.to_owned());
@@ -814,7 +796,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
             })
             .collect();
         if searches_failed {
-            return Err("Filter searches have failed".to_string());
+            return Err(anyhow!("Filter searches have failed"));
         }
 
         self.retain_entries(&|entry: &PageListEntry| match entry.page_id() {

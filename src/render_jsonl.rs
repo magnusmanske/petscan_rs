@@ -3,6 +3,7 @@ use crate::platform::*;
 use crate::render::Render;
 use crate::render_json::RenderJSON;
 use crate::render_params::RenderParams;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -16,7 +17,7 @@ impl Render for RenderJSONL {
         platform: &Platform,
         wiki: &str,
         entries: Vec<PageListEntry>,
-    ) -> Result<MyResponse, String> {
+    ) -> Result<MyResponse> {
         let mut params = RenderParams::new(platform, wiki).await?;
         let content_type = ContentType::Plain;
 
@@ -31,7 +32,7 @@ impl Render for RenderJSONL {
 
         let parts = match value.as_array() {
             Some(p) => p,
-            None => return Err("JSON value is not an array".to_string()),
+            None => return Err(anyhow!("JSON value is not an array")),
         };
 
         let mut out: String = String::new();
@@ -39,7 +40,7 @@ impl Render for RenderJSONL {
             let output = ::serde_json::to_string(&part);
             match output {
                 Ok(o) => out += &o,
-                Err(e) => return Err(format!("JSON encoding failed: {:?}", e)),
+                Err(e) => return Err(anyhow!("JSON encoding failed: {e}")),
             };
             out += "\n";
         }

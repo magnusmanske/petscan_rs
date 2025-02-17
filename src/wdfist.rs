@@ -3,6 +3,7 @@ use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 use crate::platform::*;
+use anyhow::{anyhow, Result};
 use mysql_async as my;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
@@ -59,7 +60,7 @@ impl WDfist {
         })
     }
 
-    pub async fn run(&mut self) -> Result<Value, String> {
+    pub async fn run(&mut self) -> Result<Value> {
         let mut j = json!({"status":"OK","data":{}});
         self.wdf_allow_svg = self.bool_param("wdf_allow_svg");
         self.wdf_only_jpeg = self.bool_param("wdf_only_jpeg");
@@ -95,7 +96,7 @@ impl WDfist {
         Ok(j)
     }
 
-    async fn get_language_links(&self) -> Result<HashMap<String, Vec<(String, String)>>, String> {
+    async fn get_language_links(&self) -> Result<HashMap<String, Vec<(String, String)>>> {
         // Prepare batches to get item/wiki/title triples
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -138,7 +139,7 @@ impl WDfist {
         &self,
         wiki: &str,
         page_file: Vec<(String, String)>,
-    ) -> Result<Vec<(String, String)>, String> {
+    ) -> Result<Vec<(String, String)>> {
         if !self.bool_param("wdf_only_page_images") {
             return Ok(page_file);
         }
@@ -169,7 +170,7 @@ impl WDfist {
         Ok(ret)
     }
 
-    async fn follow_language_links(&mut self) -> Result<(), String> {
+    async fn follow_language_links(&mut self) -> Result<()> {
         let add_item_file: Mutex<Vec<(String, String)>> = Mutex::new(vec![]);
         let wiki2title_q = self.get_language_links().await?;
         for (wiki, title_q) in wiki2title_q {
@@ -180,7 +181,7 @@ impl WDfist {
         // Add files
         add_item_file
             .lock()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .iter()
             .for_each(|(q, file)| self.add_file_to_item(q, file));
 
@@ -192,7 +193,7 @@ impl WDfist {
         title_q: Vec<(String, String)>,
         wiki: String,
         add_item_file: &Mutex<Vec<(String, String)>>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let page2q: HashMap<String, String> = title_q
             .par_iter()
             .map(|(title, q)| (title.to_string(), q.to_string()))
@@ -212,7 +213,7 @@ impl WDfist {
         let rows = PageList::new_from_wiki("commonswiki")
             .run_batch_queries(&self.state, batches)
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!("{e}"))?;
         let page_file: Vec<(String, String)> = rows
             .par_iter()
             .map(|row| my::from_row::<(String, String)>(row.to_owned()))
@@ -220,18 +221,18 @@ impl WDfist {
         let mut page_file = self
             .filter_page_images(&wiki, page_file)
             .await
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .par_iter()
             .filter_map(|(page, file)| page2q.get(page).map(|q| (q.to_string(), file.to_string())))
             .collect();
         add_item_file
             .lock()
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .append(&mut page_file);
         Ok(())
     }
 
-    async fn follow_coords(&mut self) -> Result<(), String> {
+    async fn follow_coords(&mut self) -> Result<()> {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
@@ -323,7 +324,7 @@ impl WDfist {
         )
     }
 
-    async fn follow_search_commons(&mut self) -> Result<(), String> {
+    async fn follow_search_commons(&mut self) -> Result<()> {
         let batches = self.follow_search_commons_prepare_batches();
         let pagelist = PageList::new_from_wiki("wikidatawiki");
         let rows = pagelist.run_batch_queries(&self.state, batches).await?;
@@ -410,7 +411,7 @@ impl WDfist {
         add_item_file
     }
 
-    fn follow_commons_cats(&mut self) -> Result<(), String> {
+    fn follow_commons_cats(&mut self) -> Result<()> {
         // TODO
         Ok(())
     }
@@ -422,18 +423,18 @@ impl WDfist {
         }
     }
 
-    async fn seed_ignore_files(&mut self) -> Result<(), String> {
+    async fn seed_ignore_files(&mut self) -> Result<()> {
         self.seed_ignore_files_from_wiki_page().await?;
         self.seed_ignore_files_from_ignore_database().await?;
         Ok(())
     }
 
-    async fn seed_ignore_files_from_wiki_page(&mut self) -> Result<(), String> {
+    async fn seed_ignore_files_from_wiki_page(&mut self) -> Result<()> {
         let url_with_ignore_list =
             "http://www.wikidata.org/w/index.php?title=User:Magnus_Manske/FIST_icons&action=raw";
         let api = match Api::new("https://www.wikidata.org/w/api.php").await {
             Ok(api) => api,
-            Err(_e) => return Err("Can\'t open Wikidata API".to_string()),
+            Err(_e) => return Err(anyhow!("Can't open Wikidata API")),
         };
         let wikitext = match api
             .query_raw(url_with_ignore_list, &HashMap::new(), "GET")
@@ -441,9 +442,8 @@ impl WDfist {
         {
             Ok(t) => t,
             Err(e) => {
-                return Err(format!(
-                    "Can't load ignore list from {} : {}",
-                    &url_with_ignore_list, e
+                return Err(anyhow!(
+                    "Can't load ignore list from {url_with_ignore_list} : {e}"
                 ))
             }
         };
@@ -458,7 +458,7 @@ impl WDfist {
         Ok(())
     }
 
-    async fn seed_ignore_files_from_ignore_database(&mut self) -> Result<(), String> {
+    async fn seed_ignore_files_from_ignore_database(&mut self) -> Result<()> {
         let mut conn = self.get_db_conn().await?;
 
         let sql = format!("SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={}",MIN_IGNORE_DB_FILE_COUNT);
@@ -466,10 +466,10 @@ impl WDfist {
         let rows = conn
             .exec_iter(sql.as_str(), ())
             .await
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .map_and_drop(from_row::<Vec<u8>>)
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!("{e}"))?;
 
         for filename in rows {
             let filename = String::from_utf8_lossy(&filename);
@@ -482,7 +482,7 @@ impl WDfist {
         Ok(())
     }
 
-    async fn filter_items(&mut self) -> Result<(), String> {
+    async fn filter_items(&mut self) -> Result<()> {
         // To batches (all items are ns=0)
         let wdf_only_items_without_p18 = self.bool_param("wdf_only_items_without_p18");
         let mut batches: Vec<SQLtuple> = vec![];
@@ -505,14 +505,14 @@ impl WDfist {
         Ok(())
     }
 
-    async fn filter_files(&mut self) -> Result<(), String> {
+    async fn filter_files(&mut self) -> Result<()> {
         self.filter_files_from_ignore_database().await?;
         self.filter_files_five_or_is_used().await?;
         self.remove_items_with_no_file_candidates()?;
         Ok(())
     }
 
-    async fn filter_files_from_ignore_database(&mut self) -> Result<(), String> {
+    async fn filter_files_from_ignore_database(&mut self) -> Result<()> {
         if self.items.is_empty() {
             return Ok(());
         }
@@ -528,12 +528,13 @@ impl WDfist {
         Ok(())
     }
 
-    async fn get_db_conn(&mut self) -> Result<my::Conn, String> {
+    async fn get_db_conn(&mut self) -> Result<my::Conn> {
         let state = self.state.clone();
         let tool_db_user_pass = state.get_tool_db_user_pass().lock().await;
         let conn = state
             .get_tool_db_connection(tool_db_user_pass.clone())
-            .await?;
+            .await
+            .map_err(|e| anyhow!("{e}"))?;
         Ok(conn)
     }
 
@@ -560,14 +561,14 @@ impl WDfist {
         &mut self,
         conn: &mut my::Conn,
         sql: (String, Vec<MyValue>),
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await
-            .map_err(|e| format!("{:?}", e))?
+            .map_err(|e| anyhow!("{e}"))?
             .map_and_drop(from_row::<(String, String)>)
             .await
-            .map_err(|e| format!("{:?}", e))?;
+            .map_err(|e| anyhow!("{e}"))?;
         for (item, filename) in rows {
             let filename = self.normalize_filename(&filename.to_string());
             if let Some(ref mut files) = self.item2files.get_mut(&item) {
@@ -580,7 +581,7 @@ impl WDfist {
         Ok(())
     }
 
-    async fn filter_files_five_or_is_used(&mut self) -> Result<(), String> {
+    async fn filter_files_five_or_is_used(&mut self) -> Result<()> {
         if self.item2files.is_empty() {
             return Ok(());
         }
@@ -643,7 +644,7 @@ impl WDfist {
         &mut self,
         file2count: &HashMap<String, usize>,
         files_to_remove: &mut Vec<String>,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         if !self.bool_param("wdf_only_files_not_on_wd") {
             return Ok(());
         }
@@ -674,7 +675,7 @@ impl WDfist {
         Ok(())
     }
 
-    fn remove_items_with_no_file_candidates(&mut self) -> Result<(), String> {
+    fn remove_items_with_no_file_candidates(&mut self) -> Result<()> {
         self.item2files.retain(|_item, files| !files.is_empty());
         Ok(())
     }
@@ -759,11 +760,10 @@ impl WDfist {
         results
     }
 
-    async fn get_commons_api(&self) -> Result<Api, String> {
-        let api = Api::new("https://commons.wikimedia.org/w/api.php")
+    async fn get_commons_api(&self) -> Result<Api> {
+        Api::new("https://commons.wikimedia.org/w/api.php")
             .await
-            .map_err(|e| format!("{:?}", e))?;
-        Ok(api)
+            .map_err(|e| anyhow!("{e}"))
     }
 
     fn follow_search_commons_get_item2label(&self, rows: Vec<my::Row>) -> Vec<(String, String)> {

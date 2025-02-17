@@ -2,6 +2,7 @@ use crate::datasource::DataSource;
 use crate::pagelist::*;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use wikimisc::mediawiki::title::Title;
 
@@ -18,15 +19,15 @@ impl DataSource for SourceManual {
         platform.has_param("manual_list") && platform.has_param("manual_list_wiki")
     }
 
-    async fn run(&mut self, platform: &Platform) -> Result<PageList, String> {
+    async fn run(&mut self, platform: &Platform) -> Result<PageList> {
         let wiki = platform
             .get_param("manual_list_wiki")
-            .ok_or_else(|| "Missing parameter \'manual_list_wiki\'".to_string())?;
+            .ok_or_else(|| anyhow!("Missing parameter \'manual_list_wiki\'"))?;
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let ret = PageList::new_from_wiki(&wiki);
         platform
             .get_param("manual_list")
-            .ok_or_else(|| "Missing parameter \'manual_list\'".to_string())?
+            .ok_or_else(|| anyhow!("Missing parameter \'manual_list\'"))?
             .split('\n')
             .filter_map(|line| {
                 let line = line.trim().to_string();

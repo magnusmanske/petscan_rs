@@ -1,3 +1,4 @@
+use anyhow::Result;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use regex::Regex;
 use std::collections::HashMap;
@@ -63,11 +64,8 @@ impl FormParameters {
     }
 
     /// Parses a query string into a new object
-    pub fn outcome_from_query(query: &str) -> Result<Self, String> {
-        let parsed_url = match Url::parse(&("https://127.0.0.1/?".to_string() + query)) {
-            Ok(url) => url,
-            Err(e) => return Err(format!("{:?}", &e)),
-        };
+    pub fn outcome_from_query(query: &str) -> Result<Self> {
+        let parsed_url = Url::parse(&("https://127.0.0.1/?".to_string() + query))?;
         let params: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
         let ns = Self::ns_from_params(&params);
         let mut ret = FormParameters { params, ns };
