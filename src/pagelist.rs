@@ -152,41 +152,24 @@ impl PageList {
         pagelist: &PageList,
         platform: Option<&Platform>,
     ) -> Result<()> {
-        let my_wiki = match self.wiki() {
-            Some(wiki) => wiki,
-            None => return Err(anyhow!("PageList::check_before_merging No wiki set (self)")),
-        };
-        if pagelist.wiki().is_none() {
-            return Err(anyhow!(
-                "PageList::check_before_merging No wiki set (pagelist)"
-            ));
-        }
-        if self.wiki() != pagelist.wiki() {
-            match platform {
-                Some(platform) => {
-                    Platform::profile(
-                        format!(
-                            "PageList::check_before_merging Converting {} entries from {} to {}",
-                            pagelist.len(),
-                            pagelist.wiki().unwrap_or_else(|| "NO WIKI SET".to_string()),
-                            &my_wiki
-                        )
-                        .as_str(),
-                        None,
-                    );
-                    pagelist.convert_to_wiki(&my_wiki, platform).await?;
-                }
-                None => {
-                    return Err(anyhow!(
-                        "PageList::check_before_merging wikis are not identical: {}/{}",
-                        self.wiki()
-                            .unwrap_or_else(|| "PageList::check_before_merging:1".to_string()),
-                        pagelist
-                            .wiki()
-                            .unwrap_or_else(|| "PageList::check_before_merging:2".to_string())
-                    ))
-                }
-            }
+        let self_wiki = self
+            .wiki()
+            .ok_or_else(|| anyhow!("PageList::check_before_merging No wiki set (self)"))?;
+        let pagelist_wiki = pagelist
+            .wiki()
+            .ok_or_else(|| anyhow!("PageList::check_before_merging No wiki set (pagelist)"))?;
+        if self_wiki != pagelist_wiki {
+            let platform = platform
+                .ok_or_else(|| anyhow!("PageList::check_before_merging platform in None"))?;
+            Platform::profile(
+                format!(
+                    "PageList::check_before_merging Converting {} entries from {pagelist_wiki} to {self_wiki}",
+                    pagelist.len(),
+                )
+                .as_str(),
+                None,
+            );
+            pagelist.convert_to_wiki(&self_wiki, platform).await?;
         }
         Ok(())
     }
