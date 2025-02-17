@@ -1,0 +1,14 @@
+[Unit]
+Description=PetScan
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/home/magnus/petscan_rs/run.sh
+MemoryMax=7G
+Restart=always
+StartLimitBurst=20
+StartLimitIntervalSec=10
+
+[Install]
+WantedBy=default.target

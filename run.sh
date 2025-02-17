@@ -1,4 +1,5 @@
 #!/bin/bash
+cd /home/magnus/petscan_rs/
 for (( ; ; ))
 do
 sudo /home/magnus/petscan_rs/petscan_rs
