@@ -1373,6 +1373,6 @@ mod tests {
             ("project", "wikipedia"),
         ];
         let result = simulate_category_query(params).await.unwrap();
-        assert!(result.len() > 0);
+        assert!(!result.is_empty());
     }
 }

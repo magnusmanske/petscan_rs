@@ -63,7 +63,7 @@ impl PageList {
     }
 
     pub fn get_entry(&self, entry: &PageListEntry) -> Option<PageListEntry> {
-        self.entries.read().ok()?.get(entry).map(|e| e.clone())
+        self.entries.read().ok()?.get(entry).cloned()
     }
 
     pub fn to_titles_namespaces(&self) -> Vec<(String, NamespaceID)> {
