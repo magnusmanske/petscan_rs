@@ -844,12 +844,32 @@ impl Platform {
         }
 
         if file_data {
+            let sql = if self.state.using_file_table() {
+                "SELECT file.file_name AS img_name,6 AS namespace_id,
+                fr_size AS img_size,
+                fr_width AS img_width,
+                fr_height AS img_height,
+                ft_media_type AS img_media_type,
+                ft_major_mime AS img_major_mime,
+                ft_minor_mime AS img_minor_mime,
+                actor_name AS img_user_text,
+                fr_timestamp AS img_timestamp,
+                fr_sha1 AS img_sha1
+                FROM file,filerevision,filetypes,actor
+                WHERE file.file_latest=filerevision.fr_id
+                AND fr_actor=actor_id
+                AND file.file_type=filetypes.ft_id
+                AND filerevision.fr_deleted=0
+                AND file.file_name IN ("
+            } else {
+                "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN ("
+            };
             let batches: Vec<SQLtuple> = result
                 .to_sql_batches(PAGE_BATCH_SIZE)
                 .par_iter_mut()
                 .map(|sql_batch| {
-                    sql_batch.0 = "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN (".to_string() ;
-                    sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len()) ;
+                    sql_batch.0 = sql.to_string();
+                    sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len());
                     sql_batch.0 += ")";
                     sql_batch.to_owned()
                 })

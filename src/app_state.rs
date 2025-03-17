@@ -97,6 +97,10 @@ impl AppState {
         ret
     }
 
+    pub fn using_file_table(&self) -> bool {
+        self.config["use_file_table"].as_bool().unwrap_or(false)
+    }
+
     pub fn get_restart_code(&self) -> Option<&str> {
         self.config["restart-code"].as_str()
     }
