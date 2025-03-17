@@ -55,7 +55,7 @@ impl WebServer {
                     .serve_connection(io, service_fn(|req| me.process_request(req)))
                     .await
                 {
-                    println!("Error serving connection: {:?}", err);
+                    println!("Error serving connection: {err}");
                 }
             });
         }
@@ -168,7 +168,7 @@ impl WebServer {
         if let Some(psid) = form_parameters.params.get("psid") {
             if !psid.trim().is_empty() {
                 if form_parameters.params.len() == 1 {
-                    single_psid = psid.parse::<u64>().ok()
+                    single_psid = psid.parse::<u64>().ok();
                 }
                 match self.app_state.get_query_from_psid(&psid.to_string()).await {
                     Ok(psid_query) => {
@@ -307,12 +307,12 @@ impl WebServer {
                 self.simple_file_send(filename, "text/plain; charset=utf-8")
                     .await
             }
-            _ => self.not_found(),
+            _ => Self::not_found(),
         }
     }
 
     /// HTTP status code 404
-    fn not_found(&self) -> Result<Response<Full<Bytes>>, Infallible> {
+    fn not_found() -> Result<Response<Full<Bytes>>, Infallible> {
         Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(NOTFOUND.into())
@@ -334,7 +334,7 @@ impl WebServer {
                     .unwrap();
                 Ok(response)
             }
-            Err(_) => self.not_found(),
+            Err(_) => Self::not_found(),
         }
     }
 }

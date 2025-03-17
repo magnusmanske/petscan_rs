@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
-use crate::platform::*;
+use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use anyhow::{anyhow, Result};
 use mysql_async as my;
 use mysql_async::from_row;
@@ -20,6 +20,7 @@ pub static MAX_FILE_COUNT_IN_RESULT_SET: usize = 5;
 pub static NEARBY_FILES_RADIUS_IN_METERS: usize = 100;
 pub static MAX_WIKI_API_THREADS: usize = 10;
 
+#[derive(Debug, Clone)]
 pub struct WDfist {
     item2files: HashMap<String, HashMap<String, usize>>,
     items: Vec<String>,
@@ -252,7 +253,7 @@ impl WDfist {
 
         // Get nearby files
         let api = self.get_commons_api().await?;
-        let params = self.follow_coords_get_params(&page_coords, &api);
+        let params = Self::follow_coords_get_params(&page_coords, &api);
 
         let mut results: Vec<_> = vec![];
         for param in params {
@@ -262,7 +263,7 @@ impl WDfist {
             }
         }
 
-        let add_item_file = self.follow_coords_get_item_files(results, page_coords);
+        let add_item_file = Self::follow_coords_get_item_files(results, page_coords);
         add_item_file
             .iter()
             .for_each(|(q, file)| self.add_file_to_item(q, file));
@@ -271,7 +272,6 @@ impl WDfist {
     }
 
     fn follow_coords_get_item_files(
-        &mut self,
         results: Vec<Value>,
         page_coords: Vec<(String, f64, f64)>,
     ) -> Vec<(String, String)> {
@@ -284,8 +284,8 @@ impl WDfist {
                     .par_iter()
                     .filter_map(|j| match j["title"].as_str() {
                         Some(filename) => {
-                            let filename = self.remove_leading_file_namespace(filename);
-                            let filename = self.normalize_filename(&filename);
+                            let filename = Self::remove_leading_file_namespace(filename);
+                            let filename = Self::normalize_filename(&filename);
                             if filename.is_empty() {
                                 None
                             } else {
@@ -303,7 +303,7 @@ impl WDfist {
     }
 
     // Remove leading "File:"
-    fn remove_leading_file_namespace(&self, filename: &str) -> String {
+    fn remove_leading_file_namespace(filename: &str) -> String {
         if filename.len() < 6 {
             String::new()
         } else {
@@ -327,13 +327,13 @@ impl WDfist {
         let batches = self.follow_search_commons_prepare_batches();
         let pagelist = PageList::new_from_wiki("wikidatawiki");
         let rows = pagelist.run_batch_queries(&self.state, batches).await?;
-        let item2label = self.follow_search_commons_get_item2label(rows);
+        let item2label = Self::follow_search_commons_get_item2label(rows);
 
         // Get search results
         let api = self.get_commons_api().await?;
         let params = self.follow_search_commons_get_params(&item2label, &api);
         let results = self.follow_search_commons_get_results(params, api).await;
-        let add_item_file = self.get_add_item_files(results, item2label);
+        let add_item_file = Self::get_add_item_files(results, item2label);
 
         // Add files
         add_item_file
@@ -374,7 +374,6 @@ impl WDfist {
     }
 
     fn get_add_item_files(
-        &mut self,
         results: Vec<Value>,
         item2label: Vec<(String, String)>,
     ) -> Vec<(String, String)> {
@@ -392,8 +391,8 @@ impl WDfist {
                     .par_iter()
                     .filter_map(|j| match j["title"].as_str() {
                         Some(filename) => {
-                            let filename = self.remove_leading_file_namespace(filename);
-                            let filename = self.normalize_filename(&filename);
+                            let filename = Self::remove_leading_file_namespace(filename);
+                            let filename = Self::normalize_filename(&filename);
                             if filename.is_empty() {
                                 None
                             } else {
@@ -449,7 +448,7 @@ impl WDfist {
         // TODO only rows starting with '*'?
         wikitext.split('\n').for_each(|filename| {
             let filename = filename.trim_start_matches([' ', '*']);
-            let filename = self.normalize_filename(filename);
+            let filename = Self::normalize_filename(filename);
             if self.is_valid_filename(&filename) {
                 self.files2ignore.insert(filename);
             }
@@ -472,7 +471,7 @@ impl WDfist {
 
         for filename in rows {
             let filename = String::from_utf8_lossy(&filename);
-            let filename = self.normalize_filename(filename.as_ref());
+            let filename = Self::normalize_filename(filename.as_ref());
             if self.is_valid_filename(&filename) {
                 self.files2ignore.insert(filename);
             }
@@ -569,7 +568,7 @@ impl WDfist {
             .await
             .map_err(|e| anyhow!("{e}"))?;
         for (item, filename) in rows {
-            let filename = self.normalize_filename(&filename.to_string());
+            let filename = Self::normalize_filename(&filename.to_string());
             if let Some(ref mut files) = self.item2files.get_mut(&item) {
                 files.remove(&filename);
                 if files.is_empty() {
@@ -679,7 +678,7 @@ impl WDfist {
         Ok(())
     }
 
-    fn normalize_filename(&self, filename: &str) -> String {
+    fn normalize_filename(filename: &str) -> String {
         filename.trim().replace(' ', "_")
     }
 
@@ -765,7 +764,7 @@ impl WDfist {
             .map_err(|e| anyhow!("{e}"))
     }
 
-    fn follow_search_commons_get_item2label(&self, rows: Vec<my::Row>) -> Vec<(String, String)> {
+    fn follow_search_commons_get_item2label(rows: Vec<my::Row>) -> Vec<(String, String)> {
         let item2label: Vec<(String, String)> = rows
             .par_iter()
             .map(|row| my::from_row::<(String, String)>(row.to_owned()))
@@ -774,7 +773,6 @@ impl WDfist {
     }
 
     fn follow_coords_get_params(
-        &self,
         page_coords: &[(String, f64, f64)],
         api: &Api,
     ) -> Vec<HashMap<String, String>> {

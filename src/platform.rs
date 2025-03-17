@@ -404,7 +404,7 @@ impl Platform {
                         })?,
                         self,
                     )
-                    .await?
+                    .await?;
             }
             "pagepile" => {
                 result
@@ -414,7 +414,7 @@ impl Platform {
                         })?,
                         self,
                     )
-                    .await?
+                    .await?;
             }
             "manual" => {
                 result
@@ -429,7 +429,7 @@ impl Platform {
                             })?,
                         self,
                     )
-                    .await?
+                    .await?;
             }
             "wikidata" => result.convert_to_wiki("wikidatawiki", self).await?,
             "other" => {
@@ -440,7 +440,7 @@ impl Platform {
                         })?,
                         self,
                     )
-                    .await?
+                    .await?;
             }
             unknown => return Err(anyhow!("Unknown output wiki type '{unknown}'")),
         }

@@ -12,7 +12,7 @@ use wikimisc::mediawiki::title::Title;
 static MAX_HTML_RESULTS: usize = 10000;
 
 /// Renders HTML
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct RenderHTML;
 
 #[async_trait]
@@ -105,27 +105,27 @@ impl Render for RenderHTML {
             if params.row_number() < MAX_HTML_RESULTS {
                 *params.row_number_mut() += 1;
                 let row = self.row_from_entry(&entry, &header, &params, platform);
-                let row = self.render_html_row(&row, &header);
+                let row = Self::render_html_row(&row, &header);
                 output += &row;
             }
         });
 
-        let mut rows = vec![];
-        rows.push("</tbody></table></div>".to_string());
+        let mut new_rows = vec![];
+        new_rows.push("</tbody></table></div>".to_string());
 
         if entries_len > MAX_HTML_RESULTS {
-            rows.push( format!("<div class='alert alert-warning' style='clear:both'>Only the first {} results are shown in HTML, so as to not crash your browser; other formats will have complete results.</div>",MAX_HTML_RESULTS) );
+            new_rows.push( format!("<div class='alert alert-warning' style='clear:both'>Only the first {} results are shown in HTML, so as to not crash your browser; other formats will have complete results.</div>",MAX_HTML_RESULTS) );
         }
 
         if let Some(duration) = platform.query_time() {
             let seconds = (duration.as_millis() as f32) / 1000_f32;
-            rows.push(format!(
+            new_rows.push(format!(
                 "<div style='font-size:8pt' id='query_length' sec='{}'></div>",
                 seconds
             ));
         }
-        rows.push("<script src='autolist.js'></script>".to_string());
-        output += &rows.join("\n");
+        new_rows.push("<script src='autolist.js'></script>".to_string());
+        output += &new_rows.join("\n");
         let interface_language = platform.get_param_default("interface_language", "en");
         let state = platform.state();
         let html = state.get_main_page(interface_language);
@@ -186,7 +186,7 @@ impl Render for RenderHTML {
                     Ok(url) => url,
                     _ => return String::new(),
                 };
-                let file = self.escape_attribute(img);
+                let file = Self::escape_attribute(img);
                 let url = format!("{}/wiki/File:{}", &server_url, &file);
                 let src = format!(
                     "{}/wiki/Special:Redirect/file/{}?width={}",
@@ -250,9 +250,9 @@ impl Render for RenderHTML {
                     url += &format!("{}_N_", coords.lat);
                 };
                 if coords.lon < 0.0 {
-                    url += &format!("{}_W_", -coords.lon)
+                    url += &format!("{}_W_", -coords.lon);
                 } else {
-                    url += &format!("{}_E_", coords.lon)
+                    url += &format!("{}_E_", coords.lon);
                 };
                 url += "globe:earth";
                 format!(
@@ -312,7 +312,7 @@ impl RenderHTML {
         Box::new(Self {})
     }
 
-    fn escape_attribute(&self, s: &str) -> String {
+    fn escape_attribute(s: &str) -> String {
         FormParameters::percent_encode(s)
             .replace('<', "&lt;")
             .replace('>', "&gt;")
@@ -343,7 +343,7 @@ impl RenderHTML {
             Some(ft) => ft,
             None => format!("{:?}", title),
         };
-        let url = server + "/wiki/" + &self.escape_attribute(&full_title);
+        let url = server + "/wiki/" + &Self::escape_attribute(&full_title);
         let label = match alt_label {
             Some(label) => label.to_string(),
             None => match is_page_link {
@@ -363,13 +363,13 @@ impl RenderHTML {
         if is_page_link && wiki == "wikidatawiki" && title.namespace_id() == 0 {
             ret += &format!("&nbsp;<small><tt>[{}]</tt></small>", title.pretty());
             if let Some(desc) = &wikidata_description {
-                ret += &format!("<div class='smaller'>{desc}</div>")
+                ret += &format!("<div class='smaller'>{desc}</div>");
             }
         }
         ret
     }
 
-    fn render_html_row(&self, row: &[String], header: &[(String, String)]) -> String {
+    fn render_html_row(row: &[String], header: &[(String, String)]) -> String {
         let mut ret = "<tr>".to_string();
         for (col_num, item) in row.iter().enumerate() {
             let header_key = match header.get(col_num) {
