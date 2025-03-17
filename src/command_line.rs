@@ -8,6 +8,8 @@ use std::fs::File;
 use std::sync::Arc;
 use url::form_urlencoded;
 
+/// # Panics
+/// Panics if the config file can not be opened or parsed.
 pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<()> {
     let mut args = std::env::args();
     let _ = args.next(); // the actual command
@@ -57,6 +59,8 @@ pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<()> {
     Ok(())
 }
 
+/// # Panics
+/// Panics if the config file can not be opened or parsed.
 pub fn get_petscan_config() -> Value {
     let basedir = env::current_dir()
         .expect("Can't get CWD")

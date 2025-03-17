@@ -1,5 +1,4 @@
-use crate::pagelist::*;
-use crate::platform::Platform;
+use crate::{pagelist::PageList, platform::Platform};
 use anyhow::Result;
 use async_trait::async_trait;
 use mysql_async::Value as MyValue;

@@ -16,13 +16,13 @@
     missing_copy_implementations,
     missing_debug_implementations,
     // clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
+    // clippy::missing_panics_doc,
     clippy::mod_module_files,
     non_ascii_idents,
     noop_method_call,
     // clippy::option_if_let_else,
-    clippy::print_stderr,
-    clippy::print_stdout,
+    // clippy::print_stderr,
+    // clippy::print_stdout,
     clippy::semicolon_if_nothing_returned,
     clippy::unseparated_literal_suffix,
     clippy::shadow_unrelated,
@@ -73,7 +73,7 @@ pub mod wdfist;
 pub mod webserver;
 
 use app_state::AppState;
-use command_line::*;
+use command_line::{command_line_useage, get_petscan_config};
 use std::sync::Arc;
 use webserver::WebServer;
 
