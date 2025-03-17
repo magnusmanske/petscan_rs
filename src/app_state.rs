@@ -32,6 +32,8 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// # Panics
+    /// Panics if the config file is missing the `user` or `password` keys.
     pub async fn new_from_config(config: &Value) -> Self {
         let main_page_path = "./html/index.html";
         let tool_db_access_tuple = (
@@ -107,10 +109,10 @@ impl AppState {
 
     fn get_mysql_opts_for_wiki(&self, wiki: &str, user: &str, pass: &str) -> Result<my::Opts> {
         let (host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
-        let port: u16 = match self.port_mapping.get(wiki) {
-            Some(port) => *port,
-            None => self.config["db_port"].as_u64().unwrap_or(3306) as u16,
-        };
+        let port: u16 = self.port_mapping.get(wiki).map_or_else(
+            || self.config["db_port"].as_u64().unwrap_or(3306) as u16,
+            |port| *port,
+        );
         let opts = my::OptsBuilder::default()
             .ip_or_hostname(host)
             .db_name(Some(schema))
@@ -156,6 +158,8 @@ impl AppState {
     }
 
     /// Returns the server and database name for the wiki, as a tuple
+    /// # Panics
+    /// Panics if the host key is missing from the config file
     pub fn db_host_and_schema_for_wiki(&self, wiki: &str) -> Result<(String, String)> {
         // TESTING
         /*
@@ -175,6 +179,8 @@ impl AppState {
     }
 
     /// Returns the server and database name for the tool db, as a tuple
+    /// # Panics
+    /// Panics if the host or schema key is missing from the config file
     pub fn db_host_and_schema_for_tool_db(&self) -> (String, String) {
         // TESTING
         // ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
@@ -213,7 +219,7 @@ impl AppState {
                 .await
                 .map_err(|e| format!("{:?}", e))
             {
-                Ok(conn) => conn,
+                Ok(conn2) => conn2,
                 Err(s) => {
                     // Checking if max_user_connections was exceeded. That should not happen but sometimes it does.
                     if s.contains("max_user_connections") {
@@ -261,6 +267,8 @@ impl AppState {
         }
     }
 
+    /// # Panics
+    /// Panics if the JSON can't be serialized
     pub fn output_json(&self, value: &Value, callback: Option<&String>) -> MyResponse {
         match callback {
             Some(callback) => {
@@ -309,7 +317,7 @@ impl AppState {
         }
     }
 
-    pub fn get_tool_db_user_pass(&self) -> &Arc<Mutex<DbUserPass>> {
+    pub const fn get_tool_db_user_pass(&self) -> &Arc<Mutex<DbUserPass>> {
         &self.tool_db_mutex
     }
 
@@ -384,13 +392,13 @@ impl AppState {
             .await?;
 
         // Check for existing entry
-        let sql = (
+        let sql1 = (
             "SELECT id FROM query WHERE querystring=? LIMIT 1",
             vec![MyValue::Bytes(query_string.to_owned().into())],
         );
 
         let rows = conn
-            .exec_iter(sql.0, mysql_async::Params::Positional(sql.1))
+            .exec_iter(sql1.0, mysql_async::Params::Positional(sql1.1))
             .await
             .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<u64>)
@@ -404,7 +412,7 @@ impl AppState {
         // Create new entry
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
-        let sql = (
+        let sql2 = (
             "INSERT IGNORE INTO `query` (querystring,created) VALUES (?,?)",
             vec![
                 MyValue::Bytes(query_string.to_owned().into()),
@@ -412,7 +420,7 @@ impl AppState {
             ],
         );
 
-        conn.exec_drop(sql.0, mysql_async::Params::Positional(sql.1))
+        conn.exec_drop(sql2.0, mysql_async::Params::Positional(sql2.1))
             .await
             .map_err(|e| anyhow!(e))?;
         match conn.last_insert_id() {
@@ -436,16 +444,13 @@ impl AppState {
 
     pub fn modify_threads_running(&self, diff: i64) {
         if let Ok(mut tr) = self.threads_running.write() {
-            *tr += diff
+            *tr += diff;
         }
-        self.try_shutdown()
+        self.try_shutdown();
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        match self.shutting_down.read() {
-            Ok(x) => *x,
-            _ => true,
-        }
+        self.shutting_down.read().map_or(true, |x| *x)
     }
 
     pub fn shut_down(&self) {
@@ -454,7 +459,7 @@ impl AppState {
         }
     }
 
-    pub fn site_matrix(&self) -> &SiteMatrix {
+    pub const fn site_matrix(&self) -> &SiteMatrix {
         &self.site_matrix
     }
 }
