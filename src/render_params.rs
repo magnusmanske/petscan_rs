@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::platform::*;
+use crate::platform::Platform;
 use crate::render::AUTOLIST_WIKIDATA;
 use anyhow::Result;
 use std::sync::Arc;
@@ -70,15 +70,15 @@ impl RenderParams {
         Ok(ret)
     }
 
-    pub fn show_wikidata_item(&self) -> bool {
+    pub const fn show_wikidata_item(&self) -> bool {
         self.show_wikidata_item
     }
 
-    pub fn file_data(&self) -> bool {
+    pub const fn file_data(&self) -> bool {
         self.file_data
     }
 
-    pub fn do_output_redlinks(&self) -> bool {
+    pub const fn do_output_redlinks(&self) -> bool {
         self.do_output_redlinks
     }
 
@@ -86,15 +86,15 @@ impl RenderParams {
         &mut self.row_number
     }
 
-    pub fn thumbnails_in_wiki_output(&self) -> bool {
+    pub const fn thumbnails_in_wiki_output(&self) -> bool {
         self.thumbnails_in_wiki_output
     }
 
-    pub fn api(&self) -> &Api {
+    pub const fn api(&self) -> &Api {
         &self.api
     }
 
-    pub fn is_wikidata(&self) -> bool {
+    pub const fn is_wikidata(&self) -> bool {
         self.is_wikidata
     }
 
@@ -102,7 +102,7 @@ impl RenderParams {
         &mut self.use_autolist
     }
 
-    pub fn use_autolist(&self) -> bool {
+    pub const fn use_autolist(&self) -> bool {
         self.use_autolist
     }
 
@@ -118,7 +118,7 @@ impl RenderParams {
         self.autolist_wiki_server = autolist_wiki_server.to_string();
     }
 
-    pub fn row_number(&self) -> usize {
+    pub const fn row_number(&self) -> usize {
         self.row_number
     }
 
@@ -130,19 +130,19 @@ impl RenderParams {
         &self.wiki
     }
 
-    pub fn autolist_creator_mode(&self) -> bool {
+    pub const fn autolist_creator_mode(&self) -> bool {
         self.autolist_creator_mode
     }
 
-    pub fn json_pretty(&self) -> bool {
+    pub const fn json_pretty(&self) -> bool {
         self.json_pretty
     }
 
-    pub fn file_usage(&self) -> bool {
+    pub const fn file_usage(&self) -> bool {
         self.file_usage
     }
 
-    pub fn giu(&self) -> bool {
+    pub const fn giu(&self) -> bool {
         self.giu
     }
 
@@ -162,31 +162,31 @@ impl RenderParams {
         &self.json_callback
     }
 
-    pub fn json_sparse(&self) -> bool {
+    pub const fn json_sparse(&self) -> bool {
         self.json_sparse
     }
 
-    pub fn add_image(&self) -> bool {
+    pub const fn add_image(&self) -> bool {
         self.add_image
     }
 
-    pub fn add_coordinates(&self) -> bool {
+    pub const fn add_coordinates(&self) -> bool {
         self.add_coordinates
     }
 
-    pub fn add_defaultsort(&self) -> bool {
+    pub const fn add_defaultsort(&self) -> bool {
         self.add_defaultsort
     }
 
-    pub fn add_disambiguation(&self) -> bool {
+    pub const fn add_disambiguation(&self) -> bool {
         self.add_disambiguation
     }
 
-    pub fn add_incoming_links(&self) -> bool {
+    pub const fn add_incoming_links(&self) -> bool {
         self.add_incoming_links
     }
 
-    pub fn add_sitelinks(&self) -> bool {
+    pub const fn add_sitelinks(&self) -> bool {
         self.add_sitelinks
     }
 }

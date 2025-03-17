@@ -1,12 +1,13 @@
 use crate::pagelist_entry::PageListEntry;
-use crate::platform::*;
+use crate::platform::{ContentType, MyResponse, Platform};
 use crate::render::Render;
 use crate::render_params::RenderParams;
 use anyhow::Result;
 use async_trait::async_trait;
 
-/// Renders PlainText
-pub struct RenderPlainText {}
+/// Renders `PlainText`
+#[derive(Debug, Clone, Copy)]
+pub struct RenderPlainText;
 
 #[async_trait]
 impl Render for RenderPlainText {

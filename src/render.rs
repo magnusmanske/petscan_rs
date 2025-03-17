@@ -1,5 +1,5 @@
 use crate::pagelist_entry::{LinkCount, PageListEntry};
-use crate::platform::*;
+use crate::platform::{MyResponse, Platform};
 use crate::render_params::RenderParams;
 use anyhow::Result;
 use async_trait::async_trait;

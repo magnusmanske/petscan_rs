@@ -1,5 +1,5 @@
 use crate::app_state::AppState;
-use crate::datasource::*;
+use crate::datasource::{DataSource, SQLtuple};
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::datasource_labels::SourceLabels;
 use crate::datasource_manual::SourceManual;
@@ -9,9 +9,9 @@ use crate::datasource_sitelinks::SourceSitelinks;
 use crate::datasource_sparql::SourceSparql;
 use crate::datasource_wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
-use crate::pagelist::*;
+use crate::pagelist::PageList;
 use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, PageListSort, TriState};
-use crate::render::*;
+use crate::render::Render;
 use crate::render_html::RenderHTML;
 use crate::render_json::RenderJSON;
 use crate::render_jsonl::RenderJSONL;
@@ -20,7 +20,7 @@ use crate::render_pagepile::RenderPagePile;
 use crate::render_plaintext::RenderPlainText;
 use crate::render_tsv::RenderTSV;
 use crate::render_wikitext::RenderWiki;
-use crate::wdfist::*;
+use crate::wdfist::WDfist;
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
 use my::Value::Bytes;
@@ -43,7 +43,7 @@ use wikimisc::mediawiki::title::Title;
 
 pub static PAGE_BATCH_SIZE: usize = 15000;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum ContentType {
     HTML,
     Plain,
@@ -55,7 +55,7 @@ pub enum ContentType {
 }
 
 impl ContentType {
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
             Self::HTML => "text/html; charset=utf-8",
             Self::Plain => "text/plain; charset=utf-8",
@@ -158,7 +158,7 @@ impl Platform {
         self.combination.clone()
     }
 
-    pub fn do_output_redlinks(&self) -> bool {
+    pub const fn do_output_redlinks(&self) -> bool {
         self.output_redlinks
     }
 
@@ -977,7 +977,7 @@ impl Platform {
                 .get_wiki_db_connection("wikidatawiki")
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
-            let mut result = conn
+            let mut subresult = conn
                 .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
                 .await
                 .map_err(|e| anyhow!("{e}"))?
@@ -985,7 +985,7 @@ impl Platform {
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
-            rows.lock().await.append(&mut result);
+            rows.lock().await.append(&mut subresult);
         }
 
         // Rows to entries
@@ -1225,7 +1225,7 @@ impl Platform {
         Some(ret)
     }
 
-    /// Using new wbt_item_terms
+    /// Using new `wbt_item_terms`
     async fn process_labels_new(&self, result: &PageList) -> Result<()> {
         if self.get_label_sql_new(&0).is_none() {
             return Ok(());
@@ -1334,10 +1334,10 @@ impl Platform {
 
         let mut having: Vec<String> = vec![];
         if let Ok(s) = sitelinks_min.parse::<usize>() {
-            having.push(format!("sitelink_count>={}", s))
+            having.push(format!("sitelink_count>={}", s));
         }
         if let Ok(s) = sitelinks_max.parse::<usize>() {
-            having.push(format!("sitelink_count<={}", s))
+            having.push(format!("sitelink_count<={}", s));
         }
 
         let mut sql_post = String::new();
@@ -1623,7 +1623,7 @@ impl Platform {
         questionmarks.join(",")
     }
 
-    pub fn sql_tuple() -> SQLtuple {
+    pub const fn sql_tuple() -> SQLtuple {
         (String::new(), vec![])
     }
 
@@ -1690,7 +1690,7 @@ impl Platform {
                 if first {
                     first = false;
                 } else {
-                    ret.0 += " OR "
+                    ret.0 += " OR ";
                 }
                 if s != "%" {
                     ret.0 += " ( wbx_text LIKE ?";
@@ -1913,7 +1913,7 @@ impl Platform {
                         anyhow!("combine_results: CombinationSequential::Union r2")
                     })?;
                     r1.union(&r2, Some(self)).await?;
-                    registers.push(r1)
+                    registers.push(r1);
                 }
                 CombinationSequential::Intersection => {
                     if registers.len() < 2 {
@@ -1926,7 +1926,7 @@ impl Platform {
                         anyhow!("combine_results: CombinationSequential::Intersection r2")
                     })?;
                     r1.intersection(&r2, Some(self)).await?;
-                    registers.push(r1)
+                    registers.push(r1);
                 }
                 CombinationSequential::Not => {
                     if registers.len() < 2 {
@@ -1939,7 +1939,7 @@ impl Platform {
                         .pop()
                         .ok_or_else(|| anyhow!("combine_results: CombinationSequential::Not r2"))?;
                     r1.difference(&r2, Some(self)).await?;
-                    registers.push(r1)
+                    registers.push(r1);
                 }
             }
         }
@@ -1951,11 +1951,11 @@ impl Platform {
         Err(anyhow!("combine_results:{} registers set", registers.len()))
     }
 
-    pub fn result(&self) -> &Option<PageList> {
+    pub const fn result(&self) -> &Option<PageList> {
         &self.result
     }
 
-    pub fn form_parameters(&self) -> &FormParameters {
+    pub const fn form_parameters(&self) -> &FormParameters {
         &self.form_parameters
     }
 }
@@ -2035,7 +2035,7 @@ mod tests {
     }
 
     async fn check_results_for_psid(psid: usize, wiki: &str, expected: Vec<Title>) {
-        check_results_for_psid_ext(psid, "", wiki, expected).await
+        check_results_for_psid_ext(psid, "", wiki, expected).await;
     }
 
     #[tokio::test]

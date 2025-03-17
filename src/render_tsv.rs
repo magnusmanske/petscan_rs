@@ -6,6 +6,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 /// Renders CSV and TSV
+#[derive(Debug, Clone)]
 pub struct RenderTSV {
     separator: String,
 }

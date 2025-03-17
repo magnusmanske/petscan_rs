@@ -1,14 +1,15 @@
-use crate::pagelist_entry::PageListEntry;
-use crate::platform::*;
+use crate::platform::{ContentType, MyResponse};
 use crate::render::Render;
 use crate::render_json::RenderJSON;
 use crate::render_params::RenderParams;
+use crate::{pagelist_entry::PageListEntry, platform::Platform};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
 /// Renders JSON
-pub struct RenderJSONL {}
+#[derive(Clone, Copy, Debug)]
+pub struct RenderJSONL;
 
 #[async_trait]
 impl Render for RenderJSONL {

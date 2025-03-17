@@ -1,5 +1,5 @@
 use crate::pagelist_entry::PageListEntry;
-use crate::platform::*;
+use crate::platform::{ContentType, MyResponse, Platform};
 use crate::render::Render;
 use crate::render_params::RenderParams;
 use anyhow::Result;
@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use chrono::prelude::*;
 
 /// Renders wiki text
-pub struct RenderWiki {}
+#[derive(Debug, Clone, Copy)]
+pub struct RenderWiki;
 
 #[async_trait]
 impl Render for RenderWiki {
@@ -100,7 +101,7 @@ impl Render for RenderWiki {
                 }
             }
         } else {
-            self.render_wikilink(entry, params)
+            Self::render_wikilink(entry, params)
         }
     }
 
@@ -132,7 +133,7 @@ impl RenderWiki {
         Box::new(Self {})
     }
 
-    fn render_wikilink(&self, entry: &PageListEntry, params: &RenderParams) -> String {
+    fn render_wikilink(entry: &PageListEntry, params: &RenderParams) -> String {
         if params.is_wikidata() {
             match &entry.get_wikidata_label() {
                 Some(label) => format!("[[{}|{}]]", &entry.title().pretty(), label),

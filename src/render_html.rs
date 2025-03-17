@@ -1,6 +1,6 @@
 use crate::form_parameters::FormParameters;
 use crate::pagelist_entry::PageListEntry;
-use crate::platform::*;
+use crate::platform::{ContentType, MyResponse, Platform};
 use crate::render::{Render, AUTOLIST_COMMONS, AUTOLIST_WIKIDATA};
 use crate::render_params::RenderParams;
 use anyhow::Result;
@@ -12,7 +12,8 @@ use wikimisc::mediawiki::title::Title;
 static MAX_HTML_RESULTS: usize = 10000;
 
 /// Renders HTML
-pub struct RenderHTML {}
+#[derive(Clone, Copy)]
+pub struct RenderHTML;
 
 #[async_trait]
 impl Render for RenderHTML {

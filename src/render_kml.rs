@@ -1,13 +1,14 @@
 use crate::form_parameters::FormParameters;
 use crate::pagelist_entry::PageListEntry;
-use crate::platform::*;
+use crate::platform::{ContentType, MyResponse, Platform};
 use crate::render::Render;
 use crate::render_params::RenderParams;
 use anyhow::Result;
 use async_trait::async_trait;
 
 /// Renders KML
-pub struct RenderKML {}
+#[derive(Clone, Copy, Debug)]
+pub struct RenderKML;
 
 #[async_trait]
 impl Render for RenderKML {
@@ -39,17 +40,17 @@ impl Render for RenderKML {
                     title.pretty().to_string()
                 };
                 kml += r#"<Placemark>"#;
-                kml += format!("<name>{}</name>", self.escape_xml(&label)).as_str();
+                kml += format!("<name>{}</name>", Self::escape_xml(&label)).as_str();
                 if let Some(desc) = entry.get_wikidata_description() {
                     kml +=
-                        format!("<description>{}</description>", self.escape_xml(&desc)).as_str();
+                        format!("<description>{}</description>", Self::escape_xml(&desc)).as_str();
                 }
 
                 kml += "<ExtendedData>";
                 if let Some(q) = entry.get_wikidata_item() {
                     kml += format!(
                         "<Data name=\"q\"><value>{}</value></Data>",
-                        self.escape_xml(&q)
+                        Self::escape_xml(&q)
                     )
                     .as_str();
                 }
@@ -58,22 +59,22 @@ impl Render for RenderKML {
                     Some(ft) => ft,
                     None => format!("{:?}", title),
                 };
-                let url = format!("{}/wiki/{}", &server, &self.escape_attribute(&full_title));
+                let url = format!("{}/wiki/{}", &server, &Self::escape_attribute(&full_title));
                 kml += format!(
                     "<Data name=\"url\"><value>{}</value></Data>",
-                    self.escape_xml(&url)
+                    Self::escape_xml(&url)
                 )
                 .as_str();
 
                 if let Some(img) = entry.get_page_image() {
-                    let file = self.escape_attribute(&img);
+                    let file = Self::escape_attribute(&img);
                     let src = format!(
                         "{}/wiki/Special:Redirect/file/{}?width={}",
                         &server, &file, 120
                     );
                     kml += format!(
                         "<Data name=\"image\"><value>{}</value></Data>",
-                        self.escape_xml(&src)
+                        Self::escape_xml(&src)
                     )
                     .as_str();
                 }
@@ -129,7 +130,7 @@ impl RenderKML {
         Box::new(Self {})
     }
 
-    fn escape_xml(&self, s: &str) -> String {
+    fn escape_xml(s: &str) -> String {
         s.replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('"', "&quot;")
@@ -137,7 +138,7 @@ impl RenderKML {
             .replace('&', "&amp;")
     }
 
-    fn escape_attribute(&self, s: &str) -> String {
+    fn escape_attribute(s: &str) -> String {
         FormParameters::percent_encode(s)
             .replace('<', "&lt;")
             .replace('>', "&gt;")
@@ -152,16 +153,14 @@ mod tests {
 
     #[test]
     fn test_escape_xml() {
-        let r = RenderKML::new();
         assert_eq!(
-            r.escape_xml("<>&\"'"),
+            RenderKML::escape_xml("<>&\"'"),
             "&amp;lt;&amp;gt;&amp;&amp;quot;&amp;apos;"
         );
     }
 
     #[test]
     fn test_escape_attribute() {
-        let r = RenderKML::new();
-        assert_eq!(r.escape_attribute("<>&\"'"), "%3C%3E%26%22%27");
+        assert_eq!(RenderKML::escape_attribute("<>&\"'"), "%3C%3E%26%22%27");
     }
 }

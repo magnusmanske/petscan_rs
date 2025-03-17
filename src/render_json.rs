@@ -1,13 +1,14 @@
-use crate::pagelist_entry::PageListEntry;
-use crate::platform::*;
+use crate::platform::{ContentType, MyResponse};
 use crate::render::Render;
 use crate::render_params::RenderParams;
+use crate::{pagelist_entry::PageListEntry, platform::Platform};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
 /// Renders JSON
-pub struct RenderJSON {}
+#[derive(Clone, Copy, Debug)]
+pub struct RenderJSON;
 
 #[async_trait]
 impl Render for RenderJSON {
@@ -18,10 +19,11 @@ impl Render for RenderJSON {
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse> {
         let mut params = RenderParams::new(platform, wiki).await?;
-        let mut content_type = ContentType::JSON;
-        if params.json_pretty() {
-            content_type = ContentType::Plain;
-        }
+        let content_type = if params.json_pretty() {
+            ContentType::Plain
+        } else {
+            ContentType::JSON
+        };
 
         let value = self.generate_json(platform, &mut params, entries).await?;
 
@@ -120,13 +122,13 @@ impl RenderJSON {
         }
 
         let value: Value = match params.json_output_compatability() {
-            "quick-intersection" => self.quick_intersection(platform, entries, params, &header),
+            "quick-intersection" => Self::quick_intersection(platform, entries, params, &header),
             _ => self.cat_scan(platform, entries, params, &header), // Default
         };
         Ok(value)
     }
 
-    fn get_query_string(&self, platform: &Platform) -> String {
+    fn get_query_string(platform: &Platform) -> String {
         "https://petscan.wmflabs.org/?".to_string() + &platform.form_parameters().to_string()
     }
 
@@ -159,7 +161,7 @@ impl RenderJSON {
                     o["q"] = json!(q);
                     o["metadata"]["wikidata"] = json!(q);
                 }
-                self.add_metadata(&mut o, entry, header);
+                Self::add_metadata(&mut o, entry, header);
                 if params.file_data() {
                     if o["metadata"].get("fileusage").is_some() { o["gil"] = o["metadata"]["fileusage"].to_owned() }
                     self.file_data_keys().iter().for_each(|k|{
@@ -173,11 +175,10 @@ impl RenderJSON {
             Some(duration) => (duration.as_millis() as f32) / (1000_f32),
             None => 0.0,
         };
-        json!({"n":"result","a":{"query":self.get_query_string(platform),"querytime_sec":seconds},"*":[{"n":"combination","a":{"type":platform.get_param_default("combination","subset"),"*":entry_data}}]})
+        json!({"n":"result","a":{"query":Self::get_query_string(platform),"querytime_sec":seconds},"*":[{"n":"combination","a":{"type":platform.get_param_default("combination","subset"),"*":entry_data}}]})
     }
 
     fn quick_intersection(
-        &self,
         platform: &Platform,
         entries: Vec<PageListEntry>,
         params: &RenderParams,
@@ -189,19 +190,19 @@ impl RenderJSON {
             "status":"OK",
             "start":0,
             "max":entries.len()+1,
-            "query":self.get_query_string(platform),
+            "query":Self::get_query_string(platform),
             "pagecount":entries.len(),
             "pages":[]
         });
         if let Some(duration) = platform.query_time() {
-            ret["querytime"] = json!((duration.as_millis() as f32) / 1000_f32)
+            ret["querytime"] = json!((duration.as_millis() as f32) / 1000_f32);
         }
 
         // Namespaces
         if let Some(namespaces) = params.api().get_site_info()["query"]["namespaces"].as_object() {
             for (k, v) in namespaces {
                 if let Some(ns_local_name) = v["*"].as_str() {
-                    ret["namespaces"][k] = json!(ns_local_name)
+                    ret["namespaces"][k] = json!(ns_local_name);
                 }
             }
         }
@@ -225,11 +226,11 @@ impl RenderJSON {
                         //"meta" : {}
                     });
                     if params.giu() || params.file_usage() {
-                        if let Some(fu) = self.get_file_usage(entry) {
-                            o["giu"] = fu
+                        if let Some(fu) = Self::get_file_usage(entry) {
+                            o["giu"] = fu;
                         }
                     }
-                    self.add_metadata(&mut o, entry, header);
+                    Self::add_metadata(&mut o, entry, header);
                     if let Some(q) = entry.get_wikidata_item() {
                         o["q"] = json!(q);
                         o["metadata"]["wikidata"] = json!(q);
@@ -242,7 +243,7 @@ impl RenderJSON {
         ret
     }
 
-    fn get_file_info_value(&self, entry: &PageListEntry, key: &str) -> Option<Value> {
+    fn get_file_info_value(entry: &PageListEntry, key: &str) -> Option<Value> {
         match &entry.get_file_info() {
             Some(fi) => match key {
                 "img_size" => fi.img_size.as_ref().map(|s| json!(s)),
@@ -263,7 +264,7 @@ impl RenderJSON {
         }
     }
 
-    fn get_file_usage(&self, entry: &PageListEntry) -> Option<Value> {
+    fn get_file_usage(entry: &PageListEntry) -> Option<Value> {
         match &entry.get_file_info() {
             Some(fi) => match fi.file_usage.is_empty() {
                 true => None,
@@ -284,7 +285,7 @@ impl RenderJSON {
         }
     }
 
-    fn get_file_usage_as_string(&self, entry: &PageListEntry) -> Option<Value> {
+    fn get_file_usage_as_string(entry: &PageListEntry) -> Option<Value> {
         match &entry.get_file_info() {
             Some(fi) => match fi.file_usage.is_empty() {
                 true => None,
@@ -307,7 +308,7 @@ impl RenderJSON {
         }
     }
 
-    fn add_metadata(&self, o: &mut Value, entry: &PageListEntry, header: &[(String, String)]) {
+    fn add_metadata(o: &mut Value, entry: &PageListEntry, header: &[(String, String)]) {
         header.iter().for_each(|(head, _)| {
             let value = match head.to_string().as_str() {
                 "checkbox" | "number" | "page_id" | "title" | "namespace" | "size"
@@ -323,11 +324,11 @@ impl RenderJSON {
                     .get_coordinates()
                     .as_ref()
                     .map(|coord| json!(format!("{}/{}", coord.lat, coord.lon))),
-                "fileusage" => self.get_file_usage_as_string(entry),
-                other => self.get_file_info_value(entry, other),
+                "fileusage" => Self::get_file_usage_as_string(entry),
+                other => Self::get_file_info_value(entry, other),
             };
             if let Some(v) = value {
-                o["metadata"][head] = v
+                o["metadata"][head] = v;
             }
         });
     }

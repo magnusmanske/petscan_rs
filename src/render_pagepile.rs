@@ -1,13 +1,14 @@
-use crate::pagelist_entry::PageListEntry;
-use crate::platform::*;
+use crate::platform::{ContentType, MyResponse};
 use crate::render::Render;
 use crate::render_params::RenderParams;
+use crate::{pagelist_entry::PageListEntry, platform::Platform};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use std::collections::HashMap;
 
-/// Renders PagePile
-pub struct RenderPagePile {}
+/// Renders `PagePile`
+#[derive(Clone, Copy, Debug)]
+pub struct RenderPagePile;
 
 #[async_trait]
 impl Render for RenderPagePile {
@@ -51,11 +52,11 @@ impl Render for RenderPagePile {
                 ))
             }
         };
-        let url = format!(
+        let url_get_data = format!(
             "https://tools.wmflabs.org/pagepile/api.php?action=get_data&id={}",
             pagepile_id
         );
-        let html = format!("<html><head><meta http-equiv=\"refresh\" content=\"0; url={}\" /></head><BODY><H1>Redirect</H1>The document can be found <A HREF='{}'>here</A>.</BODY></html>",&url,&url) ;
+        let html = format!("<html><head><meta http-equiv=\"refresh\" content=\"0; url={}\" /></head><BODY><H1>Redirect</H1>The document can be found <A HREF='{}'>here</A>.</BODY></html>",&url_get_data,&url_get_data) ;
         Ok(MyResponse {
             s: html,
             content_type: ContentType::HTML,
