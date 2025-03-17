@@ -284,7 +284,7 @@ impl PageList {
         Ok(rows)
     }
 
-    /// Runs batched queries for process_batch_results and annotate_batch_results
+    /// Runs batched queries for `process_batch_results` and `annotate_batch_results`
     pub async fn run_batch_queries(
         &self,
         state: &AppState,
@@ -301,7 +301,7 @@ impl PageList {
         }
     }
 
-    /// Runs batched queries for process_batch_results and annotate_batch_results
+    /// Runs batched queries for `process_batch_results` and `annotate_batch_results`
     /// Uses serial processing (not Mutex)
     async fn run_batch_queries_serial(
         &self,
@@ -318,7 +318,7 @@ impl PageList {
         Ok(rows)
     }
 
-    /// Runs batched queries for process_batch_results and annotate_batch_results
+    /// Runs batched queries for `process_batch_results` and `annotate_batch_results`
     /// Uses Mutex.
     async fn run_batch_queries_mutex(
         &self,
@@ -647,7 +647,7 @@ WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_n
                     None => false,
                 },
                 false => re.is_match(entry.title().pretty()),
-            })
+            });
         }
     }
 

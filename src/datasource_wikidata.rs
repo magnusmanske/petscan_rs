@@ -1,13 +1,13 @@
 use crate::datasource::DataSource;
-use crate::pagelist::*;
+use crate::pagelist::PageList;
 use crate::platform::Platform;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct SourceWikidata {}
+#[derive(Debug, Clone, PartialEq, Default, Copy)]
+pub struct SourceWikidata;
 
 #[async_trait]
 impl DataSource for SourceWikidata {
@@ -20,17 +20,13 @@ impl DataSource for SourceWikidata {
     }
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList> {
-        let sql = self.generate_sql_query(platform)?;
+        let sql = Self::generate_sql_query(platform)?;
         self.run_sql_query(&sql, platform).await
     }
 }
 
 impl SourceWikidata {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    fn generate_sql_query(&self, platform: &Platform) -> Result<String> {
+    fn generate_sql_query(platform: &Platform) -> Result<String> {
         let no_statements = platform.has_param("wpiu_no_statements");
         let sites = platform
             .get_param("wikidata_source_sites")

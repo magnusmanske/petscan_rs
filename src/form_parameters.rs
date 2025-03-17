@@ -4,7 +4,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
-use url::*;
+use url::Url;
 
 #[derive(Debug, Clone, Default)]
 pub struct FormParameters {

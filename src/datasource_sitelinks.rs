@@ -1,5 +1,5 @@
 use crate::datasource::{DataSource, SQLtuple};
-use crate::pagelist::*;
+use crate::pagelist::PageList;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
 use anyhow::{anyhow, Result};
@@ -34,11 +34,11 @@ impl DataSource for SourceSitelinks {
         rows.iter()
             .map(|row| (String::from_utf8_lossy(&row.0), row.1))
             .map(|(page, sitelinks)| {
-                let mut ret = PageListEntry::new(Title::new(&page, 0));
+                let mut tmp = PageListEntry::new(Title::new(&page, 0));
                 if self.use_min_max {
-                    ret.set_sitelink_count(Some(sitelinks));
+                    tmp.set_sitelink_count(Some(sitelinks));
                 }
-                ret
+                tmp
             })
             .for_each(|entry| ret.add_entry(entry));
         Ok(ret)
@@ -121,10 +121,10 @@ impl SourceSitelinks {
 
         let mut having: Vec<String> = vec![];
         if let Ok(s) = sitelinks_min.parse::<usize>() {
-            having.push(format!("sitelink_count>={}", s))
+            having.push(format!("sitelink_count>={}", s));
         }
         if let Ok(s) = sitelinks_max.parse::<usize>() {
-            having.push(format!("sitelink_count<={}", s))
+            having.push(format!("sitelink_count<={}", s));
         }
 
         if self.use_min_max {
