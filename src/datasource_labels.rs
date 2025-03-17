@@ -1,13 +1,13 @@
 use crate::datasource::DataSource;
-use crate::pagelist::*;
+use crate::pagelist::PageList;
 use crate::platform::Platform;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct SourceLabels {}
+#[derive(Debug, Clone, PartialEq, Default, Copy)]
+pub struct SourceLabels;
 
 #[async_trait]
 impl DataSource for SourceLabels {
@@ -39,11 +39,5 @@ impl DataSource for SourceLabels {
             .filter_map(|item| Platform::entry_from_entity(&item))
             .for_each(|entry| ret.add_entry(entry));
         Ok(ret)
-    }
-}
-
-impl SourceLabels {
-    pub fn new() -> Self {
-        Self {}
     }
 }

@@ -218,11 +218,11 @@ impl Platform {
 
         let mut s_db = SourceDatabase::new(SourceDatabaseParameters::db_params(self).await);
         let mut s_sparql = SourceSparql::new();
-        let mut s_manual = SourceManual::new();
-        let mut s_pagepile = SourcePagePile::new();
-        let mut s_search = SourceSearch::new();
+        let mut s_manual = SourceManual::default();
+        let mut s_pagepile = SourcePagePile::default();
+        let mut s_search = SourceSearch::default();
         let mut s_wikidata = SourceWikidata::new();
-        let mut s_labels = SourceLabels::new();
+        let mut s_labels = SourceLabels::default();
         let mut s_sitelinks = SourceSitelinks::new();
 
         let mut futures = vec![];

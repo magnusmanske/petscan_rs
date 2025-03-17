@@ -1,5 +1,5 @@
 use crate::datasource::DataSource;
-use crate::pagelist::*;
+use crate::pagelist::PageList;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
 use anyhow::{anyhow, Result};
@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use rayon::prelude::*;
 use wikimisc::mediawiki::api::Api;
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct SourceSearch {}
+#[derive(Debug, Clone, PartialEq, Default, Copy)]
+pub struct SourceSearch;
 
 #[async_trait]
 impl DataSource for SourceSearch {
@@ -78,11 +78,5 @@ impl DataSource for SourceSearch {
             platform.warn("<span tt=\'warn_search\'></span>".to_string())?;
         }
         Ok(ret)
-    }
-}
-
-impl SourceSearch {
-    pub fn new() -> Self {
-        Self {}
     }
 }
