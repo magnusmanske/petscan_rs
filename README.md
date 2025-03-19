@@ -1,3 +1,5 @@
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/65e4e917be864e4889450346470ddb3b)](https://app.codacy.com/gh/magnusmanske/petscan_rs/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
+
 # PetScan
 
 PetScan is a powerful querying tool for Wikimedia. A query is prepared in the PetScan submission form.
