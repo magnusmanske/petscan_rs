@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
+use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
-use crate::platform::{ContentType, MyResponse, Platform};
+use crate::platform::{MyResponse, Platform};
 use anyhow::Result;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Bytes};

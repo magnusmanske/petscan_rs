@@ -1,6 +1,7 @@
+use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
 use crate::pagelist_entry::PageListEntry;
-use crate::platform::{ContentType, MyResponse, Platform};
+use crate::platform::{MyResponse, Platform};
 use crate::render::{Render, AUTOLIST_COMMONS, AUTOLIST_WIKIDATA};
 use crate::render_params::RenderParams;
 use anyhow::Result;
@@ -146,7 +147,7 @@ impl Render for RenderHTML {
     }
 
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
-        self.render_wikilink(
+        Self::render_wikilink(
             entry.title(),
             params.wiki(),
             &entry.get_wikidata_label(),
@@ -158,7 +159,7 @@ impl Render for RenderHTML {
     }
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         match entry.get_wikidata_item() {
-            Some(q) => self.render_wikilink(
+            Some(q) => Self::render_wikilink(
                 &Title::new(&q, 0),
                 "wikidatawiki",
                 &None,
@@ -172,7 +173,7 @@ impl Render for RenderHTML {
     }
     fn render_user_name(&self, user: &str, params: &RenderParams) -> String {
         let title = Title::new(user, 2);
-        self.render_wikilink(&title, params.wiki(), &None, params, false, &None, false)
+        Self::render_wikilink(&title, params.wiki(), &None, params, false, &None, false)
     }
     fn render_cell_image(&self, image: &Option<String>, params: &RenderParams) -> String {
         match image {
@@ -218,7 +219,7 @@ impl Render for RenderHTML {
                     let html = "<div class='fileusage'>".to_string()
                         + &fu.wiki().to_owned()
                         + ":"
-                        + &self.render_wikilink(
+                        + &Self::render_wikilink(
                             fu.title(),
                             fu.wiki(),
                             &None,
@@ -320,9 +321,8 @@ impl RenderHTML {
             .replace('\'', "&#39;")
     }
 
-    /* trunk-ignore(clippy/too_many_arguments) */
+    #[allow(clippy::too_many_arguments)]
     fn render_wikilink(
-        &self,
         title: &Title,
         wiki: &str,
         alt_label: &Option<String>,

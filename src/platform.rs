@@ -1,4 +1,6 @@
 use crate::app_state::AppState;
+use crate::combination::{Combination, CombinationSequential};
+use crate::content_type::ContentType;
 use crate::datasource::{DataSource, SQLtuple};
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::datasource_labels::SourceLabels;
@@ -32,7 +34,6 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
@@ -43,64 +44,10 @@ use wikimisc::mediawiki::title::Title;
 
 pub static PAGE_BATCH_SIZE: usize = 15000;
 
-#[derive(Debug, Clone, PartialEq, Copy)]
-pub enum ContentType {
-    HTML,
-    Plain,
-    JSON,
-    JSONP,
-    CSV,
-    TSV,
-    KML,
-}
-
-impl ContentType {
-    pub const fn as_str(&self) -> &str {
-        match self {
-            Self::HTML => "text/html; charset=utf-8",
-            Self::Plain => "text/plain; charset=utf-8",
-            Self::JSON => " application/json",
-            Self::JSONP => "application/javascript",
-            Self::CSV => "text/csv; charset=utf-8",
-            Self::TSV => "text/tab-separated-values; charset=utf-8",
-            Self::KML => "application/vnd.google-earth.kml+xml",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct MyResponse {
     pub s: String,
     pub content_type: ContentType,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Combination {
-    None,
-    Source(String),
-    Intersection((Box<Combination>, Box<Combination>)),
-    Union((Box<Combination>, Box<Combination>)),
-    Not((Box<Combination>, Box<Combination>)),
-}
-
-impl fmt::Display for Combination {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Combination::None => write!(f, "nothing"),
-            Combination::Source(s) => write!(f, "{}", s),
-            Combination::Intersection((a, b)) => write!(f, "({} AND {})", a, b),
-            Combination::Union((a, b)) => write!(f, "({} OR {})", a, b),
-            Combination::Not((a, b)) => write!(f, "({} NOT {})", a, b),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum CombinationSequential {
-    Source(String),
-    Intersection,
-    Union,
-    Not,
 }
 
 #[derive(Debug)]
@@ -211,6 +158,7 @@ impl Platform {
     }
 
     #[instrument(skip_all, err(level = tracing::Level::INFO))]
+    #[allow(clippy::default_constructed_unit_structs)]
     pub async fn run(&mut self) -> Result<()> {
         Platform::profile("begin run", None);
         let start_time = SystemTime::now();
@@ -991,23 +939,15 @@ impl Platform {
         // Rows to entries
         rows.lock().await.iter().for_each(|row| {
             let full_page_title = match row.get(0) {
-                /* trunk-ignore(clippy/collapsible_match) */
-                Some(title) => match title {
-                    Bytes(uv) => match String::from_utf8(uv) {
-                        Ok(s) => s,
-                        Err(_) => return,
-                    },
-                    _ => return,
+                Some(Bytes(uv)) => match String::from_utf8(uv) {
+                    Ok(s) => s,
+                    Err(_) => return,
                 },
-                None => return,
+                _ => return,
             };
             let ips_item_id = match row.get(1) {
-                /* trunk-ignore(clippy/collapsible_match) */
-                Some(title) => match title {
-                    my::Value::Int(i) => i,
-                    _ => return,
-                },
-                None => return,
+                Some(my::Value::Int(i)) => i,
+                _ => return,
             };
             let title = Title::new_from_full(&full_page_title, &api);
             let tmp_entry = PageListEntry::new(title);
@@ -1048,7 +988,7 @@ impl Platform {
         */
     }
 
-    /// Filters on whether a page has a Wikidata item, depending on the "wikidata_item"
+    /// Filters on whether a page has a Wikidata item, depending on the `wikidata_item`
     async fn process_by_wikidata_item(&self, result: &PageList) -> Result<()> {
         if result.is_wikidata() {
             return Ok(());
@@ -1537,12 +1477,7 @@ impl Platform {
             None => return Err(anyhow!("Platform::get_response: No wiki in result")),
         };
 
-        let mut sortby = self.get_param_blank("sortby");
-        let mut sort_order = self.get_param_blank("sortorder") == "descending";
-        if self.do_output_redlinks() && (sortby.is_empty() || sortby == "none") {
-            sortby = "redlinks".to_string();
-            sort_order = true;
-        }
+        let (sortby, sort_order) = self.get_sorting_parameters();
         let mut pages =
             result.drain_into_sorted_vec(PageListSort::new_from_params(&sortby, sort_order));
         self.apply_results_limit(&mut pages);
@@ -1558,6 +1493,17 @@ impl Platform {
             "plain" => RenderPlainText::new().response(self, &wiki, pages).await,
             _ => RenderHTML::new().response(self, &wiki, pages).await,
         }
+    }
+
+    fn get_sorting_parameters(&self) -> (String, bool) {
+        let mut sortby = self.get_param_blank("sortby");
+        let sort_order = if self.do_output_redlinks() && (sortby.is_empty() || sortby == "none") {
+            sortby = "redlinks".to_string();
+            true
+        } else {
+            self.get_param_blank("sortorder") == "descending"
+        };
+        (sortby, sort_order)
     }
 
     pub fn get_param_as_vec(&self, param: &str, separator: &str) -> Vec<String> {

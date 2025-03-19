@@ -409,6 +409,7 @@ impl WDfist {
         add_item_file
     }
 
+    #[allow(clippy::unused_self)]
     fn follow_commons_cats(&mut self) -> Result<()> {
         // TODO
         Ok(())

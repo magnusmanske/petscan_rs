@@ -1,12 +1,12 @@
+use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
-use crate::platform::{ContentType, MyResponse};
+use crate::platform::MyResponse;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
 use mysql_async as my;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use mysql_async::Value as MyValue;
-use rand::rng;
 use rand::seq::SliceRandom;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -91,7 +91,8 @@ impl AppState {
                     pool.push((user.to_string(), pass.to_string()));
                 }
             }
-            pool.shuffle(&mut rng());
+            let mut rng = rand::rng();
+            pool.shuffle(&mut rng);
         }
         if ret.db_pool.lock().await.is_empty() {
             panic!("No database access config available");

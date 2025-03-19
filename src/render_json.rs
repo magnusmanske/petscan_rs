@@ -1,4 +1,5 @@
-use crate::platform::{ContentType, MyResponse};
+use crate::content_type::ContentType;
+use crate::platform::MyResponse;
 use crate::render::Render;
 use crate::render_params::RenderParams;
 use crate::{pagelist_entry::PageListEntry, platform::Platform};

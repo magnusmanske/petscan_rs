@@ -7,28 +7,25 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "*"
+anyhow = "1"
 regex = "1"
 lazy_static = "1"
-chrono = "*"
-config = "*"
-serde_json = "*"
-url = "*"
-rayon = "*"
-htmlescape = "*"
-rand = "*"
-mysql_async = { version = "*", features = ["tracing"] }
-reqwest = { version = "*", features = ["json"] }
-time = "^0.3"
-percent-encoding = "*"
-async-trait = "*"
+chrono = "0.4"
+serde_json = "1"
+url = "2"
+rayon = "1"
+htmlescape = "0.3"
+rand = "0.9"
+mysql_async = { version = "0.35", features = ["tracing"] }
+reqwest = { version = "0.12", features = ["json"] }
+percent-encoding = "2"
+async-trait = "0.1"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc" }
 tokio = { version = "^1", features = ["macros", "fs", "sync"] }
-tokio-util = "*"
 hyper = { version = "^1", features = ["full"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
-futures = "*"
+futures = "0.3"
 tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
 tracing = "0.1.40"
 

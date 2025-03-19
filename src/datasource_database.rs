@@ -349,10 +349,10 @@ impl SourceDatabase {
             let mut categories_new = HashSet::new();
             for result in results {
                 for category in result? {
-                    let title = SourceDatabaseParameters::s2u_ucfirst(&category, is_cs);
-                    if !categories_done.contains(&title) {
+                    let title2 = SourceDatabaseParameters::s2u_ucfirst(&category, is_cs);
+                    if !categories_done.contains(&title2) {
                         categories_new.insert(category);
-                        categories_done.insert(title);
+                        categories_done.insert(title2);
                     }
                 }
             }
@@ -888,7 +888,7 @@ impl SourceDatabase {
         Ok(ret)
     }
 
-    /* trunk-ignore(clippy/too_many_arguments) */
+    #[allow(clippy::too_many_arguments)]
     async fn get_pages_for_primary_new_connection(
         &self,
         state: &AppState,
@@ -920,7 +920,7 @@ impl SourceDatabase {
         ret
     }
 
-    /* trunk-ignore(clippy/too_many_arguments) */
+    #[allow(clippy::too_many_arguments)]
     async fn get_pages_for_primary(
         &self,
         conn: &mut my::Conn,
