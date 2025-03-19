@@ -32,6 +32,6 @@ tracing = "0.1.40"
 [profile.release]
 lto = "fat"
 codegen-units = 1
-#target-cpu = "native"
+target-cpu = "native"
 panic = "abort"
-#strip = "debuginfo"
+strip = "debuginfo"
