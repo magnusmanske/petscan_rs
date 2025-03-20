@@ -328,7 +328,6 @@ impl PageList {
     ) -> Result<Vec<my::Row>> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
 
-        // TODO parallel
         let mut futures = vec![];
         for sql in batches {
             futures.push(self.run_batch_query(state, sql, &wiki));
