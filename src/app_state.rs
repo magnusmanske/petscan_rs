@@ -104,6 +104,12 @@ impl AppState {
         self.config["use_file_table"].as_bool().unwrap_or(false)
     }
 
+    pub fn using_new_categorylinks_table(&self) -> bool {
+        self.config["use_new_categorylinks_table"]
+            .as_bool()
+            .unwrap_or(false)
+    }
+
     pub fn get_restart_code(&self) -> Option<&str> {
         self.config["restart-code"].as_str()
     }

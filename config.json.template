@@ -7,6 +7,8 @@
 "http_port":3000,
 "timeout":60000,
 "restart-code":"",
+"use_file_table": false,
+"use_new_categorylinks_table": false,
 "mysql":[
 	["user_id","password"],...
 ]
