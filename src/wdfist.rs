@@ -207,7 +207,12 @@ impl WDfist {
             let mut sql = Platform::prep_quote(chunk);
             sql.0 = format!("SELECT DISTINCT gil_page_title AS page,gil_to AS image FROM page,globalimagelinks WHERE gil_wiki='{}' AND gil_page_title IN ({})",wiki,&sql.0) ;
             sql.0 += " AND gil_page_namespace_id=0 AND page_namespace=6 and page_title=gil_to AND page_is_redirect=0" ;
-            sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks where page_id=cl_from and cl_to='Crop_for_Wikidata')" ; // To-be-cropped
+            if self.state.using_new_categorylinks_table() {
+				sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND page_id=cl_from AND lt_title='Crop_for_Wikidata')" ; // To-be-cropped
+			} else {
+            	sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks where page_id=cl_from and cl_to='Crop_for_Wikidata')" ;
+			} // To-be-cropped
+
             batches.push(sql);
         });
         let rows = PageList::new_from_wiki("commonswiki")

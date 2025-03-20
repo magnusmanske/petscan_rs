@@ -298,7 +298,12 @@ impl SourceDatabase {
         wiki: &str,
         categories: &[String],
     ) -> Result<Vec<String>> {
-        let mut sql : SQLtuple = ("SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN (".to_string(),vec![]);
+        let sql = if state.using_new_categorylinks_table() {
+            "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_title IN ("
+        } else {
+            "SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN ("
+        };
+        let mut sql: SQLtuple = (sql.to_string(), vec![]);
         Platform::append_sql(&mut sql, Platform::prep_quote(categories));
         sql.0 += ")";
         let result = state
@@ -529,16 +534,26 @@ impl SourceDatabase {
         state: &AppState,
         ret: &PageList,
     ) -> Result<()> {
+        let subquery = if state.using_new_categorylinks_table() {
+            "SELECT categorylinks.*,lt_title AS cl_to from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_title"
+        } else {
+            "SELECT * from categorylinks WHERE cl_to"
+        };
         let mut sql = Platform::sql_tuple();
         match self.params.combine.as_str() {
             "subset" => {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
                 sql.0 += &params.link_count_sql;
-                sql.0 += " FROM ( SELECT * from categorylinks WHERE cl_to IN (";
+                sql.0 += &format!(" FROM ( {subquery} IN (");
                 Platform::append_sql(&mut sql, Platform::prep_quote(&category_batch[0]));
                 sql.0 += ")) cl0";
                 for (a, item) in category_batch.iter().enumerate().skip(1) {
-                    sql.0 += format!(" INNER JOIN categorylinks cl{} ON cl0.cl_from=cl{}.cl_from and cl{}.cl_to IN (",a,a,a).as_str();
+                    if state.using_new_categorylinks_table() {
+                        sql.0 += &format!(" INNER JOIN categorylinks cl{a} ON cl0.cl_from=cl{a}.cl_from
+                       INNER JOIN linktarget lt{a} ON lt{a}.lt_id=cl{a}.cl_target_id AND lt{a}.lt_title IN (");
+                    } else {
+                        sql.0 += &format!(" INNER JOIN categorylinks cl{a} ON cl0.cl_from=cl{a}.cl_from and cl{a}.cl_to IN (");
+                    }
                     Platform::append_sql(&mut sql, Platform::prep_quote(item));
                     sql.0 += ")";
                 }
@@ -556,7 +571,7 @@ impl SourceDatabase {
                     .collect::<Vec<String>>();
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
                 sql.0 += &params.link_count_sql;
-                sql.0 += " FROM ( SELECT * FROM categorylinks WHERE cl_to IN (";
+                sql.0 += &format!(" FROM ( {subquery} IN (");
                 Platform::append_sql(&mut sql, Platform::prep_quote(&tmp));
                 sql.0 += ")) cl0";
             }
@@ -812,6 +827,7 @@ impl SourceDatabase {
         let mut pl2 = PageList::new_from_wiki(&wiki.clone());
         let api = state.get_api_for_wiki(wiki.clone()).await?;
         self.get_pages_for_primary(
+            state,
             &mut conn,
             &params.primary.to_string(),
             sql,
@@ -875,6 +891,7 @@ impl SourceDatabase {
         let mut ret = PageList::new_from_wiki(&params.wiki);
         let mut conn = state.get_wiki_db_connection(&params.wiki).await?;
         self.get_pages_for_primary(
+            state,
             &mut conn,
             &params.primary.to_string(),
             sql,
@@ -907,6 +924,7 @@ impl SourceDatabase {
         );
         let ret = self
             .get_pages_for_primary(
+                state,
                 &mut conn,
                 primary,
                 sql,
@@ -923,6 +941,7 @@ impl SourceDatabase {
     #[allow(clippy::too_many_arguments)]
     async fn get_pages_for_primary(
         &self,
+        state: &AppState,
         conn: &mut my::Conn,
         primary: &String,
         mut sql: SQLtuple,
@@ -934,7 +953,7 @@ impl SourceDatabase {
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
 
         self.get_pages_for_primary_namespaces(primary, &mut sql);
-        self.get_pages_for_primary_negative_categories(&mut sql);
+        self.get_pages_for_primary_negative_categories(state, &mut sql);
         self.get_pages_for_primary_templates_as_secondary(&mut sql);
         self.get_pages_for_primary_negative_templates(&mut sql);
         self.get_pages_for_primary_links_from(&mut sql, &api);
@@ -1211,17 +1230,31 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_negative_categories(&self, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_negative_categories(
+        &self,
+        state: &AppState,
+        sql: &mut (String, Vec<MyValue>),
+    ) {
         let negative_categories_use_not_exists = false;
         if !self.cat_neg.is_empty() {
             let mut cats: Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
             cats.sort_unstable();
             cats.dedup();
             if negative_categories_use_not_exists {
-                sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks WHERE cl_from=p.page_id AND cl_to";
+                if state.using_new_categorylinks_table() {
+                    sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=p.page_id AND lt_title";
+                } else {
+                    sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks WHERE cl_from=p.page_id AND cl_to";
+                }
             } else {
-                sql.0 +=
+                #[allow(clippy::collapsible_else_if)]
+                if state.using_new_categorylinks_table() {
+                    sql.0 +=
+                " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_title";
+                } else {
+                    sql.0 +=
                     " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
+                }
             }
             Self::sql_in(&cats, sql);
             sql.0 += ")";
