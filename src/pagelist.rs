@@ -16,6 +16,12 @@ use wikimisc::mediawiki::title::Title;
 
 // Lots of unwrap() in here but it's OK, it's for PoisonError which should die immediately
 
+#[derive(Debug, Clone, Copy)]
+pub enum DatabaseCluster {
+    Default,
+    X3,
+}
+
 #[derive(Debug)]
 pub struct PageList {
     wiki: RwLock<Option<String>>,
@@ -269,6 +275,7 @@ impl PageList {
         state: &AppState,
         sql: SQLtuple,
         wiki: &str,
+        _cluster: DatabaseCluster,
     ) -> Result<Vec<my::Row>> {
         let mut conn = state
             .get_wiki_db_connection(wiki)
@@ -290,14 +297,27 @@ impl PageList {
         state: &AppState,
         batches: Vec<SQLtuple>,
     ) -> Result<Vec<my::Row>> {
+        self.run_batch_queries_with_cluster(state, batches, DatabaseCluster::Default)
+            .await
+    }
+
+    /// Runs batched queries for `process_batch_results` and `annotate_batch_results`
+    pub async fn run_batch_queries_with_cluster(
+        &self,
+        state: &AppState,
+        batches: Vec<SQLtuple>,
+        cluster: DatabaseCluster,
+    ) -> Result<Vec<my::Row>> {
         let wiki = self
             .wiki()
             .ok_or_else(|| anyhow!("PageList::run_batch_queries: No wiki"))?;
 
         if true {
-            self.run_batch_queries_mutex(state, batches, wiki).await
+            self.run_batch_queries_mutex(state, batches, wiki, cluster)
+                .await
         } else {
-            self.run_batch_queries_serial(state, batches, wiki).await
+            self.run_batch_queries_serial(state, batches, wiki, cluster)
+                .await
         }
     }
 
@@ -308,11 +328,14 @@ impl PageList {
         state: &AppState,
         batches: Vec<SQLtuple>,
         wiki: String,
+        cluster: DatabaseCluster,
     ) -> Result<Vec<my::Row>> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
         let mut rows: Vec<my::Row> = vec![];
         for sql in batches {
-            let mut data = self.run_batch_query(state, sql, &wiki).await?;
+            let mut data = self
+                .run_batch_query(state, sql, &wiki, cluster.to_owned())
+                .await?;
             rows.append(&mut data);
         }
         Ok(rows)
@@ -325,12 +348,13 @@ impl PageList {
         state: &AppState,
         batches: Vec<SQLtuple>,
         wiki: String,
+        cluster: DatabaseCluster,
     ) -> Result<Vec<my::Row>> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
 
         let mut futures = vec![];
         for sql in batches {
-            futures.push(self.run_batch_query(state, sql, &wiki));
+            futures.push(self.run_batch_query(state, sql, &wiki, cluster.to_owned()));
         }
         let results = join_all(futures).await;
         let mut ret = vec![];
@@ -457,44 +481,52 @@ impl PageList {
         platform: &Platform,
     ) -> Result<()> {
         let batches: Vec<SQLtuple> = self
-            .to_sql_batches_namespace(PAGE_BATCH_SIZE,namespace_id)
+            .to_sql_batches_namespace(PAGE_BATCH_SIZE, namespace_id)
             .iter_mut()
             .filter_map(|sql_batch| {
                 // entity_type and namespace_id are "database safe"
                 let prefix = match entity_type {
                     "item" => "Q",
                     "property" => "P",
-                    _ => return None
+                    _ => return None,
                 };
                 let table = match entity_type {
                     "item" => "wbt_item_terms",
                     "property" => "wbt_property_terms",
-                    _ => return None
-                } ;
+                    _ => return None,
+                };
                 let field_name = match entity_type {
                     "item" => "wbit_item_id",
                     "property" => "wbpt_property_id",
-                    _ => return None
-                } ;
+                    _ => return None,
+                };
                 let term_in_lang_id = match entity_type {
                     "item" => "wbit_term_in_lang_id",
                     "property" => "wbpt_term_in_lang_id",
-                    _ => return None
-                } ;
-                let item_ids = sql_batch.1.iter().map(|s|{
-                    match s {
+                    _ => return None,
+                };
+                let item_ids = sql_batch
+                    .1
+                    .iter()
+                    .map(|s| match s {
                         MyValue::Bytes(s) => String::from_utf8_lossy(s)[1..].to_string(),
-                        _ => String::new()
-                    }
-                }).collect::<Vec<String>>().join(",");
+                        _ => String::new(),
+                    })
+                    .collect::<Vec<String>>()
+                    .join(",");
                 sql_batch.1 = vec![MyValue::Bytes(wikidata_language.to_owned().into())];
-                sql_batch.0 = format!("SELECT concat('{}',{}) AS term_full_entity_id,{} AS dummy_namespace,wbx_text as term_text,wby_name as term_type
-FROM {}
-INNER JOIN wbt_term_in_lang ON {} = wbtl_id
-INNER JOIN wbt_type ON wbtl_type_id = wby_id
-INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id
-INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language=?
-WHERE {} IN ({})",prefix,&field_name,namespace_id,table,term_in_lang_id,&field_name,item_ids);
+                sql_batch.0 = format!(
+                    "SELECT concat('{prefix}',{field_name}) AS term_full_entity_id,
+                	{namespace_id} AS dummy_namespace,
+	                 wbx_text as term_text,
+	                 wby_name as term_type
+					 FROM {table}
+					 INNER JOIN wbt_term_in_lang ON {term_in_lang_id} = wbtl_id
+					 INNER JOIN wbt_type ON wbtl_type_id = wby_id
+					 INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id
+					 INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language=?
+					 WHERE {field_name} IN ({item_ids})"
+                );
                 Some(sql_batch.to_owned())
             })
             .collect::<Vec<SQLtuple>>();
