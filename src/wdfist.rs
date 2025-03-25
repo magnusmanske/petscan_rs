@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
-use crate::pagelist::PageList;
+use crate::pagelist::{DatabaseCluster, PageList};
 use crate::platform::{Platform, PAGE_BATCH_SIZE};
 use anyhow::{anyhow, Result};
 use mysql_async as my;
@@ -331,7 +331,9 @@ impl WDfist {
     async fn follow_search_commons(&mut self) -> Result<()> {
         let batches = self.follow_search_commons_prepare_batches();
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
+        let rows = pagelist
+            .run_batch_queries_with_cluster(&self.state, batches, DatabaseCluster::X3)
+            .await?;
         let item2label = Self::follow_search_commons_get_item2label(rows);
 
         // Get search results

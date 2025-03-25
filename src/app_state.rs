@@ -243,6 +243,12 @@ impl AppState {
         Ok(conn)
     }
 
+    /// Connects to the X3 cluster TBD
+    pub async fn get_x3_db_connection(&self) -> Result<my::Conn> {
+        // TODO FIXME use the actual X3 cluster
+        self.get_wiki_db_connection("wikidatawiki").await
+    }
+
     pub fn render_error(&self, error: String, form_parameters: &FormParameters) -> MyResponse {
         match form_parameters.params.get("format").map(|s| s.as_str()) {
             Some("") | Some("html") => {

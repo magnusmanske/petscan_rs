@@ -275,12 +275,13 @@ impl PageList {
         state: &AppState,
         sql: SQLtuple,
         wiki: &str,
-        _cluster: DatabaseCluster,
+        cluster: DatabaseCluster,
     ) -> Result<Vec<my::Row>> {
-        let mut conn = state
-            .get_wiki_db_connection(wiki)
-            .await
-            .map_err(|e| anyhow!(e))?;
+        let mut conn = match cluster {
+            DatabaseCluster::Default => state.get_wiki_db_connection(wiki).await,
+            DatabaseCluster::X3 => state.get_x3_db_connection().await,
+        }
+        .map_err(|e| anyhow!(e))?;
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await? // TODO fix to_owned?
