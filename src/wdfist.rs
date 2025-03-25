@@ -352,6 +352,7 @@ impl WDfist {
 
     fn follow_search_commons_prepare_batches(&mut self) -> Vec<(String, Vec<MyValue>)> {
         // Prepare batches
+        // TODO uses X2 cluster, but fix wbt_type
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = Platform::full_entity_id_to_number(chunk);

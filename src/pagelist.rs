@@ -481,6 +481,7 @@ impl PageList {
         wikidata_language: &str,
         platform: &Platform,
     ) -> Result<()> {
+        // TODO: Using X3 cluster, but need to fix wbt_type
         let batches: Vec<SQLtuple> = self
             .to_sql_batches_namespace(PAGE_BATCH_SIZE, namespace_id)
             .iter_mut()
@@ -546,7 +547,7 @@ impl PageList {
         };
         let col_title = 0;
         let col_ns = 1;
-        self.run_batch_queries(&platform.state(), batches)
+        self.run_batch_queries_with_cluster(&platform.state(), batches, DatabaseCluster::X3)
             .await?
             .iter()
             .filter_map(|row| {
