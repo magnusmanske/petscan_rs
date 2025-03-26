@@ -11,7 +11,7 @@ use crate::datasource_sitelinks::SourceSitelinks;
 use crate::datasource_sparql::SourceSparql;
 use crate::datasource_wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
-use crate::pagelist::PageList;
+use crate::pagelist::{DatabaseCluster, PageList};
 use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, PageListSort, TriState};
 use crate::render::Render;
 use crate::render_html::RenderHTML;
@@ -415,12 +415,16 @@ impl Platform {
             return Ok(());
         }
 
+        // wbt_ done
         let batches: Vec<SQLtuple> = result
             .to_sql_batches(PAGE_BATCH_SIZE)
             .par_iter_mut()
             .map(|sql_batch| {
                 // Text for any label or alias used in an item
-                sql_batch.0 = "SELECT wbx_text FROM wbt_text WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id = wby_id AND wby_name IN ('label','alias') AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id) AND wbx_text IN (".to_string() ;
+                sql_batch.0 = "SELECT wbx_text
+                	FROM wbt_text
+                 	WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id IN (1,3) AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id)
+                  AND wbx_text IN (".to_string() ;
                 // One of these
                 sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len()) ;
                 sql_batch.0 += ")";
@@ -440,7 +444,7 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         let state = self.state();
-        let mut conn = state.get_wiki_db_connection("wikidatawiki").await?;
+        let mut conn = state.get_x3_db_connection().await?;
 
         for sql in batches {
             let rows = conn
@@ -1059,6 +1063,7 @@ impl Platform {
     //________________________________________________________________________________________________
 
     fn get_label_sql_helper_new(&self, ret: &mut SQLtuple, part1: &str) {
+        // wbt_ done
         let mut wbt_type: Vec<String> = vec![];
         if self.has_param(&("cb_labels_".to_owned() + part1 + "_l")) {
             wbt_type.push("1".to_string());
@@ -1085,6 +1090,7 @@ impl Platform {
         languages: &[String],
         s: &str,
     ) {
+        // wbt_ done
         let has_pattern = !s.is_empty() && s != "%";
         let has_languages = !languages.is_empty();
         ret.0 += "SELECT * FROM wbt_term_in_lang,wbt_item_terms t2";
@@ -1115,6 +1121,7 @@ impl Platform {
     }
 
     fn get_label_sql_new(&self, namespace_id: &NamespaceID) -> Option<SQLtuple> {
+        // wbt_ done
         lazy_static! {
             static ref RE1: Regex =
                 Regex::new(r#"[^a-z,]"#).expect("Platform::get_label_sql Regex is invalid");
@@ -1167,6 +1174,7 @@ impl Platform {
 
     /// Using new `wbt_item_terms`
     async fn process_labels_new(&self, result: &PageList) -> Result<()> {
+        // wbt_ done
         if self.get_label_sql_new(&0).is_none() {
             return Ok(());
         }
@@ -1204,7 +1212,7 @@ impl Platform {
             Platform::entry_from_entity(&term_full_entity_id)
         };
         result
-            .run_batch_queries(&self.state(), batches)
+            .run_batch_queries_with_cluster(&self.state(), batches, DatabaseCluster::X3)
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
@@ -1576,13 +1584,13 @@ impl Platform {
     fn get_label_sql_helper(&self, ret: &mut SQLtuple, part1: &str, part2: &str) {
         let mut types: Vec<String> = vec![];
         if self.has_param(&("cb_labels_".to_owned() + part1 + "_l")) {
-            types.push("label".to_string());
+            types.push("1".to_string());
         }
         if self.has_param(&("cb_labels_".to_owned() + part1 + "_a")) {
-            types.push("alias".to_string());
+            types.push("3".to_string());
         }
         if self.has_param(&("cb_labels_".to_owned() + part1 + "_d")) {
-            types.push("description".to_string());
+            types.push("2".to_string());
         }
         if !types.is_empty() {
             let mut tmp = Self::prep_quote(&types);
@@ -1592,6 +1600,7 @@ impl Platform {
     }
 
     pub fn get_label_sql(&self) -> SQLtuple {
+        // wbt_ done
         lazy_static! {
             static ref RE1: Regex =
                 Regex::new(r#"[^a-z,]"#).expect("Platform::get_label_sql Regex is invalid");
@@ -1609,9 +1618,8 @@ impl Platform {
         let langs_no = self.get_param_as_vec("langs_labels_no", ",");
 
         ret.0 = "SELECT DISTINCT concat('Q',wbit_item_id) AS term_full_entity_id
-            FROM wbt_text,wbt_item_terms wbt_item_terms1,wbt_type,wbt_term_in_lang,wbt_text_in_lang
+            FROM wbt_text,wbt_item_terms wbt_item_terms1,wbt_term_in_lang,wbt_text_in_lang
             WHERE wbit_term_in_lang_id = wbtl_id
-            AND wbtl_type_id = wby_id
             AND wbtl_text_in_lang_id = wbxl_id
             AND wbxl_text_id = wbx_id"
             .to_string();
@@ -1625,7 +1633,7 @@ impl Platform {
                 let mut tmp = Self::prep_quote(&langs_yes);
                 ret.0 += &(" AND wbxl_language IN (".to_owned() + &tmp.0 + ")");
                 ret.1.append(&mut tmp.1);
-                self.get_label_sql_helper(&mut ret, "yes", "wby_name");
+                self.get_label_sql_helper(&mut ret, "yes", "wbtl_type_id");
             }
         });
 
@@ -1646,7 +1654,7 @@ impl Platform {
                     let mut tmp = Self::prep_quote(&langs_any);
                     ret.0 += &(" AND wbxl_language IN (".to_owned() + &tmp.0 + ")");
                     ret.1.append(&mut tmp.1);
-                    self.get_label_sql_helper(&mut ret, "any", "wby_name");
+                    self.get_label_sql_helper(&mut ret, "any", "wbtl_type_id");
                 }
                 ret.0 += ")";
             });
@@ -1658,15 +1666,13 @@ impl Platform {
                 SELECT * FROM
                 wbt_text wbt_text2,
                 wbt_item_terms wbt_item_terms2,
-                wbt_type wbt_type2,
                 wbt_term_in_lang wbt_term_in_lang2,
                 wbt_text_in_lang wbt_text_in_lang2
                 WHERE wbt_item_terms2.wbit_term_in_lang_id = wbt_term_in_lang2.wbtl_id
-                AND wbt_term_in_lang2.wbtl_type_id = wbt_type2.wby_id
                 AND wbt_term_in_lang2.wbtl_text_in_lang_id = wbt_text_in_lang2.wbxl_id
                 AND wbt_text_in_lang2.wbxl_text_id = wbt_text2.wbx_id
-                AND wbt_item_terms1.wbit_item_id=wbt_item_terms2.wbit_item_id
-                AND wbt_type2.wby_name='item'";
+                AND wbt_item_terms1.wbit_item_id=wbt_item_terms2.wbit_item_id";
+            // AND wbt_type2.wby_name='item'"; // TODO FIXME? this was always broken?
             if s != "%" {
                 ret.0 += " AND wbt_text2.wbx_text LIKE ?";
                 ret.1.push(MyValue::Bytes(s.to_owned().into()));
@@ -1675,7 +1681,7 @@ impl Platform {
                 let mut tmp = Self::prep_quote(&langs_no);
                 ret.0 += &(" AND wbt_type2.wbxl_language IN (".to_owned() + &tmp.0 + ")");
                 ret.1.append(&mut tmp.1);
-                self.get_label_sql_helper(&mut ret, "no", "wbt_type2.wby_name");
+                self.get_label_sql_helper(&mut ret, "no", "wbt_term_in_lang2.wbtl_type_id");
             }
             ret.0 += ")";
         });

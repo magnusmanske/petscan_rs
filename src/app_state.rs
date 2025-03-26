@@ -1,5 +1,6 @@
 use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
+use crate::pagelist::DatabaseCluster;
 use crate::platform::MyResponse;
 use anyhow::{anyhow, Result};
 use chrono::prelude::*;
@@ -114,8 +115,14 @@ impl AppState {
         self.config["restart-code"].as_str()
     }
 
-    fn get_mysql_opts_for_wiki(&self, wiki: &str, user: &str, pass: &str) -> Result<my::Opts> {
-        let (host, schema) = self.db_host_and_schema_for_wiki(wiki)?;
+    fn get_mysql_opts_for_wiki(
+        &self,
+        wiki: &str,
+        user: &str,
+        pass: &str,
+        cluster: DatabaseCluster,
+    ) -> Result<my::Opts> {
+        let (host, schema) = self.db_host_and_schema_for_wiki(wiki, cluster)?;
         let port: u16 = self.port_mapping.get(wiki).map_or_else(
             || self.config["db_port"].as_u64().unwrap_or(3306) as u16,
             |port| *port,
@@ -167,7 +174,11 @@ impl AppState {
     /// Returns the server and database name for the wiki, as a tuple
     /// # Panics
     /// Panics if the host key is missing from the config file
-    pub fn db_host_and_schema_for_wiki(&self, wiki: &str) -> Result<(String, String)> {
+    pub fn db_host_and_schema_for_wiki(
+        &self,
+        wiki: &str,
+        cluster: DatabaseCluster,
+    ) -> Result<(String, String)> {
         // TESTING
         /*
         ssh magnus@login.toolforge.org -L 3307:dewiki.web.db.svc.eqiad.wmflabs:3306 -N &
@@ -175,10 +186,17 @@ impl AppState {
         ssh magnus@login.toolforge.org -L 3305:commonswiki.web.db.svc.eqiad.wmflabs:3306 -N &
         ssh magnus@login.toolforge.org -L 3310:enwiki.web.db.svc.eqiad.wmflabs:3306 -N &
          */
+
         let wiki = self.fix_wiki_name(wiki);
         let host = match self.config["host"].as_str() {
             Some("127.0.0.1") => "127.0.0.1".to_string(),
-            Some(_host) => wiki.to_owned() + self.get_db_server_group(),
+            Some(_host) => {
+                if cluster == DatabaseCluster::X3 {
+                    "wikidatawiki".to_string() + self.get_db_server_group() // TODO FIXME use the actual X3 cluster
+                } else {
+                    wiki.to_owned() + self.get_db_server_group()
+                }
+            }
             None => panic!("No host in config file"),
         };
         let schema = format!("{}_p", wiki);
@@ -190,7 +208,9 @@ impl AppState {
     /// Panics if the host or schema key is missing from the config file
     pub fn db_host_and_schema_for_tool_db(&self) -> (String, String) {
         // TESTING
-        // ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
+        /*
+        ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
+        */
         let host = self.config["host"]
             .as_str()
             .expect("No host key in config file")
@@ -212,13 +232,18 @@ impl AppState {
 
     #[instrument(skip(self), err)]
     pub async fn get_wiki_db_connection(&self, wiki: &str) -> Result<my::Conn> {
+        let (wiki, cluster) = match wiki {
+            "x3" => ("wikidatawiki", DatabaseCluster::X3),
+            other => (other, DatabaseCluster::Default),
+        };
+
         let mut pool = self.db_pool.lock().await;
         if pool.is_empty() {
             panic!("pool is empty");
         }
         pool.rotate_left(1);
         let last = pool.len() - 1;
-        let opts = self.get_mysql_opts_for_wiki(wiki, &pool[last].0, &pool[last].1)?;
+        let opts = self.get_mysql_opts_for_wiki(wiki, &pool[last].0, &pool[last].1, cluster)?;
         trace!(user = opts.user());
         let mut conn;
         loop {
@@ -245,8 +270,7 @@ impl AppState {
 
     /// Connects to the X3 cluster TBD
     pub async fn get_x3_db_connection(&self) -> Result<my::Conn> {
-        // TODO FIXME use the actual X3 cluster
-        self.get_wiki_db_connection("wikidatawiki").await
+        self.get_wiki_db_connection("x3").await
     }
 
     pub fn render_error(&self, error: String, form_parameters: &FormParameters) -> MyResponse {
@@ -530,12 +554,15 @@ mod tests {
         let state = get_state().await;
         assert_eq!(
             "enwiki_p".to_string(),
-            state.db_host_and_schema_for_wiki("enwiki").unwrap().1
+            state
+                .db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default)
+                .unwrap()
+                .1
         );
         assert_eq!(
             "be_x_oldwiki_p".to_string(),
             state
-                .db_host_and_schema_for_wiki("be-taraskwiki")
+                .db_host_and_schema_for_wiki("be-taraskwiki", DatabaseCluster::Default)
                 .unwrap()
                 .1
         );

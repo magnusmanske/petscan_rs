@@ -16,7 +16,7 @@ use wikimisc::mediawiki::title::Title;
 
 // Lots of unwrap() in here but it's OK, it's for PoisonError which should die immediately
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DatabaseCluster {
     Default,
     X3,
@@ -481,7 +481,7 @@ impl PageList {
         wikidata_language: &str,
         platform: &Platform,
     ) -> Result<()> {
-        // TODO: Using X3 cluster, but need to fix wbt_type
+        // wbt_ done
         let batches: Vec<SQLtuple> = self
             .to_sql_batches_namespace(PAGE_BATCH_SIZE, namespace_id)
             .iter_mut()
@@ -521,7 +521,10 @@ impl PageList {
                     "SELECT concat('{prefix}',{field_name}) AS term_full_entity_id,
                 	{namespace_id} AS dummy_namespace,
 	                 wbx_text as term_text,
-	                 wby_name as term_type
+					 (case when wbtl_type_id = 1 then 'label'
+             			when wbtl_type_id = 2 then 'description'
+                		when wbtl_type_id = 3 then 'alias'
+                		end) AS term_type
 					 FROM {table}
 					 INNER JOIN wbt_term_in_lang ON {term_in_lang_id} = wbtl_id
 					 INNER JOIN wbt_type ON wbtl_type_id = wby_id
