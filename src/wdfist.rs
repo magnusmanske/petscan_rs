@@ -986,7 +986,7 @@ mod tests {
             .item2files
             .get("Q66711783")
             .unwrap()
-            .contains_key(&"Walter_Archer_and_family.jpg".to_string()));
+            .contains_key(&"Walter_Rueth_Grab_art_1.jpg".to_string()));
     }
 
     #[tokio::test]

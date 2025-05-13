@@ -220,7 +220,7 @@ impl PageListEntry {
             .map(|coordinates| coordinates.to_owned())
     }
 
-    pub fn set_coordinates(&mut self, coordinates_option: Option<wikimisc::lat_lon::LatLon>) {
+    pub const fn set_coordinates(&mut self, coordinates_option: Option<wikimisc::lat_lon::LatLon>) {
         self.coordinates = coordinates_option;
     }
 
@@ -485,7 +485,7 @@ impl PageListEntry {
         self.sitelink_count
     }
 
-    pub fn set_sitelink_count(&mut self, sitelink_count: Option<LinkCount>) {
+    pub const fn set_sitelink_count(&mut self, sitelink_count: Option<LinkCount>) {
         self.sitelink_count = sitelink_count;
     }
 
@@ -493,7 +493,7 @@ impl PageListEntry {
         self.redlink_count
     }
 
-    pub fn set_redlink_count(&mut self, redlink_count: Option<LinkCount>) {
+    pub const fn set_redlink_count(&mut self, redlink_count: Option<LinkCount>) {
         self.redlink_count = redlink_count;
     }
 
@@ -501,7 +501,7 @@ impl PageListEntry {
         self.page_bytes
     }
 
-    pub fn set_page_bytes(&mut self, page_bytes: Option<u32>) {
+    pub const fn set_page_bytes(&mut self, page_bytes: Option<u32>) {
         self.page_bytes = page_bytes;
     }
 
@@ -509,7 +509,7 @@ impl PageListEntry {
         &self.disambiguation
     }
 
-    pub fn set_disambiguation(&mut self, disambiguation: TriState) {
+    pub const fn set_disambiguation(&mut self, disambiguation: TriState) {
         self.disambiguation = disambiguation;
     }
 
@@ -517,7 +517,7 @@ impl PageListEntry {
         self.link_count
     }
 
-    pub fn set_link_count(&mut self, link_count: Option<LinkCount>) {
+    pub const fn set_link_count(&mut self, link_count: Option<LinkCount>) {
         self.link_count = link_count;
     }
 
@@ -525,7 +525,7 @@ impl PageListEntry {
         self.incoming_links
     }
 
-    pub fn set_incoming_links(&mut self, incoming_links: Option<LinkCount>) {
+    pub const fn set_incoming_links(&mut self, incoming_links: Option<LinkCount>) {
         self.incoming_links = incoming_links;
     }
 
@@ -533,7 +533,7 @@ impl PageListEntry {
         self.page_id
     }
 
-    pub fn set_page_id(&mut self, page_id: Option<u32>) {
+    pub const fn set_page_id(&mut self, page_id: Option<u32>) {
         self.page_id = page_id;
     }
 }

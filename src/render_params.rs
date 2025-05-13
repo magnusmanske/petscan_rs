@@ -82,7 +82,7 @@ impl RenderParams {
         self.do_output_redlinks
     }
 
-    pub fn row_number_mut(&mut self) -> &mut usize {
+    pub const fn row_number_mut(&mut self) -> &mut usize {
         &mut self.row_number
     }
 
@@ -98,7 +98,7 @@ impl RenderParams {
         self.is_wikidata
     }
 
-    pub fn use_autolist_mut(&mut self) -> &mut bool {
+    pub const fn use_autolist_mut(&mut self) -> &mut bool {
         &mut self.use_autolist
     }
 
@@ -106,7 +106,7 @@ impl RenderParams {
         self.use_autolist
     }
 
-    pub fn autolist_creator_mode_mut(&mut self) -> &mut bool {
+    pub const fn autolist_creator_mode_mut(&mut self) -> &mut bool {
         &mut self.autolist_creator_mode
     }
 
@@ -150,7 +150,7 @@ impl RenderParams {
         self.json_sparse = json_sparse;
     }
 
-    pub fn set_file_usage(&mut self, file_usage: bool) {
+    pub const fn set_file_usage(&mut self, file_usage: bool) {
         self.file_usage = file_usage;
     }
 
