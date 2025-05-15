@@ -352,7 +352,6 @@ impl PageList {
         cluster: DatabaseCluster,
     ) -> Result<Vec<my::Row>> {
         // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
-
         let mut futures = vec![];
         for sql in batches {
             futures.push(self.run_batch_query(state, sql, &wiki, cluster.to_owned()));

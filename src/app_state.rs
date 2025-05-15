@@ -18,6 +18,8 @@ use tracing::{instrument, trace};
 use wikimisc::mediawiki::api::Api;
 use wikimisc::site_matrix::SiteMatrix;
 
+const TERMSTORE_SERVER: &str = "termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud";
+
 pub type DbUserPass = (String, String);
 
 #[derive(Debug, Clone, Default)]
@@ -137,6 +139,23 @@ impl AppState {
         Ok(opts)
     }
 
+    fn get_mysql_opts_for_term_store(&self, user: &str, pass: &str) -> Result<my::Opts> {
+        let (host, schema) =
+            self.db_host_and_schema_for_wiki("wikidatawiki", DatabaseCluster::X3)?;
+        let port: u16 = self.port_mapping.get("x3").map_or_else(
+            || self.config["db_port"].as_u64().unwrap_or(3306) as u16,
+            |port| *port,
+        );
+        let opts = my::OptsBuilder::default()
+            .ip_or_hostname(host)
+            .db_name(Some(schema))
+            .user(Some(user))
+            .pass(Some(pass))
+            .tcp_port(port)
+            .into();
+        Ok(opts)
+    }
+
     pub fn get_main_page(&self, interface_language: String) -> String {
         let direction = if self.site_matrix.is_language_rtl(&interface_language) {
             "rtl"
@@ -192,7 +211,7 @@ impl AppState {
             Some("127.0.0.1") => "127.0.0.1".to_string(),
             Some(_host) => {
                 if cluster == DatabaseCluster::X3 {
-                    "wikidatawiki".to_string() + self.get_db_server_group() // TODO FIXME use the actual X3 cluster
+                    TERMSTORE_SERVER.to_string()
                 } else {
                     wiki.to_owned() + self.get_db_server_group()
                 }
@@ -243,7 +262,13 @@ impl AppState {
         }
         pool.rotate_left(1);
         let last = pool.len() - 1;
-        let opts = self.get_mysql_opts_for_wiki(wiki, &pool[last].0, &pool[last].1, cluster)?;
+        let opts = match &cluster {
+            DatabaseCluster::X3 => {
+                self.get_mysql_opts_for_term_store(&pool[last].0, &pool[last].1)?
+            }
+            _ => self.get_mysql_opts_for_wiki(wiki, &pool[last].0, &pool[last].1, cluster)?,
+        };
+
         trace!(user = opts.user());
         let mut conn;
         loop {

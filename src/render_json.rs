@@ -256,8 +256,8 @@ impl RenderJSON {
                 "img_user_text" => fi.img_user_text.as_ref().map(|s| json!(s)),
                 "img_timestamp" => fi.img_timestamp.as_ref().map(|s| json!(s)),
                 "img_sha1" => fi.img_sha1.as_ref().map(|s| json!(s)),
-                other => {
-                    println!("KEY NOT FOUND:{}", &other);
+                _other => {
+                    // println!("KEY NOT FOUND:{}", &other);
                     None
                 }
             },
