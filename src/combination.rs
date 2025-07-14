@@ -13,10 +13,10 @@ impl fmt::Display for Combination {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Combination::None => write!(f, "nothing"),
-            Combination::Source(s) => write!(f, "{}", s),
-            Combination::Intersection((a, b)) => write!(f, "({} AND {})", a, b),
-            Combination::Union((a, b)) => write!(f, "({} OR {})", a, b),
-            Combination::Not((a, b)) => write!(f, "({} NOT {})", a, b),
+            Combination::Source(s) => write!(f, "{s}"),
+            Combination::Intersection((a, b)) => write!(f, "({a} AND {b})"),
+            Combination::Union((a, b)) => write!(f, "({a} OR {b})"),
+            Combination::Not((a, b)) => write!(f, "({a} NOT {b})"),
         }
     }
 }

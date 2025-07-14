@@ -41,7 +41,7 @@ impl DataSource for SourceSearch {
         };
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let srlimit = if max > 500 { 500 } else { max };
-        let srlimit = format!("{}", srlimit);
+        let srlimit = srlimit.to_string();
         let namespace_ids = platform
             .form_parameters()
             .ns

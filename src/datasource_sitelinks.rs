@@ -121,10 +121,10 @@ impl SourceSitelinks {
 
         let mut having: Vec<String> = vec![];
         if let Ok(s) = sitelinks_min.parse::<usize>() {
-            having.push(format!("sitelink_count>={}", s));
+            having.push(format!("sitelink_count>={s}"));
         }
         if let Ok(s) = sitelinks_max.parse::<usize>() {
-            having.push(format!("sitelink_count<={}", s));
+            having.push(format!("sitelink_count<={s}"));
         }
 
         if self.use_min_max {

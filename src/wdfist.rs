@@ -123,7 +123,7 @@ impl WDfist {
                 if wiki == "wikidatawiki" {
                     return;
                 }
-                let q = format!("Q{}", item_id);
+                let q = format!("Q{item_id}");
                 let page = page.replace(' ', "_");
                 if !wiki2title_q.contains_key(&wiki) {
                     wiki2title_q.insert(wiki.to_owned(), vec![]);
@@ -477,7 +477,7 @@ impl WDfist {
     async fn seed_ignore_files_from_ignore_database(&mut self) -> Result<()> {
         let mut conn = self.get_db_conn().await?;
 
-        let sql = format!("SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={}",MIN_IGNORE_DB_FILE_COUNT);
+        let sql = format!("SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={MIN_IGNORE_DB_FILE_COUNT}");
 
         let rows = conn
             .exec_iter(sql.as_str(), ())
@@ -800,11 +800,8 @@ impl WDfist {
                 api.params_into(&[
                     ("action", "query"),
                     ("list", "geosearch"),
-                    ("gscoord", format!("{}|{}", lat, lon).as_str()),
-                    (
-                        "gsradius",
-                        format!("{}", NEARBY_FILES_RADIUS_IN_METERS).as_str(),
-                    ),
+                    ("gscoord", format!("{lat}|{lon}").as_str()),
+                    ("gsradius", &NEARBY_FILES_RADIUS_IN_METERS.to_string()),
                     ("gslimit", "50"),
                     ("gsnamespace", "6"),
                 ])

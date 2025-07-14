@@ -20,7 +20,7 @@ impl fmt::Display for FormParameters {
             .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
             .collect::<Vec<String>>()
             .join("&");
-        write!(f, "{}", ret)
+        write!(f, "{ret}")
     }
 }
 
@@ -166,7 +166,7 @@ impl FormParameters {
                     if num == "*" {
                         self.set_param("ns[0]", "1");
                     } else if let Ok(ns_num) = num.parse::<usize>() {
-                        self.set_param(format!("ns[{}]", ns_num).as_str(), "1");
+                        self.set_param(format!("ns[{ns_num}]").as_str(), "1");
                     }
                 }
             }

@@ -67,7 +67,7 @@ impl SourceWikidata {
         conn.disconnect().await.map_err(|e| anyhow!(e))?;
         let ret = PageList::new_from_wiki("wikidatawiki");
         for ips_item_id in rows {
-            let term_full_entity_id = format!("Q{}", ips_item_id);
+            let term_full_entity_id = format!("Q{ips_item_id}");
             if let Some(entry) = Platform::entry_from_entity(&term_full_entity_id) {
                 ret.add_entry(entry);
             }

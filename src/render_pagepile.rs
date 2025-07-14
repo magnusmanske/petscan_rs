@@ -53,10 +53,8 @@ impl Render for RenderPagePile {
                 ))
             }
         };
-        let url_get_data = format!(
-            "https://tools.wmflabs.org/pagepile/api.php?action=get_data&id={}",
-            pagepile_id
-        );
+        let url_get_data =
+            format!("https://tools.wmflabs.org/pagepile/api.php?action=get_data&id={pagepile_id}");
         let html = format!("<html><head><meta http-equiv=\"refresh\" content=\"0; url={}\" /></head><BODY><H1>Redirect</H1>The document can be found <A HREF='{}'>here</A>.</BODY></html>",&url_get_data,&url_get_data) ;
         Ok(MyResponse {
             s: html,

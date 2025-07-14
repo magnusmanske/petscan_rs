@@ -218,7 +218,7 @@ impl AppState {
             }
             None => panic!("No host in config file"),
         };
-        let schema = format!("{}_p", wiki);
+        let schema = format!("{wiki}_p");
         Ok((host, schema))
     }
 
@@ -274,7 +274,7 @@ impl AppState {
         loop {
             conn = match my::Conn::new(opts.to_owned())
                 .await
-                .map_err(|e| format!("{:?}", e))
+                .map_err(|e| format!("{e:?}"))
             {
                 Ok(conn2) => conn2,
                 Err(s) => {
@@ -392,7 +392,7 @@ impl AppState {
             Ok(psid) => psid,
             Err(e) => return Err(anyhow!(e)),
         };
-        let sql = format!("SELECT querystring FROM query WHERE id={}", psid);
+        let sql = format!("SELECT querystring FROM query WHERE id={psid}");
 
         let rows = conn
             .exec_iter(sql.as_str(), ())
