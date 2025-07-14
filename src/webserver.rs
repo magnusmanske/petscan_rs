@@ -76,7 +76,7 @@ impl WebServer {
         let ip_address =
             std::net::Ipv4Addr::new(ip_address[0], ip_address[1], ip_address[2], ip_address[3]);
         let addr = SocketAddr::from((ip_address, port));
-        println!("Listening on http://{}", addr);
+        println!("Listening on http://{addr}");
 
         // We create a TcpListener and bind it to IP:port
         TcpListener::bind(addr)
@@ -215,7 +215,7 @@ impl WebServer {
         {
             Ok(id) => id,
             Err(e) => {
-                println!("Could not log query start: {}\n{}", e, form_parameters);
+                println!("Could not log query start: {e}\n{form_parameters}");
                 0
             }
         };
@@ -228,10 +228,7 @@ impl WebServer {
         match self.app_state.log_query_end(started_query_id).await {
             Ok(_) => {}
             Err(e) => {
-                println!(
-                    "Could not log query {} end:{}\n{}",
-                    started_query_id, e, form_parameters
-                );
+                println!("Could not log query {started_query_id} end:{e}\n{form_parameters}");
             }
         }
         self.app_state.modify_threads_running(-1);
@@ -325,7 +322,7 @@ impl WebServer {
         filename: &str,
         content_type: &str,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
-        let filename = format!("html{}", filename);
+        let filename = format!("html{filename}");
         match std::fs::read(filename) {
             Ok(bytes) => {
                 let body = Full::from(bytes);

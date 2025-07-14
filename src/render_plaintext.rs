@@ -36,7 +36,7 @@ impl Render for RenderPlainText {
 
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
         match entry.get_wikidata_item() {
-            Some(q) => format!("[[:d:{}|]]", q),
+            Some(q) => format!("[[:d:{q}|]]"),
             None => String::new(),
         }
     }
@@ -47,7 +47,7 @@ impl Render for RenderPlainText {
 
     fn render_cell_image(&self, image: &Option<String>, _params: &RenderParams) -> String {
         match image {
-            Some(img) => format!("[[File:{}|120px|]]", img),
+            Some(img) => format!("[[File:{img}|120px|]]"),
             None => String::new(),
         }
     }

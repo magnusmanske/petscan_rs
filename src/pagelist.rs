@@ -692,10 +692,7 @@ impl PageList {
             ("list".to_string(), "search".to_string()),
             ("srnamespace".to_string(), "*".to_string()),
             ("srlimit".to_string(), "1".to_string()),
-            (
-                "srsearch".to_string(),
-                format!("pageid:{} {}", page_id, search),
-            ),
+            ("srsearch".to_string(), format!("pageid:{page_id} {search}")),
         ]
         .iter()
         .cloned()

@@ -85,8 +85,7 @@ impl Render for RenderHTML {
 
         for warning in platform.warnings()? {
             rows.push(format!(
-                "<div class='alert alert-warning' style='clear:both'>{}</div>",
-                warning
+                "<div class='alert alert-warning' style='clear:both'>{warning}</div>"
             ));
         }
 
@@ -115,14 +114,13 @@ impl Render for RenderHTML {
         new_rows.push("</tbody></table></div>".to_string());
 
         if entries_len > MAX_HTML_RESULTS {
-            new_rows.push( format!("<div class='alert alert-warning' style='clear:both'>Only the first {} results are shown in HTML, so as to not crash your browser; other formats will have complete results.</div>",MAX_HTML_RESULTS) );
+            new_rows.push( format!("<div class='alert alert-warning' style='clear:both'>Only the first {MAX_HTML_RESULTS} results are shown in HTML, so as to not crash your browser; other formats will have complete results.</div>") );
         }
 
         if let Some(duration) = platform.query_time() {
             let seconds = (duration.as_millis() as f32) / 1000_f32;
             new_rows.push(format!(
-                "<div style='font-size:8pt' id='query_length' sec='{}'></div>",
-                seconds
+                "<div style='font-size:8pt' id='query_length' sec='{seconds}'></div>"
             ));
         }
         new_rows.push("<script src='autolist.js'></script>".to_string());
@@ -136,7 +134,7 @@ impl Render for RenderHTML {
         );
         let mut html = html.replace("<!--output-->", &output);
         if let Some(psid) = platform.psid {
-            let psid_string = format!("<span name='psid' style='display:none'>{}</span>", psid);
+            let psid_string = format!("<span name='psid' style='display:none'>{psid}</span>");
             html = html.replace("<!--psid-->", &psid_string);
         };
 
@@ -193,7 +191,7 @@ impl Render for RenderHTML {
                     "{}/wiki/Special:Redirect/file/{}?width={}",
                     &server_url, &file, &thumnail_size
                 );
-                format!("<div class='card thumbcard'><a target='_blank' href='{}'><img class='card-img thumbcard-img' src='{}' loading='lazy' /></a></div>",url,src)
+                format!("<div class='card thumbcard'><a target='_blank' href='{url}'><img class='card-img thumbcard-img' src='{src}' loading='lazy' /></a></div>")
             }
             None => String::new(),
         }
@@ -337,11 +335,11 @@ impl RenderHTML {
         };
         let full_title = match title.full_with_underscores(params.api()) {
             Some(ft) => ft,
-            None => format!("{:?}", title),
+            None => format!("{title:?}"),
         };
         let full_title_pretty = match title.full_pretty(params.api()) {
             Some(ft) => ft,
-            None => format!("{:?}", title),
+            None => format!("{title:?}"),
         };
         let url = server + "/wiki/" + &Self::escape_attribute(&full_title);
         let label = match alt_label {

@@ -141,8 +141,7 @@ impl Platform {
                 return false;
             }
         };
-        let namespace_info =
-            api.get_site_info_value("namespaces", format!("{}", namespace_id).as_str());
+        let namespace_info = api.get_site_info_value("namespaces", &namespace_id.to_string());
         let ret = match namespace_info["case"].as_str() {
             Some(c) => c == "case-sensitive",
             None => false,
@@ -1023,43 +1022,6 @@ impl Platform {
         Ok(())
     }
 
-    async fn process_labels_old(&self, result: &PageList) -> Result<()> {
-        let mut sql = self.get_label_sql();
-        if sql.1.is_empty() {
-            return Ok(());
-        }
-        result.convert_to_wiki("wikidatawiki", self).await?;
-        if result.is_empty() {
-            return Ok(());
-        }
-        sql.0 += " AND term_full_entity_id IN (";
-
-        // Batches
-        let batches: Vec<SQLtuple> = result
-            .to_sql_batches(PAGE_BATCH_SIZE)
-            .par_iter_mut()
-            .map(|sql_batch| {
-                let question_marks = Platform::get_placeholders(sql.1.len());
-                sql_batch.0 = sql.0.to_owned() + &question_marks + ")";
-                sql_batch.1.splice(..0, sql.1.to_owned());
-                sql_batch.to_owned()
-            })
-            .collect::<Vec<SQLtuple>>();
-
-        result.clear_entries();
-        let the_f = |row: my::Row| {
-            let term_full_entity_id = my::from_row::<String>(row);
-            Platform::entry_from_entity(&term_full_entity_id)
-        };
-        result
-            .run_batch_queries(&self.state(), batches)
-            .await?
-            .iter()
-            .filter_map(|row| the_f(row.to_owned()))
-            .for_each(|entry| result.add_entry(entry));
-        Ok(())
-    }
-
     //________________________________________________________________________________________________
 
     fn get_label_sql_helper_new(&self, ret: &mut SQLtuple, part1: &str) {
@@ -1173,7 +1135,7 @@ impl Platform {
     }
 
     /// Using new `wbt_item_terms`
-    async fn process_labels_new(&self, result: &PageList) -> Result<()> {
+    async fn process_labels(&self, result: &PageList) -> Result<()> {
         // wbt_ done
         if self.get_label_sql_new(&0).is_none() {
             return Ok(());
@@ -1218,14 +1180,6 @@ impl Platform {
             .filter_map(|row| the_f(row.to_owned()))
             .for_each(|entry| result.add_entry(entry));
         Ok(())
-    }
-
-    async fn process_labels(&self, result: &PageList) -> Result<()> {
-        if false {
-            self.process_labels_old(result).await
-        } else {
-            self.process_labels_new(result).await
-        }
     }
 
     async fn process_sitelinks(&self, result: &PageList) -> Result<()> {
@@ -1282,10 +1236,10 @@ impl Platform {
 
         let mut having: Vec<String> = vec![];
         if let Ok(s) = sitelinks_min.parse::<usize>() {
-            having.push(format!("sitelink_count>={}", s));
+            having.push(format!("sitelink_count>={s}"));
         }
         if let Ok(s) = sitelinks_max.parse::<usize>() {
-            having.push(format!("sitelink_count<={}", s));
+            having.push(format!("sitelink_count<={s}"));
         }
 
         let mut sql_post = String::new();
