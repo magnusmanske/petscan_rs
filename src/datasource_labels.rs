@@ -21,10 +21,7 @@ impl DataSource for SourceLabels {
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList> {
         let sql = platform.get_label_sql();
-        let mut conn = platform
-            .state()
-            .get_wiki_db_connection("wikidatawiki")
-            .await?;
+        let mut conn = platform.state().get_wiki_db_connection("x3").await?;
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await

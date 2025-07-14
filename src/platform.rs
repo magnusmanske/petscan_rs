@@ -1600,7 +1600,6 @@ impl Platform {
     }
 
     pub fn get_label_sql(&self) -> SQLtuple {
-        // wbt_ done
         lazy_static! {
             static ref RE1: Regex =
                 Regex::new(r#"[^a-z,]"#).expect("Platform::get_label_sql Regex is invalid");
