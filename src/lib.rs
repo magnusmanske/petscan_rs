@@ -12,7 +12,7 @@
     clippy::float_cmp_const,
     clippy::float_equality_without_abs,
     keyword_idents,
-    // clippy::missing_const_for_fn,
+    clippy::missing_const_for_fn,
     missing_copy_implementations,
     missing_debug_implementations,
     // clippy::missing_errors_doc,

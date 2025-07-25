@@ -427,7 +427,7 @@ impl WDfist {
     }
 
     #[allow(clippy::unused_self)]
-    fn follow_commons_cats(&mut self) -> Result<()> {
+    const fn follow_commons_cats(&mut self) -> Result<()> {
         // TODO
         Ok(())
     }

@@ -146,7 +146,7 @@ impl RenderParams {
         self.giu
     }
 
-    pub fn set_json_sparse(&mut self, json_sparse: bool) {
+    pub const fn set_json_sparse(&mut self, json_sparse: bool) {
         self.json_sparse = json_sparse;
     }
 
