@@ -299,7 +299,7 @@ impl SourceDatabase {
         categories: &[String],
     ) -> Result<Vec<String>> {
         let sql = if state.using_new_categorylinks_table() {
-            "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_title IN ("
+            "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN ("
         } else {
             "SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN ("
         };
@@ -535,14 +535,16 @@ impl SourceDatabase {
         ret: &PageList,
     ) -> Result<()> {
         let subquery = if state.using_new_categorylinks_table() {
-            "SELECT categorylinks.*,lt_title AS cl_to from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_title"
+            "SELECT cl_from,cl_target_id,lt_title AS cl_to from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title"
         } else {
-            "SELECT * from categorylinks WHERE cl_to"
+            "SELECT * FROM categorylinks WHERE cl_to"
         };
         let mut sql = Platform::sql_tuple();
         match self.params.combine.as_str() {
             "subset" => {
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
+                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,
+                	(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,
+                 p.page_len".to_string() ;
                 sql.0 += &params.link_count_sql;
                 sql.0 += &format!(" FROM ( {subquery} IN (");
                 Platform::append_sql(&mut sql, Platform::prep_quote(&category_batch[0]));
@@ -550,9 +552,12 @@ impl SourceDatabase {
                 for (a, item) in category_batch.iter().enumerate().skip(1) {
                     if state.using_new_categorylinks_table() {
                         sql.0 += &format!(" INNER JOIN categorylinks cl{a} ON cl0.cl_from=cl{a}.cl_from
-                       INNER JOIN linktarget lt{a} ON lt{a}.lt_id=cl{a}.cl_target_id AND lt{a}.lt_title IN (");
+                       INNER JOIN linktarget lt{a} ON lt{a}.lt_namespace=14 AND lt{a}.lt_id=cl{a}.cl_target_id AND lt{a}.lt_title IN (");
                     } else {
-                        sql.0 += &format!(" INNER JOIN categorylinks cl{a} ON cl0.cl_from=cl{a}.cl_from and cl{a}.cl_to IN (");
+                        sql.0 += &format!(
+                            " INNER JOIN categorylinks cl{a}
+                            	ON cl0.cl_from=cl{a}.cl_from AND cl{a}.cl_to IN ("
+                        );
                     }
                     Platform::append_sql(&mut sql, Platform::prep_quote(item));
                     sql.0 += ")";
@@ -1242,7 +1247,7 @@ impl SourceDatabase {
             cats.dedup();
             if negative_categories_use_not_exists {
                 if state.using_new_categorylinks_table() {
-                    sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=p.page_id AND lt_title";
+                    sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=p.page_id AND lt_namespace=14 AND lt_title";
                 } else {
                     sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks WHERE cl_from=p.page_id AND cl_to";
                 }
@@ -1250,7 +1255,7 @@ impl SourceDatabase {
                 #[allow(clippy::collapsible_else_if)]
                 if state.using_new_categorylinks_table() {
                     sql.0 +=
-                " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_title";
+                " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
                 } else {
                     sql.0 +=
                     " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
