@@ -479,7 +479,7 @@ impl Platform {
                     let mut sql = "SELECT lt0.lt_title,lt0.lt_namespace,(SELECT COUNT(*) FROM page p1 WHERE p1.page_title=lt0.lt_title AND p1.page_namespace=lt0.lt_namespace) AS cnt from page p0,pagelinks pl0,linktarget lt0 WHERE pl0.pl_target_id=lt0.lt_id AND pl_from=p0.page_id AND ".to_string() ;
                     sql += &sql_batch.0 ;
                     if ns0_only {sql += " AND lt0.lt_namespace=0" ;}
-                    else {sql += " AND lt0.lt__namespace>=0" ;}
+                    else {sql += " AND lt0.lt_namespace>=0" ;}
                     if remove_template_redlinks {
                         sql += " AND NOT EXISTS (SELECT * FROM pagelinks pl1,linktarget lt1 WHERE pl1.pl_target_id=lt1.lt_id AND pl1.pl_from_namespace=10 AND lt0.lt_namespace=lt1.lt_namespace AND lt0.lt_title=lt1.lt_title LIMIT 1)" ;
                     }
