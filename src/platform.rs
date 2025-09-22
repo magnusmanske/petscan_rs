@@ -1289,9 +1289,20 @@ impl Platform {
         let no_statements = self.has_param("wpiu_no_statements");
         let no_sitelinks = self.has_param("wpiu_no_sitelinks");
         let wpiu = self.get_param_default("wpiu", "any");
+        let min_statements = self.usize_option_from_param("min_statements");
+        let max_statements = self.usize_option_from_param("max_statements");
+        let min_identifiers = self.usize_option_from_param("min_identifiers");
+        let max_identifiers = self.usize_option_from_param("max_identifiers");
         let list = self.get_param_blank("wikidata_prop_item_use");
         let list = list.trim();
-        if list.is_empty() && !no_statements && !no_sitelinks {
+        if list.is_empty()
+            && !no_statements
+            && !no_sitelinks
+            && min_statements.is_none()
+            && max_statements.is_none()
+            && min_identifiers.is_none()
+            && max_identifiers.is_none()
+        {
             return Ok(());
         }
         let original_wiki = result.wiki();
@@ -1321,6 +1332,21 @@ impl Platform {
             .collect::<Vec<SQLtuple>>();
 
         let mut sql_post: SQLtuple = (String::new(), vec![]);
+
+        if let Some(m) = min_statements {
+            sql_post.0 += &format!(" AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_value*1>={m})") ;
+        }
+        if let Some(m) = max_statements {
+            sql_post.0 += &format!(" AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_value*1<={m})") ;
+        }
+
+        if let Some(m) = min_identifiers {
+            sql_post.0 += &format!(" AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-identifiers' AND pp_value*1>={m})") ;
+        }
+        if let Some(m) = max_identifiers {
+            sql_post.0 += &format!(" AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-identifiers' AND pp_value*1<={m})") ;
+        }
+
         if no_statements {
             sql_post.0 += " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0)" ;
         }
