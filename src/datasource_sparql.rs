@@ -46,7 +46,6 @@ impl SparqlServer {
         }
     }
     fn parse_response_qlever_wd(response: &str, api: &Api) -> Result<PageList> {
-        println!("Using QLever");
         let result: Value = serde_json::from_str(response)?;
         let first_var = result["head"]["vars"][0]
             .as_str()
@@ -60,7 +59,6 @@ impl SparqlServer {
     }
 
     fn parse_response_wikidata(response: &str, api: &Api) -> Result<PageList> {
-        println!("Using WIkidata");
         let ret = PageList::new_from_wiki("wikidatawiki");
         let mut mode: u8 = 0;
         let mut header = String::new();
