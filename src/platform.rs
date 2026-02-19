@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
-use crate::combination::{Combination, CombinationSequential};
+use crate::combination::Combination;
 use crate::content_type::ContentType;
-use crate::datasource::{DataSource, SQLtuple};
+use crate::datasource::DataSource;
 use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
 use crate::datasource_labels::SourceLabels;
 use crate::datasource_manual::SourceManual;
@@ -11,8 +11,8 @@ use crate::datasource_sitelinks::SourceSitelinks;
 use crate::datasource_sparql::SourceSparql;
 use crate::datasource_wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
-use crate::pagelist::{DatabaseCluster, PageList};
-use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, PageListSort, TriState};
+use crate::pagelist::PageList;
+use crate::pagelist_entry::PageListSort;
 use crate::render::Render;
 use crate::render_html::RenderHTML;
 use crate::render_json::RenderJSON;
@@ -25,29 +25,19 @@ use crate::render_wikitext::RenderWiki;
 use crate::wdfist::WDfist;
 use anyhow::{anyhow, Result};
 use futures::future::join_all;
-use my::Value::Bytes;
-use mysql_async as my;
-use mysql_async::from_row;
-use mysql_async::prelude::Queryable;
-use mysql_async::Value as MyValue;
-use rayon::prelude::*;
-use regex::Regex;
-use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::str::FromStr;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
-use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, instrument};
 use wikimisc::mediawiki::api::NamespaceID;
-use wikimisc::mediawiki::title::Title;
 
 pub static PAGE_BATCH_SIZE: usize = 15000;
 
-static RE_PARSE_COMBINATION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\w+(?:'\w+)?|[^\w\s]")
-        .expect("Platform::parse_combination_string: Regex is invalid")
-});
+mod combine;
+mod label_sql;
+mod params;
+mod process;
+mod sql_utils;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MyResponse {
@@ -57,18 +47,18 @@ pub struct MyResponse {
 
 #[derive(Debug)]
 pub struct Platform {
-    form_parameters: FormParameters,
-    state: Arc<AppState>,
-    result: Option<PageList>,
+    pub(super) form_parameters: FormParameters,
+    pub(super) state: Arc<AppState>,
+    pub(super) result: Option<PageList>,
     pub psid: Option<u64>,
-    existing_labels: RwLock<HashSet<String>>,
-    combination: Combination,
-    output_redlinks: bool,
-    query_time: Option<Duration>,
-    wiki_by_source: HashMap<String, String>,
-    wdfist_result: Option<Value>,
-    warnings: RwLock<Vec<String>>,
-    namespace_case_sensitivity_cache: RwLock<HashMap<(String, NamespaceID), bool>>,
+    pub(super) existing_labels: RwLock<HashSet<String>>,
+    pub(super) combination: Combination,
+    pub(super) output_redlinks: bool,
+    pub(super) query_time: Option<Duration>,
+    pub(super) wiki_by_source: HashMap<String, String>,
+    pub(super) wdfist_result: Option<serde_json::Value>,
+    pub(super) warnings: RwLock<Vec<String>>,
+    pub(super) namespace_case_sensitivity_cache: RwLock<HashMap<(String, NamespaceID), bool>>,
 }
 
 impl Platform {
@@ -99,7 +89,6 @@ impl Platform {
     }
 
     pub fn label_exists(&self, label: &str) -> bool {
-        // TODO normalization?
         match self.existing_labels.read() {
             Ok(el) => el.contains(label),
             _ => false,
@@ -118,7 +107,7 @@ impl Platform {
         self.query_time.to_owned()
     }
 
-    // Returns true if "case" in namespace info is "case-sensitive", false otherwise (default)
+    /// Returns `true` if "case" in namespace info is "case-sensitive", `false` otherwise (default)
     pub async fn get_namespace_case_sensitivity(&self, namespace_id: NamespaceID) -> bool {
         let wiki = match self.get_main_wiki() {
             Some(wiki) => wiki,
@@ -142,7 +131,6 @@ impl Platform {
                     }
                     _ => return false,
                 }
-
                 return false;
             }
         };
@@ -157,7 +145,6 @@ impl Platform {
             }
             _ => return false,
         }
-
         ret
     }
 
@@ -229,9 +216,6 @@ impl Platform {
             }
             let name = names.remove(0);
             results.insert(name, result?);
-            // if let Ok(r) = result {
-            //     results.insert(name,r);
-            // }
         }
         drop(tmp_results);
 
@@ -258,10 +242,8 @@ impl Platform {
         if self.has_param("wdf_main") {
             match &self.result {
                 Some(pagelist) => pagelist.convert_to_wiki("wikidatawiki", self).await?,
-
                 None => return Err(anyhow!("No result set for WDfist")),
             }
-            //self.result = Some(pagelist);
             let mut wdfist =
                 WDfist::new(self, &self.result).ok_or_else(|| anyhow!("Cannot create WDfist"))?;
             self.result = None; // Safe space
@@ -278,1175 +260,8 @@ impl Platform {
         debug!(num, "{}", label);
     }
 
-    async fn post_process_result(&self, available_sources: &[String]) -> Result<()> {
-        Platform::profile("post_process_result begin", None);
-        let result = match self.result.as_ref() {
-            Some(res) => res,
-            None => return Ok(()),
-        };
-
-        // Filter and post-process
-        Platform::profile("before filter_wikidata", Some(result.len()));
-        self.filter_wikidata(result).await?;
-        Platform::profile("after filter_wikidata", Some(result.len()));
-        if available_sources.to_vec() != vec!["sitelinks".to_string()] {
-            self.process_sitelinks(result).await?;
-            Platform::profile("after process_sitelinks", None);
-        }
-        if available_sources.to_vec() != vec!["labels".to_string()] {
-            self.process_labels(result).await?;
-            Platform::profile("after process_labels", Some(result.len()));
-        }
-
-        self.convert_to_common_wiki(result).await?;
-        Platform::profile("after convert_to_common_wiki", Some(result.len()));
-
-        if !available_sources.contains(&"categories".to_string()) {
-            self.process_missing_database_filters(result).await?;
-            Platform::profile("after process_missing_database_filters", Some(result.len()));
-        }
-        self.process_by_wikidata_item(result).await?;
-        Platform::profile("after process_by_wikidata_item", Some(result.len()));
-        self.process_files(result).await?;
-        Platform::profile("after process_files", Some(result.len()));
-        self.process_pages(result).await?;
-        Platform::profile("after process_pages", Some(result.len()));
-        self.process_namespace_conversion(result).await?;
-        Platform::profile("after process_namespace_conversion", Some(result.len()));
-        self.process_subpages(result).await?;
-        Platform::profile("after process_subpages", Some(result.len()));
-        self.annotate_with_wikidata_item(result).await?;
-        Platform::profile("after annotate_with_wikidata_item [2]", Some(result.len()));
-
-        let wikidata_label_language = self.get_param_default(
-            "wikidata_label_language",
-            &self.get_param_default("interface_language", "en"),
-        );
-        result
-            .load_missing_metadata(Some(wikidata_label_language), self)
-            .await?;
-        Platform::profile("after load_missing_metadata", Some(result.len()));
-        if let Some(regexp) = self.get_param("rxp_filter") {
-            result.regexp_filter(&regexp);
-        }
-        if let Some(search) = self.get_param("search_filter") {
-            result.search_filter(self, &search).await?;
-        }
-        self.process_redlinks(result).await?;
-        Platform::profile("after process_redlinks", Some(result.len()));
-        self.process_creator(result).await?;
-        Platform::profile("after process_creator", Some(result.len()));
-
-        Ok(())
-    }
-
     pub fn state(&self) -> Arc<AppState> {
         self.state.clone()
-    }
-
-    async fn convert_to_common_wiki(&self, result: &PageList) -> Result<()> {
-        // Find best wiki to convert to
-        match self.get_param_default("common_wiki", "auto").as_str() {
-            "auto" => {}
-            "cats" => {
-                result
-                    .convert_to_wiki(
-                        self.wiki_by_source.get("categories").ok_or_else(|| {
-                            anyhow!("categories wiki requested as output, but not set")
-                        })?,
-                        self,
-                    )
-                    .await?;
-            }
-            "pagepile" => {
-                result
-                    .convert_to_wiki(
-                        self.wiki_by_source.get("pagepile").ok_or_else(|| {
-                            anyhow!("pagepile wiki requested as output, but not set")
-                        })?,
-                        self,
-                    )
-                    .await?;
-            }
-            "manual" => {
-                result
-                    .convert_to_wiki(
-                        &self
-                            .wiki_by_source
-                            .get("manual")
-                            .map(|s| s.to_string())
-                            .or_else(|| self.get_param("common_wiki_other"))
-                            .ok_or_else(|| {
-                                anyhow!("manual wiki requested as output, but not set")
-                            })?,
-                        self,
-                    )
-                    .await?;
-            }
-            "wikidata" => result.convert_to_wiki("wikidatawiki", self).await?,
-            "other" => {
-                result
-                    .convert_to_wiki(
-                        &self.get_param("common_wiki_other").ok_or_else(|| {
-                            anyhow!("Other wiki for output expected, but not given in text field")
-                        })?,
-                        self,
-                    )
-                    .await?;
-            }
-            unknown => return Err(anyhow!("Unknown output wiki type '{unknown}'")),
-        }
-        Ok(())
-    }
-
-    fn apply_results_limit(&self, pages: &mut Vec<PageListEntry>) {
-        let limit = self
-            .get_param_default("output_limit", "0")
-            .parse::<usize>()
-            .unwrap_or(0);
-        if limit != 0 && limit < pages.len() {
-            pages.resize(limit, PageListEntry::new(Title::new("", 0)));
-        }
-    }
-
-    // Prepares for JS "creator" mode
-    // Chackes which labels already exist on Wikidata
-    async fn process_creator(&self, result: &PageList) -> Result<()> {
-        if result.is_empty() || result.is_wikidata() {
-            return Ok(());
-        }
-        if !self.has_param("show_redlinks") && self.get_param_blank("wikidata_item") != "without" {
-            return Ok(());
-        }
-
-        // wbt_ done
-        let batches: Vec<SQLtuple> = result
-            .to_sql_batches(PAGE_BATCH_SIZE)
-            .par_iter_mut()
-            .map(|sql_batch| {
-                // Text for any label or alias used in an item
-                sql_batch.0 = "SELECT wbx_text
-                	FROM wbt_text
-                 	WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id IN (1,3) AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id)
-                  AND wbx_text IN (".to_string() ;
-                // One of these
-                sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len()) ;
-                sql_batch.0 += ")";
-                // Looking for labels, so spaces instead of underscores
-                for element in sql_batch.1.iter_mut() {
-                    *element = match element {
-                        MyValue::Bytes(x) => {
-                            let x = &x;
-                            let u2s = Title::underscores_to_spaces(&String::from_utf8_lossy(x)) ;
-                            MyValue::Bytes(u2s.into())
-                        }
-                        _ => {continue;}
-                    } ;
-                }
-                sql_batch.to_owned()
-            })
-            .collect::<Vec<SQLtuple>>();
-
-        let state = self.state();
-        let mut conn = state.get_x3_db_connection().await?;
-
-        for sql in batches {
-            let rows = conn
-                .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-                .await?
-                .map_and_drop(from_row::<Vec<u8>>)
-                .await?;
-
-            let mut el = match self.existing_labels.write() {
-                Ok(el) => el,
-                Err(e) => return Err(anyhow!("{e}")),
-            };
-            for wbx_text in rows {
-                let label = String::from_utf8_lossy(&wbx_text);
-                el.insert(label.to_string());
-            }
-        }
-        conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
-        Ok(())
-    }
-
-    async fn process_redlinks(&self, result: &PageList) -> Result<()> {
-        if result.is_empty() || !self.do_output_redlinks() || result.is_wikidata() {
-            return Ok(());
-        }
-        let ns0_only = self.has_param("article_redlinks_only");
-        let remove_template_redlinks = self.has_param("remove_template_redlinks");
-
-        let batches: Vec<SQLtuple> = result
-                .to_sql_batches(PAGE_BATCH_SIZE/20) // ???
-                .par_iter_mut()
-                .map(|sql_batch| {
-                    let mut sql = "SELECT lt0.lt_title,lt0.lt_namespace,(SELECT COUNT(*) FROM page p1 WHERE p1.page_title=lt0.lt_title AND p1.page_namespace=lt0.lt_namespace) AS cnt from page p0,pagelinks pl0,linktarget lt0 WHERE pl0.pl_target_id=lt0.lt_id AND pl_from=p0.page_id AND ".to_string() ;
-                    sql += &sql_batch.0 ;
-                    if ns0_only {sql += " AND lt0.lt_namespace=0" ;}
-                    else {sql += " AND lt0.lt_namespace>=0" ;}
-                    if remove_template_redlinks {
-                        sql += " AND NOT EXISTS (SELECT * FROM pagelinks pl1,linktarget lt1 WHERE pl1.pl_target_id=lt1.lt_id AND pl1.pl_from_namespace=10 AND lt0.lt_namespace=lt1.lt_namespace AND lt0.lt_title=lt1.lt_title LIMIT 1)" ;
-                    }
-                    sql += " GROUP BY page_id,lt0.lt_namespace,lt_title" ;
-                    sql += " HAVING cnt=0" ;
-
-                    sql_batch.0 = sql ;
-                    sql_batch.to_owned()
-                })
-                .collect::<Vec<SQLtuple>>();
-
-        let mut redlink_counter: HashMap<Title, LinkCount> = HashMap::new();
-        //let redlink_counter = RwLock::new(redlink_counter);
-
-        let wiki = match result.wiki() {
-            Some(wiki) => wiki.to_owned(),
-            None => return Err(anyhow!("Platform::process_redlinks: no wiki set in result")),
-        };
-
-        let mut conn = self
-            .state
-            .get_wiki_db_connection(&wiki)
-            .await
-            .map_err(|e| anyhow!(e))?;
-
-        for sql in batches {
-            self.process_redlinks_batch(&mut conn, sql, &mut redlink_counter)
-                .await?;
-        }
-        conn.disconnect().await.map_err(|e| anyhow!(e))?;
-
-        let min_redlinks = self
-            .get_param_default("min_redlink_count", "1")
-            .parse::<LinkCount>()
-            .unwrap_or(1);
-        //let mut redlink_counter = redlink_counter.write().map_err(|e| anyhow!("{e}"))?;
-        redlink_counter.retain(|_, &mut v| v >= min_redlinks);
-        result.set_entries(
-            redlink_counter
-                .par_iter()
-                .map(|(k, redlink_count)| {
-                    let mut ret = PageListEntry::new(k.to_owned());
-                    ret.set_redlink_count(Some(*redlink_count));
-                    ret
-                })
-                .collect(),
-        );
-        Ok(())
-    }
-
-    async fn process_redlinks_batch(
-        &self,
-        conn: &mut mysql_async::Conn,
-        sql: SQLtuple,
-        redlink_counter: &mut HashMap<Title, LinkCount>,
-    ) -> Result<()> {
-        let rows = conn
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-            .await
-            .map_err(|e| anyhow!("{e}"))?
-            .map_and_drop(from_row::<(Vec<u8>, i64, usize)>)
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
-
-        for (page_title, namespace_id, _count) in rows {
-            let page_title = String::from_utf8_lossy(&page_title).to_string();
-            let title = Title::new(&page_title, namespace_id);
-            *redlink_counter.entry(title).or_insert_with(|| 0) += 1;
-        }
-        Ok(())
-    }
-
-    async fn process_namespace_conversion(&self, result: &PageList) -> Result<()> {
-        let namespace_conversion = self.get_param_default("namespace_conversion", "keep");
-        let use_talk = match namespace_conversion.as_str() {
-            "topic" => false,
-            "talk" => true,
-            _ => return Ok(()),
-        };
-        result.change_namespaces(use_talk);
-        Ok(())
-    }
-
-    async fn process_subpages(&self, result: &PageList) -> Result<()> {
-        let add_subpages = self.has_param("add_subpages");
-        let subpage_filter = self.get_param_default("subpage_filter", "either");
-        if !add_subpages && subpage_filter != "subpages" && subpage_filter != "no_subpages" {
-            return Ok(());
-        }
-
-        if add_subpages {
-            let title_ns = result.to_titles_namespaces();
-            let wiki = match result.wiki() {
-                Some(wiki) => wiki.to_owned(),
-                None => return Err(anyhow!("Platform::process_redlinks: no wiki set in result")),
-            };
-            let mut conn = self.state.get_wiki_db_connection(&wiki).await?;
-
-            for (title, namespace_id) in title_ns {
-                let sql: SQLtuple = (
-                    "SELECT page_title,page_namespace FROM page WHERE page_namespace=? AND page_title LIKE ?"
-                        .to_string(),
-                    vec![MyValue::Int(namespace_id), MyValue::Bytes(format!("{}/%", &title).into())],
-                );
-
-                let rows = conn
-                    .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-                    .await
-                    .map_err(|e| anyhow!("{e}"))?
-                    .map_and_drop(from_row::<(Vec<u8>, i64)>)
-                    .await
-                    .map_err(|e| anyhow!("{e}"))?;
-
-                for (page_title, page_namespace) in rows {
-                    let page_title = String::from_utf8_lossy(&page_title);
-                    result.add_entry(PageListEntry::new(Title::new(&page_title, page_namespace)));
-                }
-            }
-            conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
-            // TODO if new pages were added, they should get some of the post_process_result treatment as well
-        }
-
-        if subpage_filter != "subpages" && subpage_filter != "no_subpages" {
-            return Ok(());
-        }
-
-        let keep_subpages = subpage_filter == "subpages";
-        result.retain_entries(&|entry: &PageListEntry| {
-            let has_slash = entry.title().pretty().find('/').is_some();
-            has_slash == keep_subpages
-        });
-        Ok(())
-    }
-
-    async fn process_pages(&self, result: &PageList) -> Result<()> {
-        let is_kml = self.get_param_blank("format") == "kml";
-        let is_wikidata = result.is_wikidata();
-        let add_coordinates = self.has_param("add_coordinates") || is_kml;
-        let add_image = self.has_param("add_image") || is_kml;
-        let add_defaultsort =
-            self.has_param("add_defaultsort") || self.get_param_blank("sortby") == "defaultsort";
-        let add_disambiguation = self.has_param("add_disambiguation");
-        let add_incoming_links = self.get_param_blank("sortby") == "incoming_links";
-        let add_sitelinks =
-            self.get_param_blank("sortby") == "sitelinks" && !result.has_sitelink_counts();
-        if !add_coordinates
-            && !add_image
-            && !add_defaultsort
-            && !add_disambiguation
-            && !add_incoming_links
-            && !add_sitelinks
-        {
-            return Ok(());
-        }
-
-        let batches: Vec<SQLtuple> = result
-                .to_sql_batches(PAGE_BATCH_SIZE)
-                .par_iter_mut()
-                .map(|sql_batch| {
-                    let mut sql ="SELECT page_title,page_namespace".to_string();
-                    if add_image {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname IN ('page_image','page_image_free') LIMIT 1) AS image" ;}
-                    if add_coordinates {sql += ",(SELECT concat(gt_lat,',',gt_lon) FROM geo_tags WHERE gt_primary=1 AND gt_globe='earth' AND gt_page_id=page_id LIMIT 1) AS coord" ;}
-                    if add_defaultsort {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname='defaultsort' LIMIT 1) AS defaultsort" ;}
-                    if add_disambiguation {sql += ",(SELECT pp_value FROM page_props WHERE pp_page=page_id AND pp_propname='disambiguation' LIMIT 1) AS disambiguation" ;}
-                    if add_incoming_links {sql += ",(SELECT count(*) FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND lt_namespace=page_namespace AND lt_title=page_title AND pl_from_namespace=0) AS incoming_links" ;}
-                    if add_sitelinks {
-                        if is_wikidata {
-                            sql += ",(SELECT count(*) FROM wb_items_per_site WHERE page_namespace IN (0,120) AND ips_item_id=substr(page_title,2)) AS sitelinks" ;
-                        } else {
-                            sql += ",(SELECT count(*) FROM langlinks WHERE ll_from=page_id) AS sitelinks" ;
-                        }
-                    }
-                    sql += " FROM page WHERE " ;
-                    sql_batch.0 = sql + &sql_batch.0 ;
-                    sql_batch.to_owned()
-                })
-                .collect::<Vec<SQLtuple>>();
-
-        let the_f = |row: my::Row, entry: &mut PageListEntry| {
-            let mut parts = row.unwrap(); // Unwrap into vector, should be safe
-            parts.remove(0); // page_title
-            parts.remove(0); // page_namespace
-            if add_image {
-                entry.set_page_image(match parts.remove(0) {
-                    Bytes(s) => String::from_utf8(s).ok(),
-                    _ => None,
-                });
-            }
-            if add_coordinates {
-                let coordinates = match parts.remove(0) {
-                    Bytes(s) => match String::from_utf8(s) {
-                        Ok(lat_lon) => wikimisc::lat_lon::LatLon::from_str(&lat_lon).ok(),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                entry.set_coordinates(coordinates);
-            }
-            if add_defaultsort {
-                entry.set_defaultsort(match parts.remove(0) {
-                    Bytes(s) => String::from_utf8(s).ok(),
-                    _ => None,
-                });
-            }
-            if add_disambiguation {
-                let dis = match parts.remove(0) {
-                    my::Value::NULL => TriState::No,
-                    _ => TriState::Yes,
-                };
-                entry.set_disambiguation(dis);
-            }
-            if add_incoming_links {
-                let il = match parts.remove(0) {
-                    my::Value::Int(i) => Some(i as LinkCount),
-                    _ => None,
-                };
-                entry.set_incoming_links(il);
-            }
-            if add_sitelinks {
-                let sc = match parts.remove(0) {
-                    my::Value::Int(i) => Some(i as LinkCount),
-                    _ => None,
-                };
-                entry.set_sitelink_count(sc);
-            }
-        };
-
-        let col_title: usize = 0;
-        let col_ns: usize = 1;
-        result
-            .run_batch_queries(&self.state(), batches)
-            .await?
-            .iter()
-            .filter_map(|row| {
-                result
-                    .entry_from_row(row, col_title, col_ns)
-                    .map(|entry| (row, entry))
-            })
-            .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
-            .for_each(|(row, mut entry)| {
-                the_f(row.clone(), &mut entry);
-                result.add_entry(entry);
-            });
-        Ok(())
-    }
-
-    async fn file_usage(&self, result: &PageList, file_usage_data_ns0: bool) -> Result<()> {
-        let mut batch_size = PAGE_BATCH_SIZE;
-        loop {
-            if batch_size == 0 {
-                return Err(anyhow!(
-                    "file_usage: Too much file usage to report back from MySQL"
-                ));
-            }
-            let batches: Vec<SQLtuple> = result
-                .to_sql_batches_namespace(batch_size,6)
-                .par_iter_mut()
-                .map(|sql_batch| {
-                    sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string() ;
-                    sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len()) ;
-                    sql_batch.0 += ")";
-                    if file_usage_data_ns0  {sql_batch.0 += " AND gil_page_namespace_id=0" ;}
-                    sql_batch.0 += " GROUP BY gil_to" ;
-                    sql_batch.to_owned()
-                })
-                .collect::<Vec<SQLtuple>>();
-
-            let the_f = |row: my::Row, entry: &mut PageListEntry| {
-                if let Some(gil_group) = PageList::string_from_row(&row, 2) {
-                    let fi = FileInfo::new_from_gil_group(&gil_group);
-                    entry.set_file_info(Some(fi));
-                }
-            };
-            let col_title: usize = 0;
-            let col_ns: usize = 1;
-            let batch_results = match result.run_batch_queries(&self.state(), batches).await {
-                Ok(res) => res,
-                Err(e) => {
-                    if e.to_string().contains("packet too large") {
-                        // Happens for heavily used files, try again with half batch size
-                        batch_size = std::cmp::min(batch_size, result.len()) / 2;
-                        continue;
-                    }
-                    return Err(e); // Some other error
-                }
-            };
-            batch_results
-                .iter()
-                .filter_map(|row| {
-                    result
-                        .entry_from_row(row, col_title, col_ns)
-                        .map(|entry| (row, entry))
-                })
-                .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
-                .for_each(|(row, mut entry)| {
-                    the_f(row.clone(), &mut entry);
-                    result.add_entry(entry);
-                });
-            return Ok(());
-        }
-    }
-
-    async fn process_files(&self, result: &PageList) -> Result<()> {
-        let giu = self.has_param("giu");
-        let file_data = self.has_param("ext_image_data")
-            || self.get_param("sortby") == Some("filesize".to_string())
-            || self.get_param("sortby") == Some("uploaddate".to_string());
-        let file_usage = giu || self.has_param("file_usage_data");
-        let file_usage_data_ns0 = self.has_param("file_usage_data_ns0");
-
-        if file_usage {
-            self.file_usage(result, file_usage_data_ns0).await?;
-        }
-
-        if file_data {
-            let sql = if self.state.using_file_table() {
-                "SELECT file.file_name AS img_name,6 AS namespace_id,
-                fr_size AS img_size,
-                fr_width AS img_width,
-                fr_height AS img_height,
-                ft_media_type AS img_media_type,
-                ft_major_mime AS img_major_mime,
-                ft_minor_mime AS img_minor_mime,
-                actor_name AS img_user_text,
-                fr_timestamp AS img_timestamp,
-                fr_sha1 AS img_sha1
-                FROM file,filerevision,filetypes,actor
-                WHERE file.file_latest=filerevision.fr_id
-                AND fr_actor=actor_id
-                AND file.file_type=filetypes.ft_id
-                AND filerevision.fr_deleted=0
-                AND file.file_name IN ("
-            } else {
-                "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN ("
-            };
-            let batches: Vec<SQLtuple> = result
-                .to_sql_batches(PAGE_BATCH_SIZE)
-                .par_iter_mut()
-                .map(|sql_batch| {
-                    sql_batch.0 = sql.to_string();
-                    sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len());
-                    sql_batch.0 += ")";
-                    sql_batch.to_owned()
-                })
-                .collect::<Vec<SQLtuple>>();
-
-            let the_f = |row: my::Row, entry: &mut PageListEntry| {
-                let (
-                    _img_name,
-                    _namespace_id,
-                    img_size,
-                    img_width,
-                    img_height,
-                    img_media_type,
-                    img_major_mime,
-                    img_minor_mime,
-                    img_user_text,
-                    img_timestamp,
-                    img_sha1,
-                ) = my::from_row::<(
-                    String,
-                    usize,
-                    usize,
-                    usize,
-                    usize,
-                    String,
-                    String,
-                    String,
-                    String,
-                    String,
-                    String,
-                )>(row);
-                let mut file_info = match entry.get_file_info() {
-                    Some(fi) => fi,
-                    None => FileInfo::new(),
-                };
-                file_info.img_size = Some(img_size);
-                file_info.img_width = Some(img_width);
-                file_info.img_height = Some(img_height);
-                file_info.img_media_type = Some(img_media_type);
-                file_info.img_major_mime = Some(img_major_mime);
-                file_info.img_minor_mime = Some(img_minor_mime);
-                file_info.img_user_text = Some(img_user_text);
-                file_info.img_timestamp = Some(img_timestamp);
-                file_info.img_sha1 = Some(img_sha1);
-                entry.set_file_info(Some(file_info));
-            };
-            let col_title: usize = 0;
-            let col_ns: usize = 1;
-            result
-                .run_batch_queries(&self.state(), batches)
-                .await?
-                .iter()
-                .filter_map(|row| {
-                    result
-                        .entry_from_row(row, col_title, col_ns)
-                        .map(|entry| (row, entry))
-                })
-                .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
-                .for_each(|(row, mut entry)| {
-                    the_f(row.clone(), &mut entry);
-                    result.add_entry(entry);
-                });
-        }
-        Ok(())
-    }
-
-    async fn annotate_with_wikidata_item(&self, result: &PageList) -> Result<()> {
-        if result.is_wikidata() {
-            return Ok(());
-        }
-
-        let wiki = match result.wiki() {
-            Some(wiki) => wiki.to_string(),
-            None => return Ok(()), // TODO is it OK to just ignore? Error for "no wiki set"?
-        };
-        let api = self.state.get_api_for_wiki(wiki.to_owned()).await?;
-
-        // Using Wikidata
-        let titles = result.to_full_pretty_titles(&api);
-
-        let mut batches: Vec<SQLtuple> = vec![];
-        titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-
-            let escaped: Vec<MyValue> = chunk
-                .par_iter()
-                .filter_map(|s| match s.trim() {
-                    "" => None,
-                    other => Some(other.to_string()),
-                })
-                .map(|s|s.into())
-                .collect();
-            let mut sql = (Platform::get_placeholders(escaped.len()), escaped);
-
-            sql.0 = format!("SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='{}' and ips_site_page IN ({})", &wiki,&sql.0);
-            batches.push(sql);
-        });
-
-        // Duplicated from Patelist::annotate_batch_results
-        let rows: TokioMutex<Vec<my::Row>> = TokioMutex::new(vec![]);
-
-        for sql in batches {
-            // Run query
-            let mut conn = self
-                .state
-                .get_wiki_db_connection("wikidatawiki")
-                .await
-                .map_err(|e| anyhow!("{e}"))?;
-            let mut subresult = conn
-                .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-                .await
-                .map_err(|e| anyhow!("{e}"))?
-                .collect_and_drop()
-                .await
-                .map_err(|e| anyhow!("{e}"))?;
-            conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
-            rows.lock().await.append(&mut subresult);
-        }
-
-        // Rows to entries
-        rows.lock().await.iter().for_each(|row| {
-            let full_page_title = match row.get(0) {
-                Some(Bytes(uv)) => match String::from_utf8(uv) {
-                    Ok(s) => s,
-                    Err(_) => return,
-                },
-                _ => return,
-            };
-            let ips_item_id = match row.get(1) {
-                Some(my::Value::Int(i)) => i,
-                _ => return,
-            };
-            let title = Title::new_from_full(&full_page_title, &api);
-            let tmp_entry = PageListEntry::new(title);
-            let mut entry = match result.get_entry(&tmp_entry) {
-                Some(entry) => entry,
-                None => return,
-            };
-
-            let q = "Q".to_string() + &ips_item_id.to_string();
-            entry.set_wikidata_item(Some(q));
-
-            result.add_entry(entry);
-        });
-        Ok(())
-
-        /*
-        // THIS WOULD BE NICE BUT page_props HAS DAYS OF DATA LAG OR IS FAULTY
-        // Batches
-        let batches: Vec<SQLtuple> = result.to_sql_batches(PAGE_BATCH_SIZE)
-            .iter_mut()
-            .map(|sql|{
-                sql.0 = "SELECT page_title,page_namespace,pp_value FROM page_props,page WHERE page_id=pp_page AND pp_propname='wikibase_item' AND ".to_owned()+&sql.0;
-                sql.to_owned()
-            })
-            .collect::<Vec<SQLtuple>>();
-
-        result.annotate_batch_results(
-            self.state(),
-            batches,
-            0,
-            1,
-            &|row: my::Row, entry: &mut PageListEntry| {
-                let (_page_title, _page_namespace, pp_value) =
-                    my::from_row::<(String, NamespaceID, String)>(row);
-                entry.wikidata_item = Some(pp_value);
-            },
-        )
-        */
-    }
-
-    /// Filters on whether a page has a Wikidata item, depending on the `wikidata_item`
-    async fn process_by_wikidata_item(&self, result: &PageList) -> Result<()> {
-        if result.is_wikidata() {
-            return Ok(());
-        }
-        let wdi = self.get_param_default("wikidata_item", "no");
-        if wdi != "any" && wdi != "with" && wdi != "without" {
-            return Ok(());
-        }
-        self.annotate_with_wikidata_item(result).await?;
-        if wdi == "with" {
-            result.retain_entries(&|entry| entry.get_wikidata_item().is_some());
-        }
-        if wdi == "without" {
-            result.retain_entries(&|entry| entry.get_wikidata_item().is_none());
-        }
-        Ok(())
-    }
-
-    /// Adds page properties that might be missing if none of the original sources was "categories"
-    async fn process_missing_database_filters(&self, result: &PageList) -> Result<()> {
-        let mut params = SourceDatabaseParameters::db_params(self).await;
-        params.set_wiki(Some(result.wiki().ok_or_else(|| {
-            anyhow!("Platform::process_missing_database_filters: result has no wiki")
-        })?));
-        let mut db = SourceDatabase::new(params);
-        let new_result = db.get_pages(&self.state, Some(result)).await?;
-        result.set_from(new_result);
-        Ok(())
-    }
-
-    //________________________________________________________________________________________________
-
-    fn get_label_sql_helper_new(&self, ret: &mut SQLtuple, part1: &str) {
-        // wbt_ done
-        let mut wbt_type: Vec<String> = vec![];
-        if self.has_param(&("cb_labels_".to_owned() + part1 + "_l")) {
-            wbt_type.push("1".to_string());
-        }
-        if self.has_param(&("cb_labels_".to_owned() + part1 + "_a")) {
-            wbt_type.push("3".to_string());
-        }
-        if self.has_param(&("cb_labels_".to_owned() + part1 + "_d")) {
-            wbt_type.push("2".to_string());
-        }
-        if !wbt_type.is_empty() {
-            if wbt_type.len() == 1 {
-                ret.0 += &format!(" AND wbtl_type_id={}", wbt_type.join(","));
-            } else {
-                ret.0 += &format!(" AND wbtl_type_id IN ({})", wbt_type.join(","));
-            }
-        }
-    }
-
-    fn get_label_sql_subquery_new(
-        &self,
-        ret: &mut SQLtuple,
-        key: &str,
-        languages: &[String],
-        s: &str,
-    ) {
-        // wbt_ done
-        let has_pattern = !s.is_empty() && s != "%";
-        let has_languages = !languages.is_empty();
-        ret.0 += "SELECT * FROM wbt_term_in_lang,wbt_item_terms t2";
-        if has_languages || has_pattern {
-            ret.0 += ",wbt_text_in_lang";
-        }
-        if has_pattern {
-            ret.0 += ",wbt_text";
-        }
-        ret.0 += " WHERE t2.wbit_item_id=t1.wbit_item_id AND wbtl_id=t2.wbit_term_in_lang_id";
-        self.get_label_sql_helper_new(ret, key);
-        if has_languages || has_pattern {
-            let mut tmp = Self::prep_quote(languages);
-            ret.0 += " AND wbtl_text_in_lang_id=wbxl_id";
-            if !tmp.1.is_empty() {
-                if tmp.1.len() == 1 {
-                    ret.0 += &(" AND wbxl_language=".to_owned() + &tmp.0);
-                } else {
-                    ret.0 += &(" AND wbxl_language IN (".to_owned() + &tmp.0 + ")");
-                }
-                ret.1.append(&mut tmp.1);
-            }
-            if has_pattern {
-                ret.0 += " AND wbxl_text_id=wbx_id AND wbx_text LIKE ?";
-                ret.1.push(MyValue::Bytes(s.to_owned().into()));
-            }
-        }
-    }
-
-    fn get_label_sql_new(&self, namespace_id: &NamespaceID) -> Option<SQLtuple> {
-        // wbt_ done
-        let mut ret: SQLtuple = (String::new(), vec![]);
-        let yes = self.get_param_as_vec("labels_yes", "\n");
-        let any = self.get_param_as_vec("labels_any", "\n");
-        let no = self.get_param_as_vec("labels_no", "\n");
-        if yes.len() + any.len() + no.len() == 0 {
-            return None;
-        }
-
-        let langs_yes = self.get_param_as_vec("langs_labels_yes", ",");
-        let langs_any = self.get_param_as_vec("langs_labels_any", ",");
-        let langs_no = self.get_param_as_vec("langs_labels_no", ",");
-
-        if *namespace_id == 0 {
-            ret.0 =
-                "SELECT DISTINCT CONCAT('Q',wbit_item_id) AS term_full_entity_id FROM wbt_item_terms t1 WHERE 1=1".to_string();
-        } else if *namespace_id == 120 {
-            ret.0 = "SELECT DISTINCT CONACT('P',wbit_property_id) AS term_full_entity_id FROM wbt_property_terms t1 WHERE 1=1"
-                .to_string();
-        } else {
-            return None;
-        }
-
-        yes.iter().for_each(|s| {
-            ret.0 += " AND EXISTS (";
-            self.get_label_sql_subquery_new(&mut ret, "yes", &langs_yes, s);
-            ret.0 += ")";
-        });
-
-        if !langs_any.is_empty() {
-            ret.0 += " AND (0=1";
-            any.iter().for_each(|s| {
-                ret.0 += " OR EXISTS (";
-                self.get_label_sql_subquery_new(&mut ret, "any", &langs_any, s);
-                ret.0 += ")";
-            });
-            ret.0 += ")";
-        }
-
-        no.iter().for_each(|s| {
-            ret.0 += " AND NOT EXISTS (";
-            self.get_label_sql_subquery_new(&mut ret, "no", &langs_no, s);
-            ret.0 += ")";
-        });
-        Some(ret)
-    }
-
-    /// Using new `wbt_item_terms`
-    async fn process_labels(&self, result: &PageList) -> Result<()> {
-        // wbt_ done
-        if self.get_label_sql_new(&0).is_none() {
-            return Ok(());
-        }
-        result.convert_to_wiki("wikidatawiki", self).await?;
-        if result.is_empty() {
-            return Ok(());
-        }
-
-        // Batches
-        let batches: Vec<SQLtuple> = result
-            .group_by_namespace()
-            .par_iter()
-            .filter_map(|(namespace_id, titles)| {
-                let mut sql = self.get_label_sql_new(namespace_id)?;
-                if *namespace_id == 0 {
-                    sql.0 += " AND wbit_item_id IN (";
-                } else if *namespace_id == 120 {
-                    sql.0 += " AND wbit_property_id IN (";
-                } else {
-                    return None;
-                }
-                sql.0 += &titles
-                    .par_iter()
-                    .map(|title| title[1..].to_string())
-                    .collect::<Vec<String>>()
-                    .join(",");
-                sql.0 += ")";
-                Some(sql)
-            })
-            .collect();
-
-        result.clear_entries();
-        let the_f = |row: my::Row| {
-            let term_full_entity_id = my::from_row::<String>(row);
-            Platform::entry_from_entity(&term_full_entity_id)
-        };
-        result
-            .run_batch_queries_with_cluster(&self.state(), batches, DatabaseCluster::X3)
-            .await?
-            .iter()
-            .filter_map(|row| the_f(row.to_owned()))
-            .for_each(|entry| result.add_entry(entry));
-        Ok(())
-    }
-
-    async fn process_sitelinks(&self, result: &PageList) -> Result<()> {
-        if result.is_empty() {
-            return Ok(());
-        }
-
-        let sitelinks_yes = self.get_param_as_vec("sitelinks_yes", "\n");
-        let sitelinks_any = self.get_param_as_vec("sitelinks_any", "\n");
-        let sitelinks_no = self.get_param_as_vec("sitelinks_no", "\n");
-        let sitelinks_min = self.get_param_blank("min_sitelink_count");
-        let sitelinks_max = self.get_param_blank("max_sitelink_count");
-
-        if sitelinks_yes.is_empty()
-            && sitelinks_any.is_empty()
-            && sitelinks_no.is_empty()
-            && sitelinks_min.is_empty()
-            && sitelinks_max.is_empty()
-        {
-            return Ok(());
-        }
-        let old_wiki = result.wiki().to_owned();
-        result.convert_to_wiki("wikidatawiki", self).await?;
-        if result.is_empty() {
-            return Ok(());
-        }
-
-        let use_min_max = !sitelinks_min.is_empty() || !sitelinks_max.is_empty();
-
-        let mut sql: SQLtuple = (String::new(), vec![]);
-        sql.0 += "SELECT ";
-        if use_min_max {
-            sql.0 += "page_title,(SELECT count(*) FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1) AS sitelink_count" ;
-        } else {
-            sql.0 += "DISTINCT page_title,0";
-        }
-        sql.0 += " FROM page WHERE page_namespace=0";
-
-        sitelinks_yes.iter().for_each(|site|{
-            sql.0 += " AND EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id=? LIMIT 1)" ;
-            sql.1.push(site.into());
-        });
-        if !sitelinks_any.is_empty() {
-            sql.0 += " AND EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id IN (" ;
-            let tmp = Platform::prep_quote(&sitelinks_any);
-            Platform::append_sql(&mut sql, tmp);
-            sql.0 += ") LIMIT 1)";
-        }
-        sitelinks_no.iter().for_each(|site|{
-            sql.0 += " AND NOT EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id=? LIMIT 1)" ;
-            sql.1.push(site.into());
-        });
-        sql.0 += " AND ";
-
-        let mut having: Vec<String> = vec![];
-        if let Ok(s) = sitelinks_min.parse::<usize>() {
-            having.push(format!("sitelink_count>={s}"));
-        }
-        if let Ok(s) = sitelinks_max.parse::<usize>() {
-            having.push(format!("sitelink_count<={s}"));
-        }
-
-        let mut sql_post = String::new();
-        if use_min_max {
-            sql_post += " GROUP BY page_title";
-        }
-        if !having.is_empty() {
-            sql_post += " HAVING ";
-            sql_post += &having.join(" AND ");
-        }
-
-        // Batches
-        let batches: Vec<SQLtuple> = result
-            .to_sql_batches(PAGE_BATCH_SIZE)
-            .par_iter_mut()
-            .map(|sql_batch| {
-                sql_batch.0 = sql.0.to_owned() + &sql_batch.0 + &sql_post;
-                sql_batch.1.splice(..0, sql.1.to_owned());
-                sql_batch.to_owned()
-            })
-            .collect::<Vec<SQLtuple>>();
-
-        result.clear_entries();
-        let state = self.state();
-        let the_f = |row: my::Row| {
-            let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
-            Some(PageListEntry::new(Title::new(&page_title, 0)))
-        };
-
-        result
-            .run_batch_queries(&state, batches)
-            .await?
-            .iter()
-            .filter_map(|row| the_f(row.to_owned()))
-            .for_each(|entry| result.add_entry(entry));
-
-        if let Some(wiki) = old_wiki {
-            result.convert_to_wiki(&wiki, self).await?;
-        }
-        Ok(())
-    }
-
-    async fn filter_wikidata(&self, result: &PageList) -> Result<()> {
-        if result.is_empty() {
-            return Ok(());
-        }
-        let no_statements = self.has_param("wpiu_no_statements");
-        let no_sitelinks = self.has_param("wpiu_no_sitelinks");
-        let wpiu = self.get_param_default("wpiu", "any");
-        let min_statements = self.usize_option_from_param("min_statements");
-        let max_statements = self.usize_option_from_param("max_statements");
-        let min_identifiers = self.usize_option_from_param("min_identifiers");
-        let max_identifiers = self.usize_option_from_param("max_identifiers");
-        let list = self.get_param_blank("wikidata_prop_item_use");
-        let list = list.trim();
-        if list.is_empty()
-            && !no_statements
-            && !no_sitelinks
-            && min_statements.is_none()
-            && max_statements.is_none()
-            && min_identifiers.is_none()
-            && max_identifiers.is_none()
-        {
-            return Ok(());
-        }
-        let original_wiki = result.wiki();
-        Platform::profile("before filter_wikidata:convert_to_wiki", Some(result.len()));
-        result.convert_to_wiki("wikidatawiki", self).await?;
-        Platform::profile("after filter_wikidata:convert_to_wiki", Some(result.len()));
-        if result.is_empty() {
-            if let Some(wiki) = original_wiki {
-                result.convert_to_wiki(&wiki, self).await?;
-            }
-            return Ok(());
-        }
-        // For all/any/none
-        let parts = list
-            .split_terminator(',')
-            .filter_map(|s| match s.chars().next() {
-                Some('Q') => Some((
-                    "(SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=?)".to_string(),
-                    vec![s.into()],
-                )),
-                Some('P') => Some((
-                    "(SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=120 AND lt_title=?)".to_string(),
-                    vec![s.into()],
-                )),
-                _ => None,
-            })
-            .collect::<Vec<SQLtuple>>();
-
-        let mut sql_post: SQLtuple = (String::new(), vec![]);
-
-        if let Some(m) = min_statements {
-            sql_post.0 += &format!(" AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_value*1>={m})") ;
-        }
-        if let Some(m) = max_statements {
-            sql_post.0 += &format!(" AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_value*1<={m})") ;
-        }
-
-        if let Some(m) = min_identifiers {
-            sql_post.0 += &format!(" AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-identifiers' AND pp_value*1>={m})") ;
-        }
-        if let Some(m) = max_identifiers {
-            sql_post.0 += &format!(" AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-identifiers' AND pp_value*1<={m})") ;
-        }
-
-        if no_statements {
-            sql_post.0 += " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0)" ;
-        }
-        if no_sitelinks {
-            sql_post.0 += " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-sitelinks' AND pp_sortkey=0)" ;
-        }
-        if !parts.is_empty() {
-            match wpiu.as_str() {
-                "all" => {
-                    parts.iter().for_each(|sql| {
-                        sql_post.0 += &(" AND EXISTS ".to_owned() + &sql.0);
-                        sql_post.1.append(&mut sql.1.to_owned());
-                    });
-                }
-                "any" => {
-                    sql_post.0 += " AND (0";
-                    parts.iter().for_each(|sql| {
-                        sql_post.0 += &(" OR EXISTS ".to_owned() + &sql.0);
-                        sql_post.1.append(&mut sql.1.to_owned());
-                    });
-                    sql_post.0 += ")";
-                }
-                "none" => {
-                    parts.iter().for_each(|sql| {
-                        sql_post.0 += &(" AND NOT EXISTS ".to_owned() + &sql.0);
-                        sql_post.1.append(&mut sql.1.to_owned());
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        // Batches
-        let batches: Vec<SQLtuple> = result
-            .to_sql_batches(PAGE_BATCH_SIZE)
-            .iter_mut()
-            .map(|sql| {
-                sql.0 = "SELECT DISTINCT page_title FROM page WHERE ".to_owned()
-                    + &sql.0
-                    + &sql_post.0.to_owned();
-                sql.1.append(&mut sql_post.1.to_owned());
-                sql.to_owned()
-            })
-            .collect::<Vec<SQLtuple>>();
-
-        result.clear_entries();
-        let state = self.state();
-        let the_f = |row: my::Row| {
-            let pp_value: String = my::from_row(row);
-            Some(PageListEntry::new(Title::new(&pp_value, 0)))
-        };
-        result
-            .run_batch_queries(&state, batches)
-            .await?
-            .iter()
-            .filter_map(|row| the_f(row.to_owned()))
-            .for_each(|entry| result.add_entry(entry));
-
-        if let Some(wiki) = original_wiki {
-            result.convert_to_wiki(&wiki, self).await?;
-        }
-        Ok(())
-    }
-
-    pub fn entry_from_entity(entity: &str) -> Option<PageListEntry> {
-        // TODO media-info?
-        match entity.chars().next() {
-            Some('Q') => Some(PageListEntry::new(Title::new(entity, 0))),
-            Some('P') => Some(PageListEntry::new(Title::new(entity, 120))),
-            Some('L') => Some(PageListEntry::new(Title::new(entity, 146))),
-            _ => None,
-        }
-    }
-
-    pub fn usize_option_from_param(&self, key: &str) -> Option<usize> {
-        self.get_param(key)?.parse::<usize>().ok()
-    }
-
-    pub fn get_main_wiki(&self) -> Option<String> {
-        let language = self.get_param_default("lang", "en"); // Fallback
-        let language = self
-            .get_param_default("language", &language)
-            .replace('_', "-");
-        let project = self.get_param_default("project", "wikipedia");
-        self.get_wiki_for_language_project(&language, &project)
-            .map(|wiki| self.state.fix_wiki_name(&wiki))
-    }
-
-    pub fn get_wiki_for_language_project(&self, language: &str, project: &str) -> Option<String> {
-        match (language, project) {
-            (language, "wikipedia") => Some(language.to_owned() + "wiki"),
-            ("commons", _) => Some("commonswiki".to_string()),
-            ("wikidata", _) => Some("wikidatawiki".to_string()),
-            (_, "wikidata") => Some("wikidatawiki".to_string()),
-            (l, p) => {
-                let url = format!("https://{}.{}.org", &l, &p);
-                self.state.site_matrix().get_wiki_for_server_url(&url)
-            }
-        }
     }
 
     pub async fn get_response(&self) -> Result<MyResponse> {
@@ -1484,397 +299,6 @@ impl Platform {
         }
     }
 
-    fn get_sorting_parameters(&self) -> (String, bool) {
-        let mut sortby = self.get_param_blank("sortby");
-        let sort_order = if self.do_output_redlinks() && (sortby.is_empty() || sortby == "none") {
-            sortby = "redlinks".to_string();
-            true
-        } else {
-            self.get_param_blank("sortorder") == "descending"
-        };
-        (sortby, sort_order)
-    }
-
-    pub fn get_param_as_vec(&self, param: &str, separator: &str) -> Vec<String> {
-        match self.get_param(param) {
-            Some(s) => s
-                .split(separator)
-                .map(|s| s.trim().trim_matches('\u{200E}').trim_matches('\u{200F}')) // See https://doc.rust-lang.org/reference/whitespace.html
-                .filter(|s| !s.is_empty())
-                .map(Title::spaces_to_underscores)
-                .collect(),
-            None => vec![],
-        }
-    }
-
-    pub fn is_param_blank(&self, param: &str) -> bool {
-        self.get_param_blank(param).trim().is_empty()
-    }
-
-    pub fn get_param_blank(&self, param: &str) -> String {
-        self.get_param(param).unwrap_or_default()
-    }
-
-    pub fn get_param_default(&self, param: &str, default: &str) -> String {
-        let ret = self.get_param(param).unwrap_or_else(|| default.to_string());
-        if ret.is_empty() {
-            default.to_string()
-        } else {
-            ret
-        }
-    }
-
-    pub fn append_sql(sql: &mut SQLtuple, mut sub: SQLtuple) {
-        sql.0 += &sub.0;
-        sql.1.append(&mut sub.1);
-    }
-
-    /// Returns a tuple with a string containing comma-separated question marks, and the (non-empty) Vec elements
-    pub fn prep_quote(strings: &[String]) -> SQLtuple {
-        let escaped: Vec<MyValue> = strings
-            .par_iter()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| MyValue::Bytes(s.into()))
-            .collect();
-        (Platform::get_placeholders(escaped.len()), escaped)
-    }
-
-    pub fn full_entity_id_to_number(strings: &[String]) -> SQLtuple {
-        let escaped: Vec<MyValue> = strings
-            .par_iter()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| s[1..].to_string())
-            .map(|s| MyValue::Bytes(s.into()))
-            .collect();
-        (Platform::get_placeholders(escaped.len()), escaped)
-    }
-
-    // Generates a string with `len` comma-separated question marks
-    pub fn get_placeholders(len: usize) -> String {
-        let mut questionmarks: Vec<String> = Vec::new();
-        questionmarks.resize(len, "?".to_string());
-        questionmarks.join(",")
-    }
-
-    pub const fn sql_tuple() -> SQLtuple {
-        (String::new(), vec![])
-    }
-
-    fn get_label_sql_helper(&self, ret: &mut SQLtuple, part1: &str, part2: &str) {
-        let mut types: Vec<String> = vec![];
-        if self.has_param(&("cb_labels_".to_owned() + part1 + "_l")) {
-            types.push("1".to_string());
-        }
-        if self.has_param(&("cb_labels_".to_owned() + part1 + "_a")) {
-            types.push("3".to_string());
-        }
-        if self.has_param(&("cb_labels_".to_owned() + part1 + "_d")) {
-            types.push("2".to_string());
-        }
-        if !types.is_empty() {
-            let mut tmp = Self::prep_quote(&types);
-            ret.0 += &(" AND ".to_owned() + part2 + " IN (" + &tmp.0 + ")");
-            ret.1.append(&mut tmp.1);
-        }
-    }
-
-    pub fn get_label_sql(&self) -> SQLtuple {
-        let mut ret: SQLtuple = (String::new(), vec![]);
-        let yes = self.get_param_as_vec("labels_yes", "\n");
-        let any = self.get_param_as_vec("labels_any", "\n");
-        let no = self.get_param_as_vec("labels_no", "\n");
-        if yes.len() + any.len() + no.len() == 0 {
-            return ret;
-        }
-
-        let langs_yes = self.get_param_as_vec("langs_labels_yes", ",");
-        let langs_any = self.get_param_as_vec("langs_labels_any", ",");
-        let langs_no = self.get_param_as_vec("langs_labels_no", ",");
-
-        ret.0 = "SELECT DISTINCT concat('Q',wbit_item_id) AS term_full_entity_id
-            FROM wbt_text,wbt_item_terms wbt_item_terms1,wbt_term_in_lang,wbt_text_in_lang
-            WHERE wbit_term_in_lang_id = wbtl_id
-            AND wbtl_text_in_lang_id = wbxl_id
-            AND wbxl_text_id = wbx_id"
-            .to_string();
-
-        yes.iter().for_each(|s| {
-            if s != "%" {
-                ret.0 += " AND wbx_text LIKE ?";
-                ret.1.push(MyValue::Bytes(s.to_owned().into()));
-            }
-            if !langs_yes.is_empty() {
-                let mut tmp = Self::prep_quote(&langs_yes);
-                ret.0 += &(" AND wbxl_language IN (".to_owned() + &tmp.0 + ")");
-                ret.1.append(&mut tmp.1);
-                self.get_label_sql_helper(&mut ret, "yes", "wbtl_type_id");
-            }
-        });
-
-        if !langs_any.is_empty() {
-            ret.0 += " AND (";
-            let mut first = true;
-            any.iter().for_each(|s| {
-                if first {
-                    first = false;
-                } else {
-                    ret.0 += " OR ";
-                }
-                if s != "%" {
-                    ret.0 += " ( wbx_text LIKE ?";
-                    ret.1.push(MyValue::Bytes(s.to_owned().into()));
-                }
-                if !langs_any.is_empty() {
-                    let mut tmp = Self::prep_quote(&langs_any);
-                    ret.0 += &(" AND wbxl_language IN (".to_owned() + &tmp.0 + ")");
-                    ret.1.append(&mut tmp.1);
-                    self.get_label_sql_helper(&mut ret, "any", "wbtl_type_id");
-                }
-                ret.0 += ")";
-            });
-            ret.0 += ")";
-        }
-
-        no.iter().for_each(|s| {
-            ret.0 += " AND NOT EXISTS (
-                SELECT * FROM
-                wbt_text wbt_text2,
-                wbt_item_terms wbt_item_terms2,
-                wbt_term_in_lang wbt_term_in_lang2,
-                wbt_text_in_lang wbt_text_in_lang2
-                WHERE wbt_item_terms2.wbit_term_in_lang_id = wbt_term_in_lang2.wbtl_id
-                AND wbt_term_in_lang2.wbtl_text_in_lang_id = wbt_text_in_lang2.wbxl_id
-                AND wbt_text_in_lang2.wbxl_text_id = wbt_text2.wbx_id
-                AND wbt_item_terms1.wbit_item_id=wbt_item_terms2.wbit_item_id";
-            // AND wbt_type2.wby_name='item'"; // TODO FIXME? this was always broken?
-            if s != "%" {
-                ret.0 += " AND wbt_text2.wbx_text LIKE ?";
-                ret.1.push(MyValue::Bytes(s.to_owned().into()));
-            }
-            if !langs_no.is_empty() {
-                let mut tmp = Self::prep_quote(&langs_no);
-                ret.0 += &(" AND wbt_type2.wbxl_language IN (".to_owned() + &tmp.0 + ")");
-                ret.1.append(&mut tmp.1);
-                self.get_label_sql_helper(&mut ret, "no", "wbt_term_in_lang2.wbtl_type_id");
-            }
-            ret.0 += ")";
-        });
-        ret
-    }
-
-    fn parse_combination_string(s: &str) -> Combination {
-        match s.trim().to_lowercase().as_str() {
-            "" => return Combination::None,
-            "categories" | "sparql" | "manual" | "pagepile" | "wikidata" | "search" => {
-                return Combination::Source(s.to_string())
-            }
-            _ => {}
-        }
-        let mut parts: Vec<String> = RE_PARSE_COMBINATION
-            .captures_iter(s)
-            .filter_map(|cap| cap.get(0))
-            .map(|s| s.as_str().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        // Problem?
-        if parts.len() < 3 {
-            return Combination::None;
-        }
-
-        let first_part = match parts.first() {
-            Some(part) => part.to_owned(),
-            None => String::new(),
-        };
-        let left = if first_part == "(" {
-            let mut cnt = 0;
-            let mut new_left: Vec<String> = vec![];
-            loop {
-                if parts.is_empty() {
-                    return Combination::None; // Failure to parse
-                }
-                let x = parts.remove(0);
-                if x == "(" {
-                    if cnt > 0 {
-                        new_left.push(x.to_string());
-                    }
-                    cnt += 1;
-                } else if x == ")" {
-                    cnt -= 1;
-                    if cnt == 0 {
-                        break;
-                    } else {
-                        new_left.push(x.to_string());
-                    }
-                } else {
-                    new_left.push(x.to_string());
-                }
-            }
-            new_left.join(" ")
-        } else {
-            parts.remove(0)
-        };
-        if parts.is_empty() {
-            return Self::parse_combination_string(&left);
-        }
-        let comb = parts.remove(0);
-        let left = Box::new(Self::parse_combination_string(&left));
-        let rest = Box::new(Self::parse_combination_string(&parts.join(" ")));
-        match comb.trim().to_lowercase().as_str() {
-            "and" => Combination::Intersection((left, rest)),
-            "or" => Combination::Union((left, rest)),
-            "not" => Combination::Not((left, rest)),
-            _ => Combination::None,
-        }
-    }
-
-    /// Checks is the parameter is set, and non-blank
-    pub fn has_param(&self, param: &str) -> bool {
-        match self.form_parameters().params.get(param) {
-            Some(s) => !s.is_empty(),
-            None => false,
-        }
-    }
-
-    pub fn get_param(&self, param: &str) -> Option<String> {
-        if self.has_param(param) {
-            self.form_parameters()
-                .params
-                .get(param)
-                .map(|s| s.to_string())
-        } else {
-            None
-        }
-    }
-
-    fn get_combination(&self, available_sources: &[String]) -> Combination {
-        match self.get_param("source_combination") {
-            Some(combination_string) => Self::parse_combination_string(&combination_string),
-            None => {
-                let mut comb = Combination::None;
-                for source in available_sources {
-                    if comb == Combination::None {
-                        comb = Combination::Source(source.to_string());
-                    } else {
-                        comb = Combination::Intersection((
-                            Box::new(Combination::Source(source.to_string())),
-                            Box::new(comb),
-                        ));
-                    }
-                }
-                comb
-            }
-        }
-    }
-
-    fn serialize_combine_results(combination: &Combination) -> Result<Vec<CombinationSequential>> {
-        match combination {
-            Combination::Source(s) => Ok(vec![CombinationSequential::Source(s.to_string())]),
-            Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, c) => Self::serialize_combine_results(c),
-                (c, Combination::None) => Self::serialize_combine_results(c),
-                (c, d) => {
-                    let mut ret = vec![];
-                    ret.append(&mut Self::serialize_combine_results(c)?);
-                    ret.append(&mut Self::serialize_combine_results(d)?);
-                    ret.push(CombinationSequential::Union);
-                    Ok(ret)
-                }
-            },
-            Combination::Intersection((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => {
-                    Err(anyhow!("Intersection with Combination::None found"))
-                }
-                (_c, Combination::None) => {
-                    Err(anyhow!("Intersection with Combination::None found"))
-                }
-                (c, d) => {
-                    let mut ret = vec![];
-                    ret.append(&mut Self::serialize_combine_results(c)?);
-                    ret.append(&mut Self::serialize_combine_results(d)?);
-                    ret.push(CombinationSequential::Intersection);
-                    Ok(ret)
-                }
-            },
-            Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => Err(anyhow!("Not with Combination::None found")),
-                (c, Combination::None) => Self::serialize_combine_results(c),
-                (c, d) => {
-                    let mut ret = vec![];
-                    ret.append(&mut Self::serialize_combine_results(c)?);
-                    ret.append(&mut Self::serialize_combine_results(d)?);
-                    ret.push(CombinationSequential::Not);
-                    Ok(ret)
-                }
-            },
-            Combination::None => Err(anyhow!("Combination::None found")),
-        }
-    }
-
-    async fn combine_results(
-        &self,
-        results: &mut HashMap<String, PageList>,
-        combination: Vec<CombinationSequential>,
-    ) -> Result<PageList> {
-        let mut registers: Vec<PageList> = vec![];
-        for command in combination {
-            match command {
-                CombinationSequential::Source(source_key) => match results.remove(&source_key) {
-                    Some(source) => {
-                        registers.push(source);
-                    }
-                    None => return Err(anyhow!("No result for source {source_key}")),
-                },
-                CombinationSequential::Union => {
-                    if registers.len() < 2 {
-                        return Err(anyhow!("combine_results: Not enough registers for Union"));
-                    }
-                    let r2 = registers.pop().ok_or_else(|| {
-                        anyhow!("combine_results: CombinationSequential::Union r1")
-                    })?;
-                    let r1 = registers.pop().ok_or_else(|| {
-                        anyhow!("combine_results: CombinationSequential::Union r2")
-                    })?;
-                    r1.union(&r2, Some(self)).await?;
-                    registers.push(r1);
-                }
-                CombinationSequential::Intersection => {
-                    if registers.len() < 2 {
-                        return Err(anyhow!("combine_results: Not enough registers for Union"));
-                    }
-                    let r2 = registers.pop().ok_or_else(|| {
-                        anyhow!("combine_results: CombinationSequential::Intersection r1")
-                    })?;
-                    let r1 = registers.pop().ok_or_else(|| {
-                        anyhow!("combine_results: CombinationSequential::Intersection r2")
-                    })?;
-                    r1.intersection(&r2, Some(self)).await?;
-                    registers.push(r1);
-                }
-                CombinationSequential::Not => {
-                    if registers.len() < 2 {
-                        return Err(anyhow!("combine_results: Not enough registers for Union"));
-                    }
-                    let r2 = registers
-                        .pop()
-                        .ok_or_else(|| anyhow!("combine_results: CombinationSequential::Not r1"))?;
-                    let r1 = registers
-                        .pop()
-                        .ok_or_else(|| anyhow!("combine_results: CombinationSequential::Not r2"))?;
-                    r1.difference(&r2, Some(self)).await?;
-                    registers.push(r1);
-                }
-            }
-        }
-        if registers.len() == 1 {
-            return registers
-                .pop()
-                .ok_or_else(|| anyhow!("combine_results registers.len()"));
-        }
-        Err(anyhow!("combine_results:{} registers set", registers.len()))
-    }
-
     pub const fn result(&self) -> &Option<PageList> {
         &self.result
     }
@@ -1884,13 +308,20 @@ impl Platform {
     }
 }
 
+// ─── tests ───────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_state::AppState;
+    use crate::form_parameters::FormParameters;
+    use crate::pagelist_entry::{PageListEntry, PageListSort};
     use serde_json::Value;
     use std::env;
     use std::fs::File;
+    use wikimisc::mediawiki::title::Title;
+
+    // ─── helpers ─────────────────────────────────────────────────────────────
 
     async fn get_new_state() -> Arc<AppState> {
         let basedir = env::current_dir()
@@ -1910,13 +341,7 @@ mod tests {
     }
 
     async fn get_state() -> Arc<AppState> {
-        get_new_state().await // TODO use static
-                              /*
-                              lazy_static! {
-                                  static ref STATE: Arc<AppState> = get_new_state();
-                              }
-                              STATE.clone()
-                              */
+        get_new_state().await
     }
 
     async fn run_psid_ext(psid: usize, addendum: &str) -> Result<Platform> {
@@ -1966,131 +391,20 @@ mod tests {
         check_results_for_psid_ext(psid, "", wiki, expected).await;
     }
 
-    fn make_platform_with_params(pairs: Vec<(&str, &str)>) -> Platform {
+    pub(super) fn make_platform_with_params(pairs: Vec<(&str, &str)>) -> Platform {
         let mut params = std::collections::HashMap::new();
         for (k, v) in pairs {
             params.insert(k.to_string(), v.to_string());
         }
         let fp = FormParameters::new_from_pairs(params);
-        // Use a dummy AppState (no DB operations will be called)
         Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
     }
 
-    #[test]
-    fn test_get_param_present() {
-        let p = make_platform_with_params(vec![("format", "json")]);
-        assert_eq!(p.get_param("format"), Some("json".to_string()));
+    fn entries_from_result(result: PageList) -> Vec<PageListEntry> {
+        result.as_vec()
     }
 
-    #[test]
-    fn test_get_param_missing() {
-        let p = make_platform_with_params(vec![]);
-        assert_eq!(p.get_param("nonexistent"), None);
-    }
-
-    #[test]
-    fn test_get_param_empty_value_treated_as_missing() {
-        let p = make_platform_with_params(vec![("somekey", "")]);
-        assert_eq!(p.get_param("somekey"), None);
-    }
-
-    #[test]
-    fn test_has_param() {
-        let p = make_platform_with_params(vec![("format", "json"), ("empty_key", "")]);
-        assert!(p.has_param("format"));
-        assert!(!p.has_param("empty_key"));
-        assert!(!p.has_param("nonexistent"));
-    }
-
-    #[test]
-    fn test_get_param_blank() {
-        let p = make_platform_with_params(vec![("format", "json")]);
-        assert_eq!(p.get_param_blank("format"), "json".to_string());
-        assert_eq!(p.get_param_blank("missing"), "".to_string());
-    }
-
-    #[test]
-    fn test_get_param_default() {
-        let p = make_platform_with_params(vec![("sortby", "title")]);
-        assert_eq!(
-            p.get_param_default("sortby", "default"),
-            "title".to_string()
-        );
-        assert_eq!(
-            p.get_param_default("missing", "fallback"),
-            "fallback".to_string()
-        );
-        // Empty value should use default
-        let p2 = make_platform_with_params(vec![("key", "")]);
-        assert_eq!(
-            p2.get_param_default("key", "mydefault"),
-            "mydefault".to_string()
-        );
-    }
-
-    #[test]
-    fn test_get_param_as_vec() {
-        let p = make_platform_with_params(vec![("cats", "Cat1\nCat2\nCat3")]);
-        let v = p.get_param_as_vec("cats", "\n");
-        assert_eq!(v.len(), 3);
-        assert!(v.contains(&"Cat1".to_string()));
-    }
-
-    #[test]
-    fn test_prep_quote_basic() {
-        let strings = vec!["foo".to_string(), "bar".to_string(), "baz".to_string()];
-        let (placeholders, values) = Platform::prep_quote(&strings);
-        assert_eq!(placeholders, "?,?,?");
-        assert_eq!(values.len(), 3);
-    }
-
-    #[test]
-    fn test_prep_quote_empty_filtered() {
-        let strings = vec![
-            "foo".to_string(),
-            "".to_string(),
-            "  ".to_string(),
-            "bar".to_string(),
-        ];
-        let (placeholders, values) = Platform::prep_quote(&strings);
-        assert_eq!(placeholders, "?,?");
-        assert_eq!(values.len(), 2);
-    }
-
-    #[test]
-    fn test_prep_quote_empty_input() {
-        let strings: Vec<String> = vec![];
-        let (placeholders, values) = Platform::prep_quote(&strings);
-        assert_eq!(placeholders, "");
-        assert_eq!(values.len(), 0);
-    }
-
-    #[test]
-    fn test_get_placeholders() {
-        assert_eq!(Platform::get_placeholders(0), "");
-        assert_eq!(Platform::get_placeholders(1), "?");
-        assert_eq!(Platform::get_placeholders(3), "?,?,?");
-        assert_eq!(Platform::get_placeholders(5), "?,?,?,?,?");
-    }
-
-    #[test]
-    fn test_append_sql() {
-        let mut sql = ("SELECT * FROM page WHERE ".to_string(), vec![]);
-        let sub = (
-            "page_title=?".to_string(),
-            vec![mysql_async::Value::Bytes("Foo".into())],
-        );
-        Platform::append_sql(&mut sql, sub);
-        assert_eq!(sql.0, "SELECT * FROM page WHERE page_title=?");
-        assert_eq!(sql.1.len(), 1);
-    }
-
-    #[test]
-    fn test_sql_tuple_empty() {
-        let t = Platform::sql_tuple();
-        assert_eq!(t.0, "");
-        assert!(t.1.is_empty());
-    }
+    // ─── unit tests ───────────────────────────────────────────────────────────
 
     #[test]
     fn test_warnings() {
@@ -2108,18 +422,39 @@ mod tests {
         assert!(!p.do_output_redlinks());
     }
 
-    #[tokio::test]
-    async fn test_parse_combination_string() {
-        let res = Platform::parse_combination_string("categories NOT (sparql OR pagepile)");
-        let expected = Combination::Not((
-            Box::new(Combination::Source("categories".to_string())),
-            Box::new(Combination::Union((
-                Box::new(Combination::Source("sparql".to_string())),
-                Box::new(Combination::Source("pagepile".to_string())),
-            ))),
-        ));
-        assert_eq!(res, expected);
+    #[test]
+    fn test_label_exists_empty() {
+        let p = make_platform_with_params(vec![]);
+        assert!(!p.label_exists("anything"));
     }
+
+    #[test]
+    fn test_label_exists_after_warn_does_not_add_label() {
+        let p = make_platform_with_params(vec![]);
+        p.warn("foo".to_string()).unwrap();
+        // warn() adds to warnings, not existing_labels
+        assert!(!p.label_exists("foo"));
+    }
+
+    #[test]
+    fn test_combination_default_is_none() {
+        let p = make_platform_with_params(vec![]);
+        assert_eq!(p.combination(), Combination::None);
+    }
+
+    #[test]
+    fn test_query_time_default_is_none() {
+        let p = make_platform_with_params(vec![]);
+        assert!(p.query_time().is_none());
+    }
+
+    #[test]
+    fn test_result_default_is_none() {
+        let p = make_platform_with_params(vec![]);
+        assert!(p.result().is_none());
+    }
+
+    // ─── integration tests ───────────────────────────────────────────────────
 
     #[tokio::test]
     async fn test_manual_list_enwiki_use_props() {
@@ -2206,7 +541,7 @@ mod tests {
             entry.get_page_image(),
             Some("Cambridge_-_Kings_College_vue_des_backs.jpg".to_string())
         );
-        assert_eq!(*entry.disambiguation(), TriState::No);
+        assert_eq!(*entry.disambiguation(), crate::pagelist_entry::TriState::No);
         assert!(entry.incoming_links().unwrap() > 7500);
         assert!(entry.get_coordinates().is_some());
     }
@@ -2310,10 +645,6 @@ mod tests {
     // async fn test_en_categories_sparql_common_wiki_other() {
     //     check_results_for_psid(15960820, "frwiki", vec![Title::new("Magnus Manske", 0)]).await;
     // }
-
-    fn entries_from_result(result: PageList) -> Vec<PageListEntry> {
-        result.as_vec()
-    }
 
     // Deactivated: connection to enwikiquote_p required
     // #[tokio::test]
