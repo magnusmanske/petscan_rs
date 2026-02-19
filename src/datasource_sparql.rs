@@ -1,7 +1,7 @@
 use crate::datasource::DataSource;
 use crate::pagelist::PageList;
 use crate::platform::Platform;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::value::Value;
 use std::collections::HashMap;
@@ -84,12 +84,11 @@ impl SparqlServer {
                         binding = "{".to_string() + &binding + "}";
                         let j: Value = serde_json::from_str(&binding).unwrap_or_else(|_| json!({}));
                         binding.clear();
-                        if let Some(entity_url) = j[&first_var]["value"].as_str() {
-                            if let Ok(entity) = api.extract_entity_from_uri(entity_url) {
-                                if let Some(entry) = Platform::entry_from_entity(&entity) {
-                                    ret.add_entry(entry);
-                                }
-                            }
+                        if let Some(entity_url) = j[&first_var]["value"].as_str()
+                            && let Ok(entity) = api.extract_entity_from_uri(entity_url)
+                            && let Some(entry) = Platform::entry_from_entity(&entity)
+                        {
+                            ret.add_entry(entry);
                         }
                     }
                     _ => {}

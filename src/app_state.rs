@@ -488,10 +488,8 @@ impl AppState {
         if !self.is_shutting_down() {
             return;
         }
-        if let Ok(tr) = self.threads_running.read() {
-            if *tr == 0 {
+        if let Ok(tr) = self.threads_running.read() && *tr == 0 {
                 ::std::process::exit(0);
-            }
         }
     }
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use regex::Regex;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -7,9 +7,8 @@ use std::fmt;
 use std::sync::LazyLock;
 use url::Url;
 
-static RE_NS_FROM_PARAMS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^ns\[(\d+)\]$"#).expect("FormParameters::ns_from_params:RE")
-});
+static RE_NS_FROM_PARAMS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^ns\[(\d+)\]$"#).expect("FormParameters::ns_from_params:RE"));
 
 #[derive(Debug, Clone, Default)]
 pub struct FormParameters {
@@ -147,12 +146,11 @@ impl FormParameters {
         if self.has_param_with_value("manual_list_wiki")
             && !self.has_param_with_value("manual_list")
             && !self.has_param_with_value("common_wiki_other")
+            && let Some(wiki) = self.params.get("manual_list_wiki")
         {
-            if let Some(wiki) = self.params.get("manual_list_wiki") {
-                let wiki = wiki.to_owned();
-                self.set_param("common_wiki_other", &wiki);
-                self.set_param("manual_list_wiki", "");
-            }
+            let wiki = wiki.to_owned();
+            self.set_param("common_wiki_other", &wiki);
+            self.set_param("manual_list_wiki", "");
         }
 
         // query originally from QuickIntersection

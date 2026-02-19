@@ -3,7 +3,7 @@ use crate::platform::MyResponse;
 use crate::render::Render;
 use crate::render_params::RenderParams;
 use crate::{pagelist_entry::PageListEntry, platform::Platform};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -143,9 +143,7 @@ impl RenderJSON {
         let entry_data: Vec<Value> = if params.json_sparse() {
             entries
                 .iter()
-                .filter_map(|entry| {
-                    Some(json!(entry.title().full_with_underscores(params.api())?))
-                })
+                .filter_map(|entry| Some(json!(entry.title().full_with_underscores(params.api())?)))
                 .collect()
         } else {
             entries.iter().map(|entry| {
@@ -226,10 +224,10 @@ impl RenderJSON {
                         "page_len" : entry.page_bytes().unwrap_or(0),
                         //"meta" : {}
                     });
-                    if params.giu() || params.file_usage() {
-                        if let Some(fu) = Self::get_file_usage(entry) {
-                            o["giu"] = fu;
-                        }
+                    if (params.giu() || params.file_usage())
+                        && let Some(fu) = Self::get_file_usage(entry)
+                    {
+                        o["giu"] = fu;
                     }
                     Self::add_metadata(&mut o, entry, header);
                     if let Some(q) = entry.get_wikidata_item() {
@@ -290,20 +288,21 @@ impl RenderJSON {
         match &entry.get_file_info() {
             Some(fi) => match fi.file_usage.is_empty() {
                 true => None,
-                false => Some(json!(fi
-                    .file_usage
-                    .iter()
-                    .map(|fu| {
-                        format!(
-                            "{}:{}:{}:{}",
-                            fu.wiki(),
-                            fu.title().namespace_id(),
-                            fu.namespace_name(),
-                            fu.title().with_underscores()
-                        )
-                    })
-                    .collect::<Vec<String>>()
-                    .join("|"))),
+                false => Some(json!(
+                    fi.file_usage
+                        .iter()
+                        .map(|fu| {
+                            format!(
+                                "{}:{}:{}:{}",
+                                fu.wiki(),
+                                fu.title().namespace_id(),
+                                fu.namespace_name(),
+                                fu.title().with_underscores()
+                            )
+                        })
+                        .collect::<Vec<String>>()
+                        .join("|")
+                )),
             },
             None => None,
         }

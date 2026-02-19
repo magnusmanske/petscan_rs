@@ -4,17 +4,17 @@ use crate::datasource::SQLtuple;
 use crate::pagelist::PageList;
 use crate::pagelist_entry::LinkCount;
 use crate::pagelist_entry::PageListEntry;
-use crate::platform::{Platform, PAGE_BATCH_SIZE};
-use anyhow::{anyhow, Result};
+use crate::platform::{PAGE_BATCH_SIZE, Platform};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use chrono::prelude::*;
 use chrono::Duration;
+use chrono::prelude::*;
 use core::ops::Sub;
 use futures::future::join_all;
 use mysql_async as my;
+use mysql_async::Value as MyValue;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
-use mysql_async::Value as MyValue;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use wikimisc::mediawiki::api::{Api, NamespaceID};
@@ -363,7 +363,9 @@ impl SourceDatabase {
             }
             // println!("Depth {remaining_depth} adding {} new sub-categories",categories_new.len());
             if categories_done.len() > MAX_SUBCATEGORIES_IN_TREE {
-                return Err(anyhow!("Sub-categories for \"{new_title}\" exceed {MAX_SUBCATEGORIES_IN_TREE}, please limit that category depth, or fix the category tree"));
+                return Err(anyhow!(
+                    "Sub-categories for \"{new_title}\" exceed {MAX_SUBCATEGORIES_IN_TREE}, please limit that category depth, or fix the category tree"
+                ));
             }
             categories_todo = categories_new.drain().collect();
         }
@@ -425,8 +427,7 @@ impl SourceDatabase {
             } else {
                 " AND p.page_id IN "
             };
-            sql.0 +=
-                "(SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
+            sql.0 += "(SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
         }
 
         Self::sql_in(input, &mut sql);
@@ -615,10 +616,11 @@ impl SourceDatabase {
         primary_pagelist: Option<&PageList>,
     ) -> Result<DsdbParams> {
         // Take wiki from given pagelist
-        if let Some(pl) = primary_pagelist {
-            if self.params.wiki.is_none() && pl.wiki().is_some() {
-                self.params.wiki = pl.wiki();
-            }
+        if let Some(pl) = primary_pagelist
+            && self.params.wiki.is_none()
+            && pl.wiki().is_some()
+        {
+            self.params.wiki = pl.wiki();
         }
 
         // Paranoia
@@ -874,7 +876,7 @@ impl SourceDatabase {
                     params.is_before_after_done = true;
                     Platform::append_sql(&mut sql, params.sql_before_after.clone());
                 }
-                sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')" ;
+                sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')";
             }
             "templates" | "links_from" => {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
@@ -1009,7 +1011,7 @@ impl SourceDatabase {
     ) {
         // Speed up "Only pages without Wikidata items"
         if primary != "no_wikidata" && self.params.page_wikidata_item == "without" {
-            sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')" ;
+            sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')";
         }
     }
 
@@ -1063,7 +1065,9 @@ impl SourceDatabase {
             sql.0 += &format!(" AND p.page_len<={i}");
         }
         if let Some(i) = self.params.since_rev0 {
-            sql.0 += &format!(" AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*{i}/100");
+            sql.0 += &format!(
+                " AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*{i}/100"
+            );
         }
     }
 
@@ -1072,7 +1076,7 @@ impl SourceDatabase {
         // TODO FIXME get local "Soft_redirect" page title from Wikidata Q4844001
         let soft_redirects_page = "Soft_redirect";
         if "yes" == self.params.soft_redirects.as_str() {
-            sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)" ;
+            sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)";
             sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
         }
         match self.params.redirects.as_str() {
@@ -1081,8 +1085,12 @@ impl SourceDatabase {
             _ => {}
         }
         match self.params.disambiguation_pages.as_str() {
-            "yes" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')",
-            "no" => sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')",
+            "yes" => {
+                sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')";
+            }
+            "no" => {
+                sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')";
+            }
             _ => {}
         }
     }
@@ -1090,21 +1098,29 @@ impl SourceDatabase {
     fn get_pages_for_primary_last_edit(&self, sql: &mut (String, Vec<MyValue>)) {
         // Last edit
         match self.params.last_edit_anon.as_str() {
-            "yes" => sql.0 +=" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NULL)" ,
-            "no" => sql.0 +=" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NOT NULL)" ,
+            "yes" => {
+                sql.0 += " AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NULL)";
+            }
+            "no" => {
+                sql.0 += " AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NOT NULL)";
+            }
             _ => {}
         }
         match self.params.last_edit_bot.as_str() {
-            "yes" => sql.0 +=" AND EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')" ,
-            "no" => sql.0 +=" AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')" ,
+            "yes" => {
+                sql.0 += " AND EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')";
+            }
+            "no" => {
+                sql.0 += " AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')";
+            }
             _ => {}
         }
         match self.params.last_edit_flagged.as_str() {
-            "yes" => sql.0 +=
-                " AND NOT EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)",
+            "yes" => {
+                sql.0 += " AND NOT EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)";
+            }
             "no" => {
-                sql.0 +=
-                    " AND EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)";
+                sql.0 += " AND EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)";
             }
             _ => {}
         }
@@ -1117,7 +1133,7 @@ impl SourceDatabase {
                 || self.params.ores_prob_from.is_some()
                 || self.params.ores_prob_to.is_some())
         {
-            sql.0 += " AND EXISTS (SELECT * FROM ores_classification WHERE p.page_latest=oresc_rev AND oresc_model IN (SELECT oresm_id FROM ores_model WHERE oresm_is_current=1 AND oresm_name=?)" ;
+            sql.0 += " AND EXISTS (SELECT * FROM ores_classification WHERE p.page_latest=oresc_rev AND oresc_model IN (SELECT oresm_id FROM ores_model WHERE oresm_is_current=1 AND oresm_name=?)";
             sql.1
                 .push(MyValue::Bytes(self.params.ores_type.to_owned().into()));
             match self.params.ores_prediction.as_str() {
@@ -1138,10 +1154,18 @@ impl SourceDatabase {
     fn get_pages_for_primary_lead_image(&self, sql: &mut (String, Vec<MyValue>)) {
         // Lead image
         match self.params.page_image.as_str() {
-            "yes" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))" ,
-            "free" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free')" ,
-            "nonfree" => sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image')" ,
-            "no" => sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))" ,
+            "yes" => {
+                sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))";
+            }
+            "free" => {
+                sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free')";
+            }
+            "nonfree" => {
+                sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image')";
+            }
+            "no" => {
+                sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))";
+            }
             _ => {}
         }
     }
@@ -1254,11 +1278,9 @@ impl SourceDatabase {
             } else {
                 #[allow(clippy::collapsible_else_if)]
                 if state.using_new_categorylinks_table() {
-                    sql.0 +=
-                " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
+                    sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
                 } else {
-                    sql.0 +=
-                    " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
+                    sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
                 }
             }
             Self::sql_in(&cats, sql);
@@ -1361,10 +1383,12 @@ mod tests {
         let result = simulate_category_query(params).await.unwrap();
         assert_eq!(result.wiki(), Some("enwiki".to_string()));
         assert!(result.len() < 5); // This may change as more articles are written/categories added, please adjust!
-        assert!(result
-            .as_vec()
-            .iter()
-            .any(|entry| entry.title().pretty() == "Magnus Manske"));
+        assert!(
+            result
+                .as_vec()
+                .iter()
+                .any(|entry| entry.title().pretty() == "Magnus Manske")
+        );
     }
 
     #[tokio::test]

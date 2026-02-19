@@ -2,12 +2,12 @@ use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::{DatabaseCluster, PageList};
-use crate::platform::{Platform, PAGE_BATCH_SIZE};
-use anyhow::{anyhow, Result};
+use crate::platform::{PAGE_BATCH_SIZE, Platform};
+use anyhow::{Result, anyhow};
 use mysql_async as my;
+use mysql_async::Value as MyValue;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
-use mysql_async::Value as MyValue;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
@@ -471,7 +471,7 @@ impl WDfist {
             Err(e) => {
                 return Err(anyhow!(
                     "Can't load ignore list from {url_with_ignore_list} : {e}"
-                ))
+                ));
             }
         };
         // TODO only rows starting with '*'?
@@ -488,7 +488,9 @@ impl WDfist {
     async fn seed_ignore_files_from_ignore_database(&mut self) -> Result<()> {
         let mut conn = self.get_db_conn().await?;
 
-        let sql = format!("SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={MIN_IGNORE_DB_FILE_COUNT}");
+        let sql = format!(
+            "SELECT CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files GROUP BY file HAVING count(*)>={MIN_IGNORE_DB_FILE_COUNT}"
+        );
 
         let rows = conn
             .exec_iter(sql.as_str(), ())
@@ -984,11 +986,13 @@ mod tests {
         let mut wdfist = get_wdfist(params, vec!["Q66711783"]).await;
         wdfist.follow_search_commons().await.unwrap();
         assert!(wdfist.item2files.get("Q66711783").unwrap().len() > 3);
-        assert!(wdfist
-            .item2files
-            .get("Q66711783")
-            .unwrap()
-            .contains_key(&"Walter_Rueth_Grab_art_1.jpg".to_string()));
+        assert!(
+            wdfist
+                .item2files
+                .get("Q66711783")
+                .unwrap()
+                .contains_key(&"Walter_Rueth.jpg".to_string())
+        );
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::form_parameters::FormParameters;
 use crate::platform::Platform;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde_json::Value;
 use std::env;
 use std::fs::File;
@@ -31,15 +31,15 @@ pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<()> {
     form_parameters.params.insert("format".into(), format);
 
     // Load PSID if set
-    if let Some(psid) = form_parameters.params.get("psid") {
-        if !psid.trim().is_empty() {
-            match app_state.get_query_from_psid(&psid.to_string()).await {
-                Ok(psid_query) => {
-                    let psid_params = FormParameters::outcome_from_query(&psid_query)?;
-                    form_parameters.rebase(&psid_params);
-                }
-                Err(e) => return Err(e),
+    if let Some(psid) = form_parameters.params.get("psid")
+        && !psid.trim().is_empty()
+    {
+        match app_state.get_query_from_psid(&psid.to_string()).await {
+            Ok(psid_query) => {
+                let psid_params = FormParameters::outcome_from_query(&psid_query)?;
+                form_parameters.rebase(&psid_params);
             }
+            Err(e) => return Err(e),
         }
     }
 

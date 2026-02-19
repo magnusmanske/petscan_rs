@@ -7,7 +7,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Bytes};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{header, Method, Request, Response, StatusCode};
+use hyper::{Method, Request, Response, StatusCode, header};
 use hyper_util::rt::TokioIo;
 use serde_json::Value;
 use std::convert::Infallible;
@@ -92,10 +92,10 @@ impl WebServer {
         let path = req.uri().path().to_string();
 
         // URL GET query
-        if let Some(query) = req.uri().query() {
-            if !query.is_empty() {
-                return self.process_from_query(query).await;
-            }
+        if let Some(query) = req.uri().query()
+            && !query.is_empty()
+        {
+            return self.process_from_query(query).await;
         };
 
         // POST
@@ -110,9 +110,7 @@ impl WebServer {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("Failed to read POST body: {e}");
-                    let mut resp = Response::new(Full::from(
-                        b"Internal Server Error".as_ref(),
-                    ));
+                    let mut resp = Response::new(Full::from(b"Internal Server Error".as_ref()));
                     *resp.status_mut() = hyper::StatusCode::INTERNAL_SERVER_ERROR;
                     return Ok(resp);
                 }
@@ -150,10 +148,10 @@ impl WebServer {
         // Restart command?
         if let Some(code) = form_parameters.params.get("restart") {
             let given_code = code.to_string();
-            if let Some(config_code) = self.app_state.get_restart_code() {
-                if given_code == config_code {
-                    self.app_state.shut_down();
-                }
+            if let Some(config_code) = self.app_state.get_restart_code()
+                && given_code == config_code
+            {
+                self.app_state.shut_down();
             }
         }
 
@@ -181,23 +179,23 @@ impl WebServer {
 
         // "psid" parameter? Load, and patch in, existing query
         let mut single_psid: Option<u64> = None;
-        if let Some(psid) = form_parameters.params.get("psid") {
-            if !psid.trim().is_empty() {
-                if form_parameters.params.len() == 1 {
-                    single_psid = psid.parse::<u64>().ok();
+        if let Some(psid) = form_parameters.params.get("psid")
+            && !psid.trim().is_empty()
+        {
+            if form_parameters.params.len() == 1 {
+                single_psid = psid.parse::<u64>().ok();
+            }
+            match self.app_state.get_query_from_psid(&psid.to_string()).await {
+                Ok(psid_query) => {
+                    let psid_params = match FormParameters::outcome_from_query(&psid_query) {
+                        Ok(pp) => pp,
+                        Err(e) => {
+                            return self.app_state.render_error(e.to_string(), &form_parameters);
+                        }
+                    };
+                    form_parameters.rebase(&psid_params);
                 }
-                match self.app_state.get_query_from_psid(&psid.to_string()).await {
-                    Ok(psid_query) => {
-                        let psid_params = match FormParameters::outcome_from_query(&psid_query) {
-                            Ok(pp) => pp,
-                            Err(e) => {
-                                return self.app_state.render_error(e.to_string(), &form_parameters)
-                            }
-                        };
-                        form_parameters.rebase(&psid_params);
-                    }
-                    Err(e) => return self.app_state.render_error(e.to_string(), &form_parameters),
-                }
+                Err(e) => return self.app_state.render_error(e.to_string(), &form_parameters),
             }
         }
 

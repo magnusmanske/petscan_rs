@@ -1,7 +1,7 @@
 use crate::combination::{Combination, CombinationSequential};
 use crate::pagelist::PageList;
 use crate::platform::Platform;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -12,11 +12,38 @@ pub(super) static RE_PARSE_COMBINATION: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 impl Platform {
+    /// Extracts the content between the leading `(` and matching `)` from `parts`,
+    /// consuming tokens from `parts` as it goes. Returns `None` on unbalanced parens.
+    fn extract_parenthesized(parts: &mut Vec<String>) -> Option<String> {
+        let mut depth: usize = 0;
+        let mut inner: Vec<String> = vec![];
+        loop {
+            let token = parts.first()?.clone();
+            parts.remove(0);
+            match token.as_str() {
+                "(" => {
+                    if depth > 0 {
+                        inner.push(token);
+                    }
+                    depth += 1;
+                }
+                ")" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(inner.join(" "));
+                    }
+                    inner.push(token);
+                }
+                _ => inner.push(token),
+            }
+        }
+    }
+
     pub(super) fn parse_combination_string(s: &str) -> Combination {
         match s.trim().to_lowercase().as_str() {
             "" => return Combination::None,
             "categories" | "sparql" | "manual" | "pagepile" | "wikidata" | "search" => {
-                return Combination::Source(s.to_string())
+                return Combination::Source(s.to_string());
             }
             _ => {}
         }
@@ -26,43 +53,20 @@ impl Platform {
             .map(|s| s.as_str().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        // Problem?
+
         if parts.len() < 3 {
             return Combination::None;
         }
 
-        let first_part = match parts.first() {
-            Some(part) => part.to_owned(),
-            None => String::new(),
-        };
-        let left = if first_part == "(" {
-            let mut cnt = 0;
-            let mut new_left: Vec<String> = vec![];
-            loop {
-                if parts.is_empty() {
-                    return Combination::None; // Failure to parse
-                }
-                let x = parts.remove(0);
-                if x == "(" {
-                    if cnt > 0 {
-                        new_left.push(x.to_string());
-                    }
-                    cnt += 1;
-                } else if x == ")" {
-                    cnt -= 1;
-                    if cnt == 0 {
-                        break;
-                    } else {
-                        new_left.push(x.to_string());
-                    }
-                } else {
-                    new_left.push(x.to_string());
-                }
+        let left = if parts.first().map(|s2| s2.as_str()) == Some("(") {
+            match Self::extract_parenthesized(&mut parts) {
+                Some(inner) => inner,
+                None => return Combination::None,
             }
-            new_left.join(" ")
         } else {
             parts.remove(0)
         };
+
         if parts.is_empty() {
             return Self::parse_combination_string(&left);
         }
@@ -97,50 +101,76 @@ impl Platform {
         }
     }
 
+    /// Serializes a two-child combination node (Intersection / Union / Not).
+    /// For `None`-child shortcuts:
+    ///   - `allow_none_right`: if the right child is `None`, return just the left serialization.
+    ///   - Any `None` child that is not covered by the above returns `Err`.
+    fn serialize_binary_combination(
+        a: &Combination,
+        b: &Combination,
+        op: CombinationSequential,
+        allow_none_right: bool,
+    ) -> Result<Vec<CombinationSequential>> {
+        match (a, b) {
+            (Combination::None, _) => Err(anyhow!("{op:?} with left Combination::None found")),
+            (c, Combination::None) if allow_none_right => Self::serialize_combine_results(c),
+            (_, Combination::None) => Err(anyhow!("{op:?} with right Combination::None found")),
+            (c, d) => {
+                let mut ret = Self::serialize_combine_results(c)?;
+                ret.append(&mut Self::serialize_combine_results(d)?);
+                ret.push(op);
+                Ok(ret)
+            }
+        }
+    }
+
     pub(super) fn serialize_combine_results(
         combination: &Combination,
     ) -> Result<Vec<CombinationSequential>> {
         match combination {
             Combination::Source(s) => Ok(vec![CombinationSequential::Source(s.to_string())]),
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, c) => Self::serialize_combine_results(c),
-                (c, Combination::None) => Self::serialize_combine_results(c),
-                (c, d) => {
-                    let mut ret = vec![];
-                    ret.append(&mut Self::serialize_combine_results(c)?);
-                    ret.append(&mut Self::serialize_combine_results(d)?);
-                    ret.push(CombinationSequential::Union);
-                    Ok(ret)
-                }
-            },
-            Combination::Intersection((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => {
-                    Err(anyhow!("Intersection with Combination::None found"))
-                }
-                (_c, Combination::None) => {
-                    Err(anyhow!("Intersection with Combination::None found"))
+                // Either side being None collapses the Union to the other side
+                (Combination::None, c) | (c, Combination::None) => {
+                    Self::serialize_combine_results(c)
                 }
                 (c, d) => {
-                    let mut ret = vec![];
-                    ret.append(&mut Self::serialize_combine_results(c)?);
-                    ret.append(&mut Self::serialize_combine_results(d)?);
-                    ret.push(CombinationSequential::Intersection);
-                    Ok(ret)
+                    Self::serialize_binary_combination(c, d, CombinationSequential::Union, false)
                 }
             },
-            Combination::Not((a, b)) => match (a.as_ref(), b.as_ref()) {
-                (Combination::None, _c) => Err(anyhow!("Not with Combination::None found")),
-                (c, Combination::None) => Self::serialize_combine_results(c),
-                (c, d) => {
-                    let mut ret = vec![];
-                    ret.append(&mut Self::serialize_combine_results(c)?);
-                    ret.append(&mut Self::serialize_combine_results(d)?);
-                    ret.push(CombinationSequential::Not);
-                    Ok(ret)
-                }
-            },
+            Combination::Intersection((a, b)) => Self::serialize_binary_combination(
+                a.as_ref(),
+                b.as_ref(),
+                CombinationSequential::Intersection,
+                false,
+            ),
+            Combination::Not((a, b)) => Self::serialize_binary_combination(
+                a.as_ref(),
+                b.as_ref(),
+                CombinationSequential::Not,
+                true, // Not(x, None) => just x
+            ),
             Combination::None => Err(anyhow!("Combination::None found")),
         }
+    }
+
+    /// Pops two registers and returns `(r1, r2)`, or an error if fewer than 2 are available.
+    async fn pop_two_registers(
+        registers: &mut Vec<PageList>,
+        op_name: &str,
+    ) -> Result<(PageList, PageList)> {
+        if registers.len() < 2 {
+            return Err(anyhow!(
+                "combine_results: Not enough registers for {op_name}"
+            ));
+        }
+        let r2 = registers
+            .pop()
+            .ok_or_else(|| anyhow!("combine_results: {op_name} pop r2"))?;
+        let r1 = registers
+            .pop()
+            .ok_or_else(|| anyhow!("combine_results: {op_name} pop r1"))?;
+        Ok((r1, r2))
     }
 
     pub(super) async fn combine_results(
@@ -151,48 +181,24 @@ impl Platform {
         let mut registers: Vec<PageList> = vec![];
         for command in combination {
             match command {
-                CombinationSequential::Source(source_key) => match results.remove(&source_key) {
-                    Some(source) => {
-                        registers.push(source);
-                    }
-                    None => return Err(anyhow!("No result for source {source_key}")),
-                },
+                CombinationSequential::Source(source_key) => {
+                    let source = results
+                        .remove(&source_key)
+                        .ok_or_else(|| anyhow!("No result for source {source_key}"))?;
+                    registers.push(source);
+                }
                 CombinationSequential::Union => {
-                    if registers.len() < 2 {
-                        return Err(anyhow!("combine_results: Not enough registers for Union"));
-                    }
-                    let r2 = registers.pop().ok_or_else(|| {
-                        anyhow!("combine_results: CombinationSequential::Union r1")
-                    })?;
-                    let r1 = registers.pop().ok_or_else(|| {
-                        anyhow!("combine_results: CombinationSequential::Union r2")
-                    })?;
+                    let (r1, r2) = Self::pop_two_registers(&mut registers, "Union").await?;
                     r1.union(&r2, Some(self)).await?;
                     registers.push(r1);
                 }
                 CombinationSequential::Intersection => {
-                    if registers.len() < 2 {
-                        return Err(anyhow!("combine_results: Not enough registers for Union"));
-                    }
-                    let r2 = registers.pop().ok_or_else(|| {
-                        anyhow!("combine_results: CombinationSequential::Intersection r1")
-                    })?;
-                    let r1 = registers.pop().ok_or_else(|| {
-                        anyhow!("combine_results: CombinationSequential::Intersection r2")
-                    })?;
+                    let (r1, r2) = Self::pop_two_registers(&mut registers, "Intersection").await?;
                     r1.intersection(&r2, Some(self)).await?;
                     registers.push(r1);
                 }
                 CombinationSequential::Not => {
-                    if registers.len() < 2 {
-                        return Err(anyhow!("combine_results: Not enough registers for Union"));
-                    }
-                    let r2 = registers
-                        .pop()
-                        .ok_or_else(|| anyhow!("combine_results: CombinationSequential::Not r1"))?;
-                    let r1 = registers
-                        .pop()
-                        .ok_or_else(|| anyhow!("combine_results: CombinationSequential::Not r2"))?;
+                    let (r1, r2) = Self::pop_two_registers(&mut registers, "Not").await?;
                     r1.difference(&r2, Some(self)).await?;
                     registers.push(r1);
                 }
@@ -201,9 +207,12 @@ impl Platform {
         if registers.len() == 1 {
             return registers
                 .pop()
-                .ok_or_else(|| anyhow!("combine_results registers.len()"));
+                .ok_or_else(|| anyhow!("combine_results: registers unexpectedly empty"));
         }
-        Err(anyhow!("combine_results:{} registers set", registers.len()))
+        Err(anyhow!(
+            "combine_results: {} registers set",
+            registers.len()
+        ))
     }
 }
 
@@ -430,5 +439,45 @@ mod tests {
             Box::new(Combination::Source("cats".to_string())),
         ));
         assert!(Platform::serialize_combine_results(&comb).is_err());
+    }
+
+    #[test]
+    fn test_extract_parenthesized_simple() {
+        let mut parts = vec![
+            "(".to_string(),
+            "sparql".to_string(),
+            "OR".to_string(),
+            "pagepile".to_string(),
+            ")".to_string(),
+            "AND".to_string(),
+            "cats".to_string(),
+        ];
+        let inner = Platform::extract_parenthesized(&mut parts).unwrap();
+        assert_eq!(inner, "sparql OR pagepile");
+        // Remaining parts should be the ones after the closing paren
+        assert_eq!(parts, vec!["AND", "cats"]);
+    }
+
+    #[test]
+    fn test_extract_parenthesized_nested() {
+        let mut parts = vec![
+            "(".to_string(),
+            "(".to_string(),
+            "a".to_string(),
+            ")".to_string(),
+            "OR".to_string(),
+            "b".to_string(),
+            ")".to_string(),
+        ];
+        let inner = Platform::extract_parenthesized(&mut parts).unwrap();
+        assert_eq!(inner, "( a ) OR b");
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn test_extract_parenthesized_empty_returns_none_on_missing_open() {
+        let mut parts: Vec<String> = vec![];
+        let result = Platform::extract_parenthesized(&mut parts);
+        assert!(result.is_none());
     }
 }
