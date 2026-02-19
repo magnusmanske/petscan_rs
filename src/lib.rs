@@ -17,7 +17,7 @@
     missing_debug_implementations,
     // clippy::missing_errors_doc,
     // clippy::missing_panics_doc,
-    clippy::mod_module_files,
+
     non_ascii_idents,
     noop_method_call,
     // clippy::option_if_let_else,

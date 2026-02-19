@@ -3,7 +3,7 @@ use crate::combination::Combination;
 use crate::content_type::ContentType;
 use crate::datasource::DataSource;
 use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
-use crate::datasource::labels::SourceLabels;
+
 use crate::datasource::manual::SourceManual;
 use crate::datasource::pagepile::SourcePagePile;
 use crate::datasource::search::SourceSearch;
@@ -34,10 +34,9 @@ use wikimisc::mediawiki::api::NamespaceID;
 pub static PAGE_BATCH_SIZE: usize = 15000;
 
 mod combine;
-mod label_sql;
+
 mod params;
 mod process;
-mod sql_utils;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MyResponse {
@@ -161,7 +160,7 @@ impl Platform {
         let mut s_pagepile = SourcePagePile::default();
         let mut s_search = SourceSearch::default();
         let mut s_wikidata = SourceWikidata::default();
-        let mut s_labels = SourceLabels::default();
+
         let mut s_sitelinks = SourceSitelinks::new();
 
         let mut futures = vec![];
@@ -195,10 +194,7 @@ impl Platform {
             available_sources.push(s_sitelinks.name());
             futures.push(s_sitelinks.run(self));
         }
-        if futures.is_empty() && s_labels.can_run(self) {
-            available_sources.push(s_labels.name());
-            futures.push(s_labels.run(self));
-        }
+
         if futures.is_empty() {
             return Err(anyhow!("No possible data source found in parameters"));
         }
@@ -487,20 +483,6 @@ mod tests {
         // [[Count von Count]] vs. [[Magnus Manske]]
         // Manual list on enwiki, minus [[Category:Fictional vampires]]
         check_results_for_psid(10126217, "enwiki", vec![Title::new("Magnus Manske", 0)]).await;
-    }
-
-    #[tokio::test]
-    async fn test_source_labels() {
-        check_results_for_psid(
-            10225056,
-            "wikidatawiki",
-            vec![
-                Title::new("Q13520818", 0),
-                Title::new("Q10995651", 0),
-                Title::new("Q20084080", 0),
-            ],
-        )
-        .await;
     }
 
     #[tokio::test]

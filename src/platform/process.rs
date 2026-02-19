@@ -170,7 +170,7 @@ impl Platform {
         ret.0 += " WHERE t2.wbit_item_id=t1.wbit_item_id AND wbtl_id=t2.wbit_term_in_lang_id";
         self.get_label_sql_helper_new(ret, key);
         if has_languages || has_pattern {
-            let mut tmp = Self::prep_quote(languages);
+            let mut tmp = crate::datasource::prep_quote(languages);
             ret.0 += " AND wbtl_text_in_lang_id=wbxl_id";
             if !tmp.1.is_empty() {
                 if tmp.1.len() == 1 {
@@ -379,7 +379,7 @@ impl Platform {
             WHERE EXISTS (SELECT * FROM wbt_item_terms,wbt_type,wbt_term_in_lang,wbt_text_in_lang WHERE wbit_term_in_lang_id = wbtl_id AND wbtl_type_id IN (1,3) AND wbtl_text_in_lang_id = wbxl_id AND wbxl_text_id = wbx_id)
             AND wbx_text IN ("
             .to_string();
-        sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len());
+        sql_batch.0 += &crate::datasource::get_placeholders(sql_batch.1.len());
         sql_batch.0 += ")";
         // Labels use spaces, not underscores
         for element in sql_batch.1.iter_mut() {
@@ -667,7 +667,7 @@ impl Platform {
                 .par_iter_mut()
                 .map(|sql_batch| {
                     sql_batch.0 = "SELECT gil_to,6 AS namespace_id,GROUP_CONCAT(gil_wiki,':',gil_page_namespace_id,':',gil_page,':',gil_page_namespace,':',gil_page_title SEPARATOR '|') AS gil_group FROM globalimagelinks WHERE gil_to IN (".to_string();
-                    sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len());
+                    sql_batch.0 += &crate::datasource::get_placeholders(sql_batch.1.len());
                     sql_batch.0 += ")";
                     if file_usage_data_ns0 {
                         sql_batch.0 += " AND gil_page_namespace_id=0";
@@ -755,7 +755,7 @@ impl Platform {
             .par_iter_mut()
             .map(|sql_batch| {
                 sql_batch.0 = sql.to_string();
-                sql_batch.0 += &Platform::get_placeholders(sql_batch.1.len());
+                sql_batch.0 += &crate::datasource::get_placeholders(sql_batch.1.len());
                 sql_batch.0 += ")";
                 sql_batch.to_owned()
             })
@@ -870,7 +870,7 @@ impl Platform {
                 })
                 .map(|s| s.into())
                 .collect();
-            let placeholders = Platform::get_placeholders(escaped.len());
+            let placeholders = crate::datasource::get_placeholders(escaped.len());
             let query = format!(
                 "SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='{}' and ips_site_page IN ({})",
                 &wiki, &placeholders
@@ -1007,8 +1007,8 @@ impl Platform {
         }
         if !sitelinks_any.is_empty() {
             sql.0 += " AND EXISTS (SELECT * FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id IN (";
-            let tmp = Platform::prep_quote(sitelinks_any);
-            Platform::append_sql(&mut sql, tmp);
+            let tmp = crate::datasource::prep_quote(sitelinks_any);
+            crate::datasource::append_sql(&mut sql, tmp);
             sql.0 += ") LIMIT 1)";
         }
         for site in sitelinks_no {

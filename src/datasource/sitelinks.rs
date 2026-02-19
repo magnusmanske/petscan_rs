@@ -108,14 +108,14 @@ impl SourceSitelinks {
             });
         if !sitelinks_any.is_empty() {
             sql.0 += " AND page_id IN (SELECT ll_from FROM langlinks WHERE ll_lang IN (";
-            let tmp = Platform::prep_quote(&sitelinks_any);
-            Platform::append_sql(&mut sql, tmp);
+            let tmp = super::prep_quote(&sitelinks_any);
+            super::append_sql(&mut sql, tmp);
             sql.0 += "))";
         }
         if !sitelinks_no.is_empty() {
             sql.0 += " AND page_id NOT IN (SELECT ll_from FROM langlinks WHERE ll_lang IN (";
-            let tmp = Platform::prep_quote(&sitelinks_no);
-            Platform::append_sql(&mut sql, tmp);
+            let tmp = super::prep_quote(&sitelinks_no);
+            super::append_sql(&mut sql, tmp);
             sql.0 += "))";
         }
 

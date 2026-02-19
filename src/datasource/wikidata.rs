@@ -36,7 +36,7 @@ impl SourceWikidata {
             return Err(anyhow!("SourceWikidata: No wikidata source sites given"));
         }
 
-        let sites = Platform::prep_quote(&sites);
+        let sites = super::prep_quote(&sites);
 
         let mut sql = "SELECT ips_item_id FROM wb_items_per_site".to_string();
         if no_statements {

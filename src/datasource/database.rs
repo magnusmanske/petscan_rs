@@ -307,7 +307,7 @@ impl SourceDatabase {
             "SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN ("
         };
         let mut sql: SQLtuple = (sql.to_string(), vec![]);
-        Platform::append_sql(&mut sql, Platform::prep_quote(categories));
+        super::append_sql(&mut sql, super::prep_quote(categories));
         sql.0 += ")";
         let result = state
             .get_wiki_db_connection(wiki)
@@ -416,7 +416,7 @@ impl SourceDatabase {
     }
 
     fn template_subquery(&self, input: &[String], use_talk_page: bool, find_not: bool) -> SQLtuple {
-        let mut sql = Platform::sql_tuple();
+        let mut sql = super::sql_tuple();
         if use_talk_page {
             sql.0 += if find_not {
                 " AND p.page_id NOT IN "
@@ -455,10 +455,10 @@ impl SourceDatabase {
     fn sql_in(input: &[String], sql: &mut SQLtuple) {
         if input.len() == 1 {
             sql.0 += "=";
-            Platform::append_sql(sql, Platform::prep_quote(input));
+            super::append_sql(sql, super::prep_quote(input));
         } else {
             sql.0 += " IN (";
-            Platform::append_sql(sql, Platform::prep_quote(input));
+            super::append_sql(sql, super::prep_quote(input));
             sql.0 += ")";
         }
     }
@@ -543,7 +543,7 @@ impl SourceDatabase {
         } else {
             "SELECT * FROM categorylinks WHERE cl_to"
         };
-        let mut sql = Platform::sql_tuple();
+        let mut sql = super::sql_tuple();
         match self.params.combine.as_str() {
             "subset" => {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,
@@ -551,7 +551,7 @@ impl SourceDatabase {
                  p.page_len".to_string() ;
                 sql.0 += &params.link_count_sql;
                 sql.0 += &format!(" FROM ( {subquery} IN (");
-                Platform::append_sql(&mut sql, Platform::prep_quote(&category_batch[0]));
+                super::append_sql(&mut sql, super::prep_quote(&category_batch[0]));
                 sql.0 += ")) cl0";
                 for (a, item) in category_batch.iter().enumerate().skip(1) {
                     if state.using_new_categorylinks_table() {
@@ -563,7 +563,7 @@ impl SourceDatabase {
                             	ON cl0.cl_from=cl{a}.cl_from AND cl{a}.cl_to IN ("
                         );
                     }
-                    Platform::append_sql(&mut sql, Platform::prep_quote(item));
+                    super::append_sql(&mut sql, super::prep_quote(item));
                     sql.0 += ")";
                 }
             }
@@ -581,7 +581,7 @@ impl SourceDatabase {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
                 sql.0 += &params.link_count_sql;
                 sql.0 += &format!(" FROM ( {subquery} IN (");
-                Platform::append_sql(&mut sql, Platform::prep_quote(&tmp));
+                super::append_sql(&mut sql, super::prep_quote(&tmp));
                 sql.0 += ")) cl0";
             }
             other => {
@@ -673,7 +673,7 @@ impl SourceDatabase {
             ",0 AS link_count" // Dummy
         };
 
-        let mut sql_before_after = Platform::sql_tuple();
+        let mut sql_before_after = super::sql_tuple();
         let mut before: String = self.params.before.clone();
         let mut after: String = self.params.after.clone();
         let mut is_before_after_done: bool = false;
@@ -786,17 +786,17 @@ impl SourceDatabase {
         let mut batches: Vec<SQLtuple> = vec![];
         nslist.iter().for_each(|nsgroup| {
             nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
-                let mut sql = Platform::sql_tuple();
+                let mut sql = super::sql_tuple();
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
                 if !params.is_before_after_done {
-                    Platform::append_sql(&mut sql, params.sql_before_after.clone());
+                    super::append_sql(&mut sql, params.sql_before_after.clone());
                 }
                 sql.0 += " WHERE (p.page_namespace=";
                 sql.0 += &nsgroup.0.to_string();
                 sql.0 += " AND p.page_title IN (";
-                Platform::append_sql(&mut sql, Platform::prep_quote(titles));
+                super::append_sql(&mut sql, super::prep_quote(titles));
                 sql.0 += "))";
                 batches.push(sql);
             });
@@ -860,7 +860,7 @@ impl SourceDatabase {
             .get_pages_initialize_query(state, primary_pagelist)
             .await?;
 
-        let mut sql = Platform::sql_tuple();
+        let mut sql = super::sql_tuple();
 
         match params.primary.as_str() {
             "categories" => {
@@ -877,7 +877,7 @@ impl SourceDatabase {
                 sql.0 += " FROM page p";
                 if !params.is_before_after_done {
                     params.is_before_after_done = true;
-                    Platform::append_sql(&mut sql, params.sql_before_after.clone());
+                    super::append_sql(&mut sql, params.sql_before_after.clone());
                 }
                 sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')";
             }
@@ -887,7 +887,7 @@ impl SourceDatabase {
                 sql.0 += " FROM page p";
                 if !params.is_before_after_done {
                     params.is_before_after_done = true;
-                    Platform::append_sql(&mut sql, params.sql_before_after.clone());
+                    super::append_sql(&mut sql, params.sql_before_after.clone());
                 }
                 sql.0 += " WHERE 1=1";
             }
@@ -1053,7 +1053,7 @@ impl SourceDatabase {
         if !having.is_empty() {
             sql.0 += " HAVING ";
             for h in having {
-                Platform::append_sql(sql, h);
+                super::append_sql(sql, h);
             }
         }
     }
@@ -1186,13 +1186,13 @@ impl SourceDatabase {
         // Links to all
         self.params.links_to_all.iter().for_each(|l| {
             sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(sql, Self::links_to_subquery(&[l.to_owned()], &api));
+            super::append_sql(sql, Self::links_to_subquery(&[l.to_owned()], &api));
         });
 
         // Links to any
         if !self.params.links_to_any.is_empty() {
             sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(
+            super::append_sql(
                 sql,
                 Self::links_to_subquery(&self.params.links_to_any, &api),
             );
@@ -1201,7 +1201,7 @@ impl SourceDatabase {
         // Links to none
         if !self.params.links_to_none.is_empty() {
             sql.0 += " AND p.page_id NOT IN ";
-            Platform::append_sql(
+            super::append_sql(
                 sql,
                 Self::links_to_subquery(&self.params.links_to_none, &api),
             );
@@ -1212,13 +1212,13 @@ impl SourceDatabase {
         // Links from all
         self.params.linked_from_all.iter().for_each(|l| {
             sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(sql, Self::links_from_subquery(&[l.to_owned()], api));
+            super::append_sql(sql, Self::links_from_subquery(&[l.to_owned()], api));
         });
 
         // Links from any
         if !self.params.linked_from_any.is_empty() {
             sql.0 += " AND p.page_id IN ";
-            Platform::append_sql(
+            super::append_sql(
                 sql,
                 Self::links_from_subquery(&self.params.linked_from_any, api),
             );
@@ -1227,7 +1227,7 @@ impl SourceDatabase {
         // Links from none
         if !self.params.linked_from_none.is_empty() {
             sql.0 += " AND p.page_id NOT IN ";
-            Platform::append_sql(
+            super::append_sql(
                 sql,
                 Self::links_from_subquery(&self.params.linked_from_none, api),
             );
@@ -1242,7 +1242,7 @@ impl SourceDatabase {
                 self.params.templates_no_talk_page,
                 true,
             );
-            Platform::append_sql(sql, tmp);
+            super::append_sql(sql, tmp);
         }
     }
 
@@ -1256,7 +1256,7 @@ impl SourceDatabase {
                     self.params.templates_yes_talk_page,
                     false,
                 );
-                Platform::append_sql(sql, tmp);
+                super::append_sql(sql, tmp);
             });
 
             // Any
@@ -1266,7 +1266,7 @@ impl SourceDatabase {
                     self.params.templates_any_talk_page,
                     false,
                 );
-                Platform::append_sql(sql, tmp);
+                super::append_sql(sql, tmp);
             }
         }
     }
@@ -1320,7 +1320,7 @@ impl SourceDatabase {
     ) {
         // Last edit/created before/after
         if !*is_before_after_done {
-            Platform::append_sql(sql, sql_before_after);
+            super::append_sql(sql, sql_before_after);
             *is_before_after_done = true;
         }
     }

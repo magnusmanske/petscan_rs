@@ -228,7 +228,7 @@ impl PageList {
         let by_ns = self.group_by_namespace();
         for (nsid, titles) in by_ns {
             titles.chunks(chunk_size).for_each(|chunk| {
-                let mut sql = Platform::prep_quote(chunk);
+                let mut sql = crate::datasource::prep_quote(chunk);
                 sql.0 = format!("(page_namespace={} AND page_title IN({}))", nsid, &sql.0);
                 ret.push(sql);
             });
@@ -249,7 +249,7 @@ impl PageList {
         for (nsid, titles) in by_ns {
             if nsid == namespace_id {
                 titles.chunks(chunk_size).for_each(|chunk| {
-                    let mut sql = Platform::prep_quote(chunk);
+                    let mut sql = crate::datasource::prep_quote(chunk);
                     sql.0 = format!("(page_namespace={} AND page_title IN({}))", nsid, &sql.0);
                     ret.push(sql);
                 });

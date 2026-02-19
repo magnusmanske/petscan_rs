@@ -111,7 +111,7 @@ impl WDfist {
         // Prepare batches to get item/wiki/title triples
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(chunk);
+            let mut sql = crate::datasource::prep_quote(chunk);
             sql.0 = format!("SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN ({})",&sql.0) ;
             sql.1 = sql.1.par_iter().filter_map(|q|{
                 match q {
@@ -164,7 +164,7 @@ impl WDfist {
         titles.par_sort();
         titles.dedup();
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(chunk);
+            let mut sql = crate::datasource::prep_quote(chunk);
             sql.0 = format!("SELECT page_title,pp_value FROM page,page_props WHERE page_id=pp_page AND page_namespace=0 AND pp_propname='page_image_free' AND page_title IN ({})",&sql.0) ;
             batches.push(sql);
         });
@@ -215,7 +215,7 @@ impl WDfist {
             .collect();
         let mut batches: Vec<SQLtuple> = vec![];
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(chunk);
+            let mut sql = crate::datasource::prep_quote(chunk);
             sql.0 = format!("SELECT DISTINCT gil_page_title AS page,gil_to AS image FROM page,globalimagelinks WHERE gil_wiki='{}' AND gil_page_title IN ({})",wiki,&sql.0) ;
             sql.0 += " AND gil_page_namespace_id=0 AND page_namespace=6 and page_title=gil_to AND page_is_redirect=0" ;
             if self.state.using_new_categorylinks_table() {
@@ -252,7 +252,7 @@ impl WDfist {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(chunk);
+            let mut sql = crate::datasource::prep_quote(chunk);
             sql.0 = format!("SELECT page_title,gt_lat,gt_lon FROM geo_tags,page WHERE page_namespace=0 AND page_id=gt_page_id AND gt_globe='earth' AND gt_primary=1 AND page_title IN ({})",&sql.0) ;
             batches.push(sql);
         });
@@ -366,7 +366,7 @@ impl WDfist {
         // TODO uses X3 cluster, but fix wbt_type
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::full_entity_id_to_number(chunk);
+            let mut sql = crate::datasource::full_entity_id_to_number(chunk);
             sql.0 = format!(
                 "SELECT concat('Q',wbit_item_id) AS term_full_entity_id, wbx_text as term_text
             	FROM wbt_item_terms
@@ -516,7 +516,7 @@ impl WDfist {
         let wdf_only_items_without_p18 = self.bool_param("wdf_only_items_without_p18");
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(chunk);
+            let mut sql = crate::datasource::prep_quote(chunk);
             sql.0 = format!("SELECT page_title FROM page WHERE page_namespace=0 AND page_is_redirect=0 AND page_title IN ({})",&sql.0) ;
             if  wdf_only_items_without_p18 {sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=120 AND lt_title='P18')" ;}
             sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title IN ('Q13406463','Q4167410'))" ; // No list/disambig
@@ -576,7 +576,7 @@ impl WDfist {
             .map(|(q, _files)| q[1..].to_string())
             .collect();
         items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(chunk);
+            let mut sql = crate::datasource::prep_quote(chunk);
             sql.0 = format!(
                 "SELECT concat('Q',q),CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files WHERE q IN ({})",
                 &sql.0
@@ -686,7 +686,7 @@ impl WDfist {
         // Create batches
         let mut batches: Vec<SQLtuple> = vec![];
         filenames.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = Platform::prep_quote(chunk);
+            let mut sql = crate::datasource::prep_quote(chunk);
             sql.0 = format!(
                 "SELECT DISTINCT il_to FROM imagelinks WHERE il_from_namespace=0 AND il_to IN ({})",
                 &sql.0
