@@ -46,6 +46,7 @@ pub mod app_state;
 pub mod combination;
 pub mod command_line;
 pub mod content_type;
+pub mod database_manager;
 pub mod datasource;
 pub mod form_parameters;
 pub mod pagelist;
