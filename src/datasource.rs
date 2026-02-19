@@ -1,3 +1,12 @@
+pub mod database;
+pub mod labels;
+pub mod manual;
+pub mod pagepile;
+pub mod search;
+pub mod sitelinks;
+pub mod sparql;
+pub mod wikidata;
+
 use crate::{pagelist::PageList, platform::Platform};
 use anyhow::Result;
 use async_trait::async_trait;

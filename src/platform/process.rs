@@ -1,5 +1,5 @@
 use crate::datasource::SQLtuple;
-use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
+use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
 use crate::pagelist::{DatabaseCluster, PageList};
 use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, TriState};
 use crate::platform::{PAGE_BATCH_SIZE, Platform};

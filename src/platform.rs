@@ -2,14 +2,14 @@ use crate::app_state::AppState;
 use crate::combination::Combination;
 use crate::content_type::ContentType;
 use crate::datasource::DataSource;
-use crate::datasource_database::{SourceDatabase, SourceDatabaseParameters};
-use crate::datasource_labels::SourceLabels;
-use crate::datasource_manual::SourceManual;
-use crate::datasource_pagepile::SourcePagePile;
-use crate::datasource_search::SourceSearch;
-use crate::datasource_sitelinks::SourceSitelinks;
-use crate::datasource_sparql::SourceSparql;
-use crate::datasource_wikidata::SourceWikidata;
+use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
+use crate::datasource::labels::SourceLabels;
+use crate::datasource::manual::SourceManual;
+use crate::datasource::pagepile::SourcePagePile;
+use crate::datasource::search::SourceSearch;
+use crate::datasource::sitelinks::SourceSitelinks;
+use crate::datasource::sparql::SourceSparql;
+use crate::datasource::wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 use crate::pagelist_entry::PageListSort;
@@ -23,7 +23,7 @@ use crate::render_plaintext::RenderPlainText;
 use crate::render_tsv::RenderTSV;
 use crate::render_wikitext::RenderWiki;
 use crate::wdfist::WDfist;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -566,9 +566,11 @@ mod tests {
         let entries = result.as_vec();
         assert!(entries.len() > 100);
         // Try to find pages with no '/'
-        assert!(!entries
-            .iter()
-            .any(|entry| { entry.title().pretty().find('/').is_none() }));
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| { entry.title().pretty().find('/').is_none() })
+        );
     }
 
     #[tokio::test]
