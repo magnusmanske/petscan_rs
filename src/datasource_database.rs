@@ -67,6 +67,7 @@ pub struct SourceDatabaseParameters {
     redirects: String,
     soft_redirects: String,
     disambiguation_pages: String,
+    talk_page_exists: String,
     page_wikidata_item: String,
     larger: Option<usize>,
     smaller: Option<usize>,
@@ -97,6 +98,7 @@ impl SourceDatabaseParameters {
             last_edit_bot: "both".to_string(),
             last_edit_anon: "both".to_string(),
             last_edit_flagged: "both".to_string(),
+            talk_page_exists: "both".to_string(),
             use_new_category_mode: true,
             category_namespace_is_case_insensitive: true,
             template_namespace_is_case_insensitive: true,
@@ -171,6 +173,7 @@ impl SourceDatabaseParameters {
             redirects: platform.get_param_blank("show_redirects"),
             soft_redirects: platform.get_param_blank("show_soft_redirects"),
             disambiguation_pages: platform.get_param_blank("show_disambiguation_pages"),
+            talk_page_exists: platform.get_param_default("talk_page_exists", "both"),
             minlinks: platform.usize_option_from_param("minlinks"),
             maxlinks: platform.usize_option_from_param("maxlinks"),
             larger: platform.usize_option_from_param("larger"),
@@ -1090,6 +1093,15 @@ impl SourceDatabase {
             }
             "no" => {
                 sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')";
+            }
+            _ => {}
+        }
+        match self.params.talk_page_exists.as_str() {
+            "yes" => {
+                sql.0 += " AND EXISTS (SELECT * FROM page talk_p WHERE talk_p.page_title=p.page_title AND talk_p.page_namespace=p.page_namespace+1)";
+            }
+            "no" => {
+                sql.0 += " AND NOT EXISTS (SELECT * FROM page talk_p WHERE talk_p.page_title=p.page_title AND talk_p.page_namespace=p.page_namespace+1)";
             }
             _ => {}
         }

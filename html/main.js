@@ -5,6 +5,7 @@ var default_params = {
 	show_redirects: "both",
 	show_soft_redirects: "both",
 	show_disambiguation_pages: "both",
+	talk_page_exists: "both",
 	"edits[bots]": "both",
 	"edits[anons]": "both",
 	"edits[flagged]": "both",
@@ -130,10 +131,10 @@ function applyParameters() {
 
 		$(
 			'input:radio[name="' +
-				name +
-				'"][value="' +
-				value.replace(/"/g, "&quot;") +
-				'"]',
+			name +
+			'"][value="' +
+			value.replace(/"/g, "&quot;") +
+			'"]',
 		).prop("checked", true);
 
 		$('input[type="hidden"][name="' + name + '"]').val(value);
@@ -353,8 +354,8 @@ function loadNamespaces(callback) {
 		namespaces_loading = true;
 		$.getJSON(
 			"https://" +
-				server +
-				"/w/api.php?action=query&meta=siteinfo&siprop=namespaces&format=json&callback=?",
+			server +
+			"/w/api.php?action=query&meta=siteinfo&siprop=namespaces&format=json&callback=?",
 			function (d) {
 				global_namespace_cache[server] = d;
 				namespaceDataLoaded(d);
@@ -483,10 +484,10 @@ function showExamples(filter) {
 		var row = $("<div style='display:table-row'></div>");
 		row.html(
 			"<div class='example_psid'><a href='?psid=" +
-				example.psid +
-				"'>" +
-				example.psid +
-				"</a></div>",
+			example.psid +
+			"'>" +
+			example.psid +
+			"</a></div>",
 		);
 		row.append($("<div class='example_desc'></div>").text(example.desc));
 		$("#example_list").append(row);
