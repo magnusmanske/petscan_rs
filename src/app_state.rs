@@ -22,21 +22,21 @@ const TERMSTORE_SERVER: &str = "termstore.wikidatawiki.analytics.db.svc.wikimedi
 
 pub type DbUserPass = (String, String);
 
+// ---------------------------------------------------------------------------
+// DatabaseManager – owns all database-related state and logic
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, Default)]
-pub struct AppState {
+pub struct DatabaseManager {
     db_pool: Arc<Mutex<Vec<DbUserPass>>>,
     config: Value,
     tool_db_mutex: Arc<Mutex<DbUserPass>>,
-    threads_running: Arc<RwLock<i64>>,
-    shutting_down: Arc<RwLock<bool>>,
-    site_matrix: SiteMatrix,
-    main_page: String,
     port_mapping: HashMap<String, u16>, // Local testing only
 }
 
-impl AppState {
+impl DatabaseManager {
+    /// Initialise from the application config JSON value.
     pub async fn new_from_config(config: &Value) -> Result<Self> {
-        let main_page_path = "./html/index.html";
         let user = config["user"]
             .as_str()
             .ok_or_else(|| anyhow!("No user key in config file"))?
@@ -53,25 +53,12 @@ impl AppState {
             .into_iter()
             .map(|(k, v)| (k.to_string(), v.as_i64().unwrap_or_default() as u16))
             .collect();
-        let wikidata_api = Api::new("https://www.wikidata.org/w/api.php")
-            .await
-            .map_err(|e| anyhow!("Can't talk to Wikidata API: {e}"))?;
-        let main_page_bytes = fs::read(main_page_path)
-            .map_err(|e| anyhow!("Could not read index.html file from disk: {e}"))?;
-        let main_page = String::from_utf8_lossy(&main_page_bytes)
-            .parse()
-            .map_err(|e: std::convert::Infallible| anyhow!("Parsing index.html failed: {e}"))?;
+
         let ret = Self {
             db_pool: Arc::new(Mutex::new(vec![])),
             config: config.to_owned(),
             port_mapping,
-            threads_running: Arc::new(RwLock::new(0)),
-            shutting_down: Arc::new(RwLock::new(false)),
-            site_matrix: SiteMatrix::new(&wikidata_api)
-                .await
-                .map_err(|e| anyhow!("Can't get site matrix: {e}"))?,
             tool_db_mutex: Arc::new(Mutex::new(tool_db_access_tuple)),
-            main_page,
         };
 
         if let Some(up_list) = config["mysql"].as_array() {
@@ -101,6 +88,10 @@ impl AppState {
         Ok(ret)
     }
 
+    // ------------------------------------------------------------------
+    // Config-based feature flags
+    // ------------------------------------------------------------------
+
     pub fn using_file_table(&self) -> bool {
         self.config["use_file_table"].as_bool().unwrap_or(false)
     }
@@ -114,6 +105,10 @@ impl AppState {
     pub fn get_restart_code(&self) -> Option<&str> {
         self.config["restart-code"].as_str()
     }
+
+    // ------------------------------------------------------------------
+    // Internal helpers: MySQL connection options
+    // ------------------------------------------------------------------
 
     fn get_mysql_opts_for_wiki(
         &self,
@@ -154,30 +149,15 @@ impl AppState {
         Ok(opts)
     }
 
-    pub fn get_main_page(&self, interface_language: String) -> String {
-        let direction = if self.site_matrix.is_language_rtl(&interface_language) {
-            "rtl"
-        } else {
-            "ltr"
-        };
-        let h = format!(
-            "<html dir='{}' lang='{}'>",
-            direction,
-            interface_language.replace('\'', "")
-        );
-        let ret = self.main_page.replace("<html>", &h);
-        if self.site_matrix.is_language_rtl(&interface_language) {
-            ret.replace("bootstrap.min.css", "bootstrap-rtl.min.css")
-        } else {
-            ret
-        }
-    }
-
     fn get_db_server_group(&self) -> &str {
         self.config["dbservergroup"]
             .as_str()
             .unwrap_or(".web.db.svc.eqiad.wmflabs")
     }
+
+    // ------------------------------------------------------------------
+    // Server / schema name resolution
+    // ------------------------------------------------------------------
 
     pub fn fix_wiki_name(&self, wiki: &str) -> String {
         match wiki {
@@ -188,7 +168,7 @@ impl AppState {
         .replace('-', "_")
     }
 
-    /// Returns the server and database name for the wiki, as a tuple
+    /// Returns the server and database name for the wiki, as a tuple.
     /// # Panics
     /// Panics if the host key is missing from the config file
     pub fn db_host_and_schema_for_wiki(
@@ -220,7 +200,7 @@ impl AppState {
         Ok((host, schema))
     }
 
-    /// Returns the server and database name for the tool db, as a tuple
+    /// Returns the server and database name for the tool db, as a tuple.
     pub fn db_host_and_schema_for_tool_db(&self) -> Result<(String, String)> {
         // TESTING
         /*
@@ -236,6 +216,10 @@ impl AppState {
             .to_string();
         Ok((host, schema))
     }
+
+    // ------------------------------------------------------------------
+    // Connection pool
+    // ------------------------------------------------------------------
 
     async fn set_group_concat_max_len(&self, wiki: &str, conn: &mut my::Conn) -> Result<()> {
         if wiki == "commonswiki" {
@@ -294,59 +278,6 @@ impl AppState {
         self.get_wiki_db_connection("x3").await
     }
 
-    pub fn render_error(&self, error: String, form_parameters: &FormParameters) -> MyResponse {
-        match form_parameters.params.get("format").map(|s| s.as_str()) {
-            Some("") | Some("html") => {
-                let output = format!(
-                    "<div class='alert alert-danger' role='alert'>{}</div>",
-                    &error
-                );
-                let interface_language = form_parameters
-                    .params
-                    .get("interface_language")
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "en".to_string());
-                let html = self.get_main_page(interface_language);
-                let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
-                let html = &html.replace("<!--output-->", &output);
-                MyResponse {
-                    s: html.to_string(),
-                    content_type: ContentType::HTML,
-                }
-            }
-            Some("json") => {
-                let value = json!({ "error": error });
-                self.output_json(&value, form_parameters.params.get("callback"))
-            }
-            _ => MyResponse {
-                s: error,
-                content_type: ContentType::Plain,
-            },
-        }
-    }
-
-    pub fn output_json(&self, value: &Value, callback: Option<&String>) -> MyResponse {
-        let json_string = ::serde_json::to_string(&value)
-            .unwrap_or_else(|e| format!("{{\"error\":\"JSON serialization failed: {e}\"}}"));
-        match callback {
-            Some(callback) => {
-                let text = format!("{callback}({json_string})");
-                MyResponse {
-                    s: text,
-                    content_type: ContentType::JSONP,
-                }
-            }
-            None => MyResponse {
-                s: json_string,
-                content_type: ContentType::JSON,
-            },
-        }
-    }
-
-    pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api> {
-        self.site_matrix.get_api_for_wiki(&wiki).await
-    }
-
     pub async fn get_tool_db_connection(&self, tool_db_user_pass: DbUserPass) -> Result<my::Conn> {
         let (host, schema) = self.db_host_and_schema_for_tool_db()?;
         let (user, pass) = tool_db_user_pass.clone();
@@ -373,6 +304,10 @@ impl AppState {
     pub const fn get_tool_db_user_pass(&self) -> &Arc<Mutex<DbUserPass>> {
         &self.tool_db_mutex
     }
+
+    // ------------------------------------------------------------------
+    // Tool-DB query helpers (PSID, query logging)
+    // ------------------------------------------------------------------
 
     pub async fn get_query_from_psid(&self, psid: &str) -> Result<String> {
         let mut conn = self
@@ -483,6 +418,210 @@ impl AppState {
             )),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// AppState – top-level application state; delegates DB work to DatabaseManager
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default)]
+pub struct AppState {
+    db_manager: DatabaseManager,
+    threads_running: Arc<RwLock<i64>>,
+    shutting_down: Arc<RwLock<bool>>,
+    site_matrix: SiteMatrix,
+    main_page: String,
+}
+
+impl AppState {
+    pub async fn new_from_config(config: &Value) -> Result<Self> {
+        let main_page_path = "./html/index.html";
+        let wikidata_api = Api::new("https://www.wikidata.org/w/api.php")
+            .await
+            .map_err(|e| anyhow!("Can't talk to Wikidata API: {e}"))?;
+        let main_page_bytes = fs::read(main_page_path)
+            .map_err(|e| anyhow!("Could not read index.html file from disk: {e}"))?;
+        let main_page = String::from_utf8_lossy(&main_page_bytes)
+            .parse()
+            .map_err(|e: std::convert::Infallible| anyhow!("Parsing index.html failed: {e}"))?;
+
+        let db_manager = DatabaseManager::new_from_config(config).await?;
+
+        Ok(Self {
+            db_manager,
+            threads_running: Arc::new(RwLock::new(0)),
+            shutting_down: Arc::new(RwLock::new(false)),
+            site_matrix: SiteMatrix::new(&wikidata_api)
+                .await
+                .map_err(|e| anyhow!("Can't get site matrix: {e}"))?,
+            main_page,
+        })
+    }
+
+    // ------------------------------------------------------------------
+    // Delegating accessors – config feature flags
+    // ------------------------------------------------------------------
+
+    pub fn using_file_table(&self) -> bool {
+        self.db_manager.using_file_table()
+    }
+
+    pub fn using_new_categorylinks_table(&self) -> bool {
+        self.db_manager.using_new_categorylinks_table()
+    }
+
+    pub fn get_restart_code(&self) -> Option<&str> {
+        self.db_manager.get_restart_code()
+    }
+
+    // ------------------------------------------------------------------
+    // Delegating accessors – server / schema name resolution
+    // ------------------------------------------------------------------
+
+    pub fn fix_wiki_name(&self, wiki: &str) -> String {
+        self.db_manager.fix_wiki_name(wiki)
+    }
+
+    /// Returns the server and database name for the wiki, as a tuple.
+    /// # Panics
+    /// Panics if the host key is missing from the config file
+    pub fn db_host_and_schema_for_wiki(
+        &self,
+        wiki: &str,
+        cluster: DatabaseCluster,
+    ) -> Result<(String, String)> {
+        self.db_manager.db_host_and_schema_for_wiki(wiki, cluster)
+    }
+
+    /// Returns the server and database name for the tool db, as a tuple.
+    pub fn db_host_and_schema_for_tool_db(&self) -> Result<(String, String)> {
+        self.db_manager.db_host_and_schema_for_tool_db()
+    }
+
+    // ------------------------------------------------------------------
+    // Delegating accessors – database connections
+    // ------------------------------------------------------------------
+
+    pub async fn get_wiki_db_connection(&self, wiki: &str) -> Result<my::Conn> {
+        self.db_manager.get_wiki_db_connection(wiki).await
+    }
+
+    /// Connects to the X3 cluster TBD
+    pub async fn get_x3_db_connection(&self) -> Result<my::Conn> {
+        self.db_manager.get_x3_db_connection().await
+    }
+
+    pub async fn get_tool_db_connection(&self, tool_db_user_pass: DbUserPass) -> Result<my::Conn> {
+        self.db_manager
+            .get_tool_db_connection(tool_db_user_pass)
+            .await
+    }
+
+    pub const fn get_tool_db_user_pass(&self) -> &Arc<Mutex<DbUserPass>> {
+        self.db_manager.get_tool_db_user_pass()
+    }
+
+    // ------------------------------------------------------------------
+    // Delegating accessors – PSID / query logging
+    // ------------------------------------------------------------------
+
+    pub async fn get_query_from_psid(&self, psid: &str) -> Result<String> {
+        self.db_manager.get_query_from_psid(psid).await
+    }
+
+    pub async fn log_query_start(&self, query_string: &str) -> Result<u64> {
+        self.db_manager.log_query_start(query_string).await
+    }
+
+    pub async fn log_query_end(&self, query_id: u64) -> Result<()> {
+        self.db_manager.log_query_end(query_id).await
+    }
+
+    pub async fn get_or_create_psid_for_query(&self, query_string: &str) -> Result<u64> {
+        self.db_manager
+            .get_or_create_psid_for_query(query_string)
+            .await
+    }
+
+    // ------------------------------------------------------------------
+    // Native AppState behaviour – main page / rendering
+    // ------------------------------------------------------------------
+
+    pub fn get_main_page(&self, interface_language: String) -> String {
+        let direction = if self.site_matrix.is_language_rtl(&interface_language) {
+            "rtl"
+        } else {
+            "ltr"
+        };
+        let h = format!(
+            "<html dir='{}' lang='{}'>",
+            direction,
+            interface_language.replace('\'', "")
+        );
+        let ret = self.main_page.replace("<html>", &h);
+        if self.site_matrix.is_language_rtl(&interface_language) {
+            ret.replace("bootstrap.min.css", "bootstrap-rtl.min.css")
+        } else {
+            ret
+        }
+    }
+
+    pub fn render_error(&self, error: String, form_parameters: &FormParameters) -> MyResponse {
+        match form_parameters.params.get("format").map(|s| s.as_str()) {
+            Some("") | Some("html") => {
+                let output = format!(
+                    "<div class='alert alert-danger' role='alert'>{}</div>",
+                    &error
+                );
+                let interface_language = form_parameters
+                    .params
+                    .get("interface_language")
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "en".to_string());
+                let html = self.get_main_page(interface_language);
+                let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
+                let html = &html.replace("<!--output-->", &output);
+                MyResponse {
+                    s: html.to_string(),
+                    content_type: ContentType::HTML,
+                }
+            }
+            Some("json") => {
+                let value = json!({ "error": error });
+                self.output_json(&value, form_parameters.params.get("callback"))
+            }
+            _ => MyResponse {
+                s: error,
+                content_type: ContentType::Plain,
+            },
+        }
+    }
+
+    pub fn output_json(&self, value: &Value, callback: Option<&String>) -> MyResponse {
+        let json_string = ::serde_json::to_string(&value)
+            .unwrap_or_else(|e| format!("{{\"error\":\"JSON serialization failed: {e}\"}}"));
+        match callback {
+            Some(callback) => {
+                let text = format!("{callback}({json_string})");
+                MyResponse {
+                    s: text,
+                    content_type: ContentType::JSONP,
+                }
+            }
+            None => MyResponse {
+                s: json_string,
+                content_type: ContentType::JSON,
+            },
+        }
+    }
+
+    pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api> {
+        self.site_matrix.get_api_for_wiki(&wiki).await
+    }
+
+    // ------------------------------------------------------------------
+    // Native AppState behaviour – thread / shutdown management
+    // ------------------------------------------------------------------
 
     pub fn try_shutdown(&self) {
         if !self.is_shutting_down() {
@@ -512,6 +651,11 @@ impl AppState {
 
     pub const fn site_matrix(&self) -> &SiteMatrix {
         &self.site_matrix
+    }
+
+    /// Expose the underlying [`DatabaseManager`] for callers that need direct access.
+    pub const fn db_manager(&self) -> &DatabaseManager {
+        &self.db_manager
     }
 }
 
@@ -561,13 +705,20 @@ mod tests {
         })
     }
 
+    /// Helper: build an [`AppState`] whose [`DatabaseManager`] is seeded with the given config.
+    fn state_with_config(config: Value) -> AppState {
+        AppState {
+            db_manager: DatabaseManager {
+                config,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_fix_wiki_name_be_tarask() {
-        let config = make_minimal_config("127.0.0.1");
-        let state = AppState {
-            config: config.clone(),
-            ..Default::default()
-        };
+        let state = state_with_config(make_minimal_config("127.0.0.1"));
         assert_eq!(state.fix_wiki_name("be-taraskwiki"), "be_x_oldwiki");
         assert_eq!(state.fix_wiki_name("be-x-oldwiki"), "be_x_oldwiki");
         assert_eq!(state.fix_wiki_name("be_taraskwiki"), "be_x_oldwiki");
@@ -576,10 +727,7 @@ mod tests {
 
     #[test]
     fn test_fix_wiki_name_normal() {
-        let state = AppState {
-            config: make_minimal_config("127.0.0.1"),
-            ..Default::default()
-        };
+        let state = state_with_config(make_minimal_config("127.0.0.1"));
         assert_eq!(state.fix_wiki_name("enwiki"), "enwiki");
         assert_eq!(state.fix_wiki_name("wikidatawiki"), "wikidatawiki");
         // Hyphens converted to underscores for non-special wikis
@@ -588,62 +736,38 @@ mod tests {
 
     #[test]
     fn test_using_file_table() {
-        let config_true = serde_json::json!({ "use_file_table": true });
-        let state_true = AppState {
-            config: config_true,
-            ..Default::default()
-        };
+        let state_true =
+            state_with_config(serde_json::json!({ "use_file_table": true }));
         assert!(state_true.using_file_table());
 
-        let config_false = serde_json::json!({ "use_file_table": false });
-        let state_false = AppState {
-            config: config_false,
-            ..Default::default()
-        };
+        let state_false =
+            state_with_config(serde_json::json!({ "use_file_table": false }));
         assert!(!state_false.using_file_table());
 
-        let config_missing = serde_json::json!({});
-        let state_missing = AppState {
-            config: config_missing,
-            ..Default::default()
-        };
+        let state_missing = state_with_config(serde_json::json!({}));
         assert!(!state_missing.using_file_table());
     }
 
     #[test]
     fn test_using_new_categorylinks_table() {
-        let config = serde_json::json!({ "use_new_categorylinks_table": true });
-        let state = AppState {
-            config,
-            ..Default::default()
-        };
+        let state = state_with_config(
+            serde_json::json!({ "use_new_categorylinks_table": true }),
+        );
         assert!(state.using_new_categorylinks_table());
     }
 
     #[test]
     fn test_get_restart_code() {
-        let config = serde_json::json!({ "restart-code": "abc123" });
-        let state = AppState {
-            config,
-            ..Default::default()
-        };
+        let state = state_with_config(serde_json::json!({ "restart-code": "abc123" }));
         assert_eq!(state.get_restart_code(), Some("abc123"));
 
-        let config2 = serde_json::json!({});
-        let state2 = AppState {
-            config: config2,
-            ..Default::default()
-        };
+        let state2 = state_with_config(serde_json::json!({}));
         assert_eq!(state2.get_restart_code(), None);
     }
 
     #[test]
     fn test_db_host_and_schema_for_wiki_local() {
-        let config = make_minimal_config("127.0.0.1");
-        let state = AppState {
-            config,
-            ..Default::default()
-        };
+        let state = state_with_config(make_minimal_config("127.0.0.1"));
         let (host, schema) = state
             .db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default)
             .unwrap();
@@ -653,11 +777,7 @@ mod tests {
 
     #[test]
     fn test_db_host_and_schema_for_wiki_no_host() {
-        let config = serde_json::json!({});
-        let state = AppState {
-            config,
-            ..Default::default()
-        };
+        let state = state_with_config(serde_json::json!({}));
         let result = state.db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default);
         assert!(result.is_err());
     }
@@ -678,11 +798,7 @@ mod tests {
 
     #[test]
     fn test_render_error_json() {
-        let config = make_minimal_config("127.0.0.1");
-        let state = AppState {
-            config,
-            ..Default::default()
-        };
+        let state = state_with_config(make_minimal_config("127.0.0.1"));
         let mut params = crate::form_parameters::FormParameters::new();
         params
             .params
@@ -694,11 +810,7 @@ mod tests {
 
     #[test]
     fn test_render_error_plain() {
-        let config = make_minimal_config("127.0.0.1");
-        let state = AppState {
-            config,
-            ..Default::default()
-        };
+        let state = state_with_config(make_minimal_config("127.0.0.1"));
         let mut params = crate::form_parameters::FormParameters::new();
         params
             .params
