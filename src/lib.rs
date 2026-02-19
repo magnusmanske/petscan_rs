@@ -52,15 +52,6 @@ pub mod pagelist;
 pub mod pagelist_entry;
 pub mod platform;
 pub mod render;
-pub mod render_html;
-pub mod render_json;
-pub mod render_jsonl;
-pub mod render_kml;
-pub mod render_pagepile;
-pub mod render_params;
-pub mod render_plaintext;
-pub mod render_tsv;
-pub mod render_wikitext;
 pub mod wdfist;
 pub mod webserver;
 

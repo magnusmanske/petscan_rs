@@ -2,7 +2,7 @@ use crate::content_type::ContentType;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::{MyResponse, Platform};
 use crate::render::Render;
-use crate::render_params::RenderParams;
+use crate::render::params::RenderParams;
 use anyhow::Result;
 use async_trait::async_trait;
 

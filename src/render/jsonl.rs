@@ -1,10 +1,10 @@
 use crate::content_type::ContentType;
 use crate::platform::MyResponse;
 use crate::render::Render;
-use crate::render_json::RenderJSON;
-use crate::render_params::RenderParams;
+use crate::render::json::RenderJSON;
+use crate::render::params::RenderParams;
 use crate::{pagelist_entry::PageListEntry, platform::Platform};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
 

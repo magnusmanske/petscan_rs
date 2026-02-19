@@ -1,9 +1,9 @@
 use crate::content_type::ContentType;
 use crate::platform::MyResponse;
 use crate::render::Render;
-use crate::render_params::RenderParams;
+use crate::render::params::RenderParams;
 use crate::{pagelist_entry::PageListEntry, platform::Platform};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use std::collections::HashMap;
 
@@ -42,7 +42,7 @@ impl Render for RenderPagePile {
             Err(e) => {
                 return Err(anyhow!(
                     "PagePile generation did not return valid JSON: {e}"
-                ))
+                ));
             }
         };
         let pagepile_id = match json["pile"]["id"].as_u64() {
@@ -50,12 +50,15 @@ impl Render for RenderPagePile {
             None => {
                 return Err(anyhow!(
                     "PagePile generation did not return a pagepile ID: {json}"
-                ))
+                ));
             }
         };
         let url_get_data =
             format!("https://tools.wmflabs.org/pagepile/api.php?action=get_data&id={pagepile_id}");
-        let html = format!("<html><head><meta http-equiv=\"refresh\" content=\"0; url={}\" /></head><BODY><H1>Redirect</H1>The document can be found <A HREF='{}'>here</A>.</BODY></html>",&url_get_data,&url_get_data) ;
+        let html = format!(
+            "<html><head><meta http-equiv=\"refresh\" content=\"0; url={}\" /></head><BODY><H1>Redirect</H1>The document can be found <A HREF='{}'>here</A>.</BODY></html>",
+            &url_get_data, &url_get_data
+        );
         Ok(MyResponse {
             s: html,
             content_type: ContentType::HTML,

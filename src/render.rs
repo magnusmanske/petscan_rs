@@ -1,6 +1,16 @@
+pub mod html;
+pub mod json;
+pub mod jsonl;
+pub mod kml;
+pub mod pagepile;
+pub mod params;
+pub mod plaintext;
+pub mod tsv;
+pub mod wikitext;
+
 use crate::pagelist_entry::{LinkCount, PageListEntry};
 use crate::platform::{MyResponse, Platform};
-use crate::render_params::RenderParams;
+use crate::render::params::RenderParams;
 use anyhow::Result;
 use async_trait::async_trait;
 

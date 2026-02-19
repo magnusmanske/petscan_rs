@@ -2,8 +2,8 @@ use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::{MyResponse, Platform};
-use crate::render::{Render, AUTOLIST_COMMONS, AUTOLIST_WIKIDATA};
-use crate::render_params::RenderParams;
+use crate::render::params::RenderParams;
+use crate::render::{AUTOLIST_COMMONS, AUTOLIST_WIKIDATA, Render};
 use anyhow::Result;
 use async_trait::async_trait;
 use htmlescape::encode_minimal;
@@ -191,7 +191,9 @@ impl Render for RenderHTML {
                     "{}/wiki/Special:Redirect/file/{}?width={}",
                     &server_url, &file, &thumnail_size
                 );
-                format!("<div class='card thumbcard'><a target='_blank' href='{url}'><img class='card-img thumbcard-img' src='{src}' loading='lazy' /></a></div>")
+                format!(
+                    "<div class='card thumbcard'><a target='_blank' href='{url}'><img class='card-img thumbcard-img' src='{src}' loading='lazy' /></a></div>"
+                )
             }
             None => String::new(),
         }
