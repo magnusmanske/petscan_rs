@@ -2,11 +2,12 @@ use crate::datasource::DataSource;
 use crate::pagelist::PageList;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::value::Value;
 use std::time;
 use wikimisc::mediawiki::api::Api;
+use wikimisc::mediawiki::reqwest::ClientBuilder;
 use wikimisc::mediawiki::title::Title;
 
 #[derive(Debug, Clone, PartialEq, Default, Copy)]
@@ -49,7 +50,7 @@ impl DataSource for SourcePagePile {
 impl SourcePagePile {
     async fn get_pagepile_json(&self, pagepile: &str) -> Result<Value> {
         let timeout = time::Duration::from_secs(240);
-        let builder = reqwest::ClientBuilder::new().timeout(timeout);
+        let builder = ClientBuilder::new().timeout(timeout);
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder).await?;
         let params = api.params_into(&[
             ("id", pagepile),

@@ -7,6 +7,7 @@ use serde_json::value::Value;
 use std::collections::HashMap;
 use std::time;
 use wikimisc::mediawiki::api::Api;
+use wikimisc::mediawiki::reqwest::{self, ClientBuilder};
 
 const QLEVER_WD_PREFIX: &str = "PREFIX wikibase: <http://wikiba.se/ontology#>
 PREFIX wd: <http://www.wikidata.org/entity/>
@@ -123,7 +124,7 @@ impl DataSource for SourceSparql {
             .ok_or_else(|| anyhow!("Missing parameter \'sparql\'"))?;
 
         let timeout = time::Duration::from_secs(120);
-        let builder = reqwest::ClientBuilder::new().timeout(timeout);
+        let builder = ClientBuilder::new().timeout(timeout);
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder).await?;
 
         // let sparql_url = api.get_site_info_string("general", "wikibase-sparql")?;
