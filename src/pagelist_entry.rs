@@ -543,6 +543,172 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_page_list_entry_construction() {
+        let title = Title::new("Test_page", 0);
+        let entry = PageListEntry::new(title.clone());
+        assert_eq!(*entry.title(), title);
+        assert_eq!(entry.page_id(), None);
+        assert_eq!(entry.page_bytes(), None);
+        assert_eq!(entry.incoming_links(), None);
+        assert_eq!(entry.get_page_timestamp(), None);
+        assert_eq!(entry.get_wikidata_item(), None);
+        assert_eq!(entry.get_wikidata_label(), None);
+        assert_eq!(entry.get_wikidata_description(), None);
+        assert_eq!(entry.get_file_info(), None);
+        assert_eq!(*entry.disambiguation(), TriState::Unknown);
+    }
+
+    #[test]
+    fn test_page_id_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(entry.page_id(), None);
+        entry.set_page_id(Some(42));
+        assert_eq!(entry.page_id(), Some(42));
+        entry.set_page_id(None);
+        assert_eq!(entry.page_id(), None);
+    }
+
+    #[test]
+    fn test_page_bytes_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(entry.page_bytes(), None);
+        entry.set_page_bytes(Some(1024));
+        assert_eq!(entry.page_bytes(), Some(1024));
+    }
+
+    #[test]
+    fn test_incoming_links_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(entry.incoming_links(), None);
+        entry.set_incoming_links(Some(99));
+        assert_eq!(entry.incoming_links(), Some(99));
+    }
+
+    #[test]
+    fn test_wikidata_item_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Q12345", 0));
+        assert_eq!(entry.get_wikidata_item(), None);
+        entry.set_wikidata_item(Some("Q12345".to_string()));
+        assert_eq!(entry.get_wikidata_item(), Some("Q12345".to_string()));
+        entry.set_wikidata_item(None);
+        assert_eq!(entry.get_wikidata_item(), None);
+    }
+
+    #[test]
+    fn test_wikidata_label_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Q12345", 0));
+        assert_eq!(entry.get_wikidata_label(), None);
+        entry.set_wikidata_label(Some("Count von Count".to_string()));
+        assert_eq!(entry.get_wikidata_label(), Some("Count von Count".to_string()));
+    }
+
+    #[test]
+    fn test_wikidata_description_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Q12345", 0));
+        assert_eq!(entry.get_wikidata_description(), None);
+        entry.set_wikidata_description(Some("fictional vampire".to_string()));
+        assert_eq!(
+            entry.get_wikidata_description(),
+            Some("fictional vampire".to_string())
+        );
+    }
+
+    #[test]
+    fn test_page_timestamp_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(entry.get_page_timestamp(), None);
+        entry.set_page_timestamp(Some("20240101120000".to_string()));
+        assert_eq!(
+            entry.get_page_timestamp(),
+            Some("20240101120000".to_string())
+        );
+    }
+
+    #[test]
+    fn test_disambiguation_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(*entry.disambiguation(), TriState::Unknown);
+        entry.set_disambiguation(TriState::Yes);
+        assert_eq!(*entry.disambiguation(), TriState::Yes);
+        entry.set_disambiguation(TriState::No);
+        assert_eq!(*entry.disambiguation(), TriState::No);
+    }
+
+    #[test]
+    fn test_file_info_get_set() {
+        let mut entry = PageListEntry::new(Title::new("File:Test.jpg", 6));
+        assert_eq!(entry.get_file_info(), None);
+        let fi = FileInfo::new();
+        entry.set_file_info(Some(fi.clone()));
+        assert_eq!(entry.get_file_info(), Some(fi));
+        entry.set_file_info(None);
+        assert_eq!(entry.get_file_info(), None);
+    }
+
+    #[test]
+    fn test_entry_equality_by_title() {
+        let e1 = PageListEntry::new(Title::new("Test", 0));
+        let e2 = PageListEntry::new(Title::new("Test", 0));
+        let e3 = PageListEntry::new(Title::new("Other", 0));
+        assert_eq!(e1, e2);
+        assert_ne!(e1, e3);
+    }
+
+    #[test]
+    fn test_tri_state_as_json() {
+        assert!(TriState::Yes.as_json().as_bool() == Some(true));
+        assert!(TriState::No.as_json().as_bool() == Some(false));
+        assert!(TriState::Unknown.as_json().is_null());
+    }
+
+    #[test]
+    fn test_tri_state_as_option_bool() {
+        assert_eq!(TriState::Yes.as_option_bool(), Some(true));
+        assert_eq!(TriState::No.as_option_bool(), Some(false));
+        assert_eq!(TriState::Unknown.as_option_bool(), None);
+    }
+
+    #[test]
+    fn test_sitelink_count_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(entry.sitelink_count(), None);
+        entry.set_sitelink_count(Some(42));
+        assert_eq!(entry.sitelink_count(), Some(42));
+    }
+
+    #[test]
+    fn test_link_count_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(entry.link_count(), None);
+        entry.set_link_count(Some(10));
+        assert_eq!(entry.link_count(), Some(10));
+    }
+
+    #[test]
+    fn test_redlink_count_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(entry.redlink_count(), None);
+        entry.set_redlink_count(Some(5));
+        assert_eq!(entry.redlink_count(), Some(5));
+    }
+
+    #[test]
+    fn test_defaultsort_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(entry.get_defaultsort(), None);
+        entry.set_defaultsort(Some("Manske, Magnus".to_string()));
+        assert_eq!(entry.get_defaultsort(), Some("Manske, Magnus".to_string()));
+    }
+
+    #[test]
+    fn test_page_image_get_set() {
+        let mut entry = PageListEntry::new(Title::new("Test", 0));
+        assert_eq!(entry.get_page_image(), None);
+        entry.set_page_image(Some("Test.jpg".to_string()));
+        assert_eq!(entry.get_page_image(), Some("Test.jpg".to_string()));
+    }
+
+    #[test]
     fn file_usage() {
         // 3 instead of 4 parts
         assert_eq!(

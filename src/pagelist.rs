@@ -768,6 +768,11 @@ impl PageList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    fn make_entry(title: &str, ns: i64) -> PageListEntry {
+        PageListEntry::new(Title::new(title, ns))
+    }
 
     #[test]
     fn page_list_sort() {
@@ -783,5 +788,219 @@ mod tests {
             PageListSort::new_from_params("this is not a sort parameter", true),
             PageListSort::Default(true)
         );
+    }
+
+    #[test]
+    fn test_new_from_wiki() {
+        let pl = PageList::new_from_wiki("enwiki");
+        assert_eq!(pl.wiki(), Some("enwiki".to_string()));
+        assert!(pl.is_empty());
+        assert_eq!(pl.len(), 0);
+    }
+
+    #[test]
+    fn test_set_wiki() {
+        let pl = PageList::new_from_wiki("enwiki");
+        pl.set_wiki(Some("dewiki".to_string()));
+        assert_eq!(pl.wiki(), Some("dewiki".to_string()));
+        pl.set_wiki(None);
+        assert_eq!(pl.wiki(), None);
+    }
+
+    #[test]
+    fn test_is_wikidata() {
+        let pl = PageList::new_from_wiki("wikidatawiki");
+        assert!(pl.is_wikidata());
+        let pl2 = PageList::new_from_wiki("enwiki");
+        assert!(!pl2.is_wikidata());
+    }
+
+    #[test]
+    fn test_sitelink_counts() {
+        let pl = PageList::new_from_wiki("enwiki");
+        assert!(!pl.has_sitelink_counts());
+        pl.set_has_sitelink_counts(true);
+        assert!(pl.has_sitelink_counts());
+        pl.set_has_sitelink_counts(false);
+        assert!(!pl.has_sitelink_counts());
+    }
+
+    #[test]
+    fn test_add_entry_len_is_empty() {
+        let pl = PageList::new_from_wiki("enwiki");
+        assert!(pl.is_empty());
+        pl.add_entry(make_entry("Foo", 0));
+        assert!(!pl.is_empty());
+        assert_eq!(pl.len(), 1);
+        pl.add_entry(make_entry("Bar", 0));
+        assert_eq!(pl.len(), 2);
+    }
+
+    #[test]
+    fn test_set_entries() {
+        let pl = PageList::new_from_wiki("enwiki");
+        let mut entries = HashSet::new();
+        entries.insert(make_entry("Foo", 0));
+        entries.insert(make_entry("Bar", 0));
+        pl.set_entries(entries);
+        assert_eq!(pl.len(), 2);
+    }
+
+    #[test]
+    fn test_as_vec() {
+        let pl = PageList::new_from_wiki("enwiki");
+        pl.add_entry(make_entry("Foo", 0));
+        pl.add_entry(make_entry("Bar", 4));
+        let v = pl.as_vec();
+        assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn test_clear_entries() {
+        let pl = PageList::new_from_wiki("enwiki");
+        pl.add_entry(make_entry("Foo", 0));
+        pl.add_entry(make_entry("Bar", 0));
+        assert_eq!(pl.len(), 2);
+        pl.clear_entries();
+        assert!(pl.is_empty());
+    }
+
+    #[test]
+    fn test_retain_entries() {
+        let pl = PageList::new_from_wiki("enwiki");
+        pl.add_entry(make_entry("Foo", 0));
+        pl.add_entry(make_entry("Bar", 4));
+        pl.add_entry(make_entry("Baz", 0));
+        pl.retain_entries(&|entry| entry.title().namespace_id() == 0);
+        assert_eq!(pl.len(), 2);
+    }
+
+    #[test]
+    fn test_group_by_namespace() {
+        let pl = PageList::new_from_wiki("enwiki");
+        pl.add_entry(make_entry("Foo", 0));
+        pl.add_entry(make_entry("Bar", 0));
+        pl.add_entry(make_entry("Talk:Foo", 1));
+        let groups = pl.group_by_namespace();
+        assert_eq!(groups.get(&0).map(|v| v.len()), Some(2));
+        assert_eq!(groups.get(&1).map(|v| v.len()), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_union_same_wiki() {
+        let pl1 = PageList::new_from_wiki("enwiki");
+        pl1.add_entry(make_entry("Foo", 0));
+        pl1.add_entry(make_entry("Bar", 0));
+
+        let pl2 = PageList::new_from_wiki("enwiki");
+        pl2.add_entry(make_entry("Bar", 0));
+        pl2.add_entry(make_entry("Baz", 0));
+
+        pl1.union(&pl2, None).await.unwrap();
+        assert_eq!(pl1.len(), 3); // Foo, Bar, Baz
+    }
+
+    #[tokio::test]
+    async fn test_intersection_same_wiki() {
+        let pl1 = PageList::new_from_wiki("enwiki");
+        pl1.add_entry(make_entry("Foo", 0));
+        pl1.add_entry(make_entry("Bar", 0));
+
+        let pl2 = PageList::new_from_wiki("enwiki");
+        pl2.add_entry(make_entry("Bar", 0));
+        pl2.add_entry(make_entry("Baz", 0));
+
+        pl1.intersection(&pl2, None).await.unwrap();
+        assert_eq!(pl1.len(), 1); // Only Bar
+        let entries = pl1.as_vec();
+        assert_eq!(entries[0].title().pretty(), "Bar");
+    }
+
+    #[tokio::test]
+    async fn test_difference_same_wiki() {
+        let pl1 = PageList::new_from_wiki("enwiki");
+        pl1.add_entry(make_entry("Foo", 0));
+        pl1.add_entry(make_entry("Bar", 0));
+
+        let pl2 = PageList::new_from_wiki("enwiki");
+        pl2.add_entry(make_entry("Bar", 0));
+
+        pl1.difference(&pl2, None).await.unwrap();
+        assert_eq!(pl1.len(), 1); // Only Foo
+        let entries = pl1.as_vec();
+        assert_eq!(entries[0].title().pretty(), "Foo");
+    }
+
+    #[test]
+    fn test_set_from() {
+        let pl1 = PageList::new_from_wiki("enwiki");
+        pl1.add_entry(make_entry("Foo", 0));
+        pl1.set_has_sitelink_counts(true);
+
+        let pl2 = PageList::new_from_wiki("dewiki");
+        pl2.set_from(pl1);
+
+        assert_eq!(pl2.wiki(), Some("enwiki".to_string()));
+        assert_eq!(pl2.len(), 1);
+        assert!(pl2.has_sitelink_counts());
+    }
+
+    #[test]
+    fn test_replace_entries() {
+        let pl1 = PageList::new_from_wiki("enwiki");
+        pl1.add_entry(make_entry("Foo", 0));
+
+        let pl2 = PageList::new_from_wiki("enwiki");
+        pl2.add_entry(make_entry("Bar", 0));
+        pl2.add_entry(make_entry("Baz", 0));
+
+        pl1.replace_entries(&pl2);
+        // pl1 should now have Bar, Baz (plus Foo that was already there if replace adds)
+        // replace_entries inserts pl2's entries into pl1
+        assert!(pl1.len() >= 2);
+    }
+
+    #[test]
+    fn test_drain_into_sorted_vec() {
+        let pl = PageList::new_from_wiki("enwiki");
+        pl.add_entry(make_entry("Zebra", 0));
+        pl.add_entry(make_entry("Apple", 0));
+        pl.add_entry(make_entry("Mango", 0));
+
+        let sorted = pl.drain_into_sorted_vec(PageListSort::Title(false));
+        assert!(pl.is_empty()); // drained
+        assert_eq!(sorted.len(), 3);
+        assert_eq!(sorted[0].title().pretty(), "Apple");
+        assert_eq!(sorted[1].title().pretty(), "Mango");
+        assert_eq!(sorted[2].title().pretty(), "Zebra");
+    }
+
+    #[test]
+    fn test_drain_into_sorted_vec_descending() {
+        let pl = PageList::new_from_wiki("enwiki");
+        pl.add_entry(make_entry("Apple", 0));
+        pl.add_entry(make_entry("Zebra", 0));
+
+        let sorted = pl.drain_into_sorted_vec(PageListSort::Title(true));
+        assert_eq!(sorted[0].title().pretty(), "Zebra");
+        assert_eq!(sorted[1].title().pretty(), "Apple");
+    }
+
+    #[test]
+    fn test_new_from_wiki_with_capacity() {
+        let pl = PageList::new_from_wiki_with_capacity("enwiki", 100);
+        assert_eq!(pl.wiki(), Some("enwiki".to_string()));
+        assert!(pl.is_empty());
+    }
+
+    #[test]
+    fn test_regexp_filter() {
+        let pl = PageList::new_from_wiki("enwiki");
+        pl.add_entry(make_entry("Magnus_Manske", 0));
+        pl.add_entry(make_entry("Count_von_Count", 0));
+        pl.add_entry(make_entry("Magnus_Something", 0));
+
+        pl.regexp_filter("Magnus.*");
+        assert_eq!(pl.len(), 2);
     }
 }

@@ -1,19 +1,19 @@
 use crate::app_state::AppState;
 use crate::form_parameters::FormParameters;
 use crate::platform::Platform;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::env;
 use std::fs::File;
 use std::sync::Arc;
 use url::form_urlencoded;
 
-/// # Panics
-/// Panics if the config file can not be opened or parsed.
 pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<()> {
     let mut args = std::env::args();
     let _ = args.next(); // the actual command
-    let argument: String = args.next().unwrap();
+    let argument: String = args
+        .next()
+        .ok_or_else(|| anyhow!("No command line argument provided"))?;
 
     let parameter_pairs = form_urlencoded::parse(argument.as_bytes())
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
@@ -35,13 +35,10 @@ pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<()> {
         if !psid.trim().is_empty() {
             match app_state.get_query_from_psid(&psid.to_string()).await {
                 Ok(psid_query) => {
-                    let psid_params = match FormParameters::outcome_from_query(&psid_query) {
-                        Ok(pp) => pp,
-                        Err(e) => panic!("{}", e),
-                    };
+                    let psid_params = FormParameters::outcome_from_query(&psid_query)?;
                     form_parameters.rebase(&psid_params);
                 }
-                Err(e) => panic!("{}", e),
+                Err(e) => return Err(e),
             }
         }
     }
@@ -54,7 +51,7 @@ pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<()> {
         Ok(response) => response,
         Err(error) => app_state.render_error(error.to_string(), &form_parameters),
     };
-    println!("{}", json!(response.s).as_str().unwrap());
+    println!("{}", json!(response.s).as_str().unwrap_or(&response.s));
 
     Ok(())
 }

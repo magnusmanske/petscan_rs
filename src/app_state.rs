@@ -35,20 +35,17 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// # Panics
-    /// Panics if the config file is missing the `user` or `password` keys.
-    pub async fn new_from_config(config: &Value) -> Self {
+    pub async fn new_from_config(config: &Value) -> Result<Self> {
         let main_page_path = "./html/index.html";
-        let tool_db_access_tuple = (
-            config["user"]
-                .as_str()
-                .expect("No user key in config file")
-                .to_string(),
-            config["password"]
-                .as_str()
-                .expect("No password key in config file")
-                .to_string(),
-        );
+        let user = config["user"]
+            .as_str()
+            .ok_or_else(|| anyhow!("No user key in config file"))?
+            .to_string();
+        let password = config["password"]
+            .as_str()
+            .ok_or_else(|| anyhow!("No password key in config file"))?
+            .to_string();
+        let tool_db_access_tuple = (user, password);
         let port_mapping = config["port_mapping"]
             .as_object()
             .map(|x| x.to_owned())
@@ -58,7 +55,12 @@ impl AppState {
             .collect();
         let wikidata_api = Api::new("https://www.wikidata.org/w/api.php")
             .await
-            .expect("Can't talk to Wikidata API");
+            .map_err(|e| anyhow!("Can't talk to Wikidata API: {e}"))?;
+        let main_page_bytes = fs::read(main_page_path)
+            .map_err(|e| anyhow!("Could not read index.html file from disk: {e}"))?;
+        let main_page = String::from_utf8_lossy(&main_page_bytes)
+            .parse()
+            .map_err(|e: std::convert::Infallible| anyhow!("Parsing index.html failed: {e}"))?;
         let ret = Self {
             db_pool: Arc::new(Mutex::new(vec![])),
             config: config.to_owned(),
@@ -67,40 +69,36 @@ impl AppState {
             shutting_down: Arc::new(RwLock::new(false)),
             site_matrix: SiteMatrix::new(&wikidata_api)
                 .await
-                .expect("Can't get site matrix"),
+                .map_err(|e| anyhow!("Can't get site matrix: {e}"))?,
             tool_db_mutex: Arc::new(Mutex::new(tool_db_access_tuple)),
-            main_page: String::from_utf8_lossy(
-                &fs::read(main_page_path).expect("Could not read index.html file form disk"),
-            )
-            .parse()
-            .expect("Parsing index.html failed"),
+            main_page,
         };
 
         if let Some(up_list) = config["mysql"].as_array() {
             let mut pool = ret.db_pool.lock().await;
             for up in up_list {
-                let user = up[0]
+                let username = up[0]
                     .as_str()
-                    .expect("Parsing user from mysql array in config failed")
+                    .ok_or_else(|| anyhow!("Parsing user from mysql array in config failed"))?
                     .to_string();
                 let pass = up[1]
                     .as_str()
-                    .expect("Parsing pass from mysql array in config failed")
+                    .ok_or_else(|| anyhow!("Parsing pass from mysql array in config failed"))?
                     .to_string();
                 let connections = up[2].as_u64().unwrap_or(5);
                 // Ignore toolname up[3]
 
                 for _num in 1..connections {
-                    pool.push((user.to_string(), pass.to_string()));
+                    pool.push((username.to_string(), pass.to_string()));
                 }
             }
             let mut rng = rand::rng();
             pool.shuffle(&mut rng);
         }
         if ret.db_pool.lock().await.is_empty() {
-            panic!("No database access config available");
+            return Err(anyhow!("No database access config available"));
         }
-        ret
+        Ok(ret)
     }
 
     pub fn using_file_table(&self) -> bool {
@@ -216,29 +214,27 @@ impl AppState {
                     wiki.to_owned() + self.get_db_server_group()
                 }
             }
-            None => panic!("No host in config file"),
+            None => return Err(anyhow!("No host in config file")),
         };
         let schema = format!("{wiki}_p");
         Ok((host, schema))
     }
 
     /// Returns the server and database name for the tool db, as a tuple
-    /// # Panics
-    /// Panics if the host or schema key is missing from the config file
-    pub fn db_host_and_schema_for_tool_db(&self) -> (String, String) {
+    pub fn db_host_and_schema_for_tool_db(&self) -> Result<(String, String)> {
         // TESTING
         /*
         ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
         */
         let host = self.config["host"]
             .as_str()
-            .expect("No host key in config file")
+            .ok_or_else(|| anyhow!("No host key in config file"))?
             .to_string();
         let schema = self.config["schema"]
             .as_str()
-            .expect("No schema key in config file")
+            .ok_or_else(|| anyhow!("No schema key in config file"))?
             .to_string();
-        (host, schema)
+        Ok((host, schema))
     }
 
     async fn set_group_concat_max_len(&self, wiki: &str, conn: &mut my::Conn) -> Result<()> {
@@ -258,7 +254,7 @@ impl AppState {
 
         let mut pool = self.db_pool.lock().await;
         if pool.is_empty() {
-            panic!("pool is empty");
+            return Err(anyhow!("Database connection pool is empty"));
         }
         pool.rotate_left(1);
         let last = pool.len() - 1;
@@ -329,24 +325,19 @@ impl AppState {
         }
     }
 
-    /// # Panics
-    /// Panics if the JSON can't be serialized
     pub fn output_json(&self, value: &Value, callback: Option<&String>) -> MyResponse {
+        let json_string = ::serde_json::to_string(&value)
+            .unwrap_or_else(|e| format!("{{\"error\":\"JSON serialization failed: {e}\"}}"));
         match callback {
             Some(callback) => {
-                let mut text = callback.to_owned();
-                text += "(";
-                text += &::serde_json::to_string(&value)
-                    .expect("app_state::output_json can't stringify JSON [1]");
-                text += ")";
+                let text = format!("{callback}({json_string})");
                 MyResponse {
                     s: text,
                     content_type: ContentType::JSONP,
                 }
             }
             None => MyResponse {
-                s: ::serde_json::to_string(&value)
-                    .expect("app_state::output_json can't stringify JSON [2]"),
+                s: json_string,
                 content_type: ContentType::JSON,
             },
         }
@@ -357,7 +348,7 @@ impl AppState {
     }
 
     pub async fn get_tool_db_connection(&self, tool_db_user_pass: DbUserPass) -> Result<my::Conn> {
-        let (host, schema) = self.db_host_and_schema_for_tool_db();
+        let (host, schema) = self.db_host_and_schema_for_tool_db()?;
         let (user, pass) = tool_db_user_pass.clone();
         let port: u16 = match self.config["host"].as_str() {
             Some("127.0.0.1") => 3308,
@@ -544,7 +535,11 @@ mod tests {
         let file = File::open(path).expect("Can not open config file");
         let petscan_config: Value =
             serde_json::from_reader(file).expect("Can not parse JSON from config file");
-        Arc::new(AppState::new_from_config(&petscan_config).await)
+        Arc::new(
+            AppState::new_from_config(&petscan_config)
+                .await
+                .expect("AppState::new_from_config failed in test"),
+        )
     }
 
     async fn get_state() -> Arc<AppState> {
@@ -555,6 +550,179 @@ mod tests {
                               }
                               STATE.clone()
                               */
+    }
+
+    /// Build a minimal AppState-like config for unit tests that don't need DB
+    fn make_minimal_config(host: &str) -> Value {
+        serde_json::json!({
+            "host": host,
+            "user": "testuser",
+            "password": "testpass",
+            "schema": "test_schema",
+            "db_port": 3306
+        })
+    }
+
+    #[test]
+    fn test_fix_wiki_name_be_tarask() {
+        let config = make_minimal_config("127.0.0.1");
+        let state = AppState {
+            config: config.clone(),
+            ..Default::default()
+        };
+        assert_eq!(state.fix_wiki_name("be-taraskwiki"), "be_x_oldwiki");
+        assert_eq!(state.fix_wiki_name("be-x-oldwiki"), "be_x_oldwiki");
+        assert_eq!(state.fix_wiki_name("be_taraskwiki"), "be_x_oldwiki");
+        assert_eq!(state.fix_wiki_name("be_x_oldwiki"), "be_x_oldwiki");
+    }
+
+    #[test]
+    fn test_fix_wiki_name_normal() {
+        let state = AppState {
+            config: make_minimal_config("127.0.0.1"),
+            ..Default::default()
+        };
+        assert_eq!(state.fix_wiki_name("enwiki"), "enwiki");
+        assert_eq!(state.fix_wiki_name("wikidatawiki"), "wikidatawiki");
+        // Hyphens converted to underscores for non-special wikis
+        assert_eq!(state.fix_wiki_name("zh-min-nanwiki"), "zh_min_nanwiki");
+    }
+
+    #[test]
+    fn test_using_file_table() {
+        let config_true = serde_json::json!({ "use_file_table": true });
+        let state_true = AppState {
+            config: config_true,
+            ..Default::default()
+        };
+        assert!(state_true.using_file_table());
+
+        let config_false = serde_json::json!({ "use_file_table": false });
+        let state_false = AppState {
+            config: config_false,
+            ..Default::default()
+        };
+        assert!(!state_false.using_file_table());
+
+        let config_missing = serde_json::json!({});
+        let state_missing = AppState {
+            config: config_missing,
+            ..Default::default()
+        };
+        assert!(!state_missing.using_file_table());
+    }
+
+    #[test]
+    fn test_using_new_categorylinks_table() {
+        let config = serde_json::json!({ "use_new_categorylinks_table": true });
+        let state = AppState {
+            config,
+            ..Default::default()
+        };
+        assert!(state.using_new_categorylinks_table());
+    }
+
+    #[test]
+    fn test_get_restart_code() {
+        let config = serde_json::json!({ "restart-code": "abc123" });
+        let state = AppState {
+            config,
+            ..Default::default()
+        };
+        assert_eq!(state.get_restart_code(), Some("abc123"));
+
+        let config2 = serde_json::json!({});
+        let state2 = AppState {
+            config: config2,
+            ..Default::default()
+        };
+        assert_eq!(state2.get_restart_code(), None);
+    }
+
+    #[test]
+    fn test_db_host_and_schema_for_wiki_local() {
+        let config = make_minimal_config("127.0.0.1");
+        let state = AppState {
+            config,
+            ..Default::default()
+        };
+        let (host, schema) = state
+            .db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default)
+            .unwrap();
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(schema, "enwiki_p");
+    }
+
+    #[test]
+    fn test_db_host_and_schema_for_wiki_no_host() {
+        let config = serde_json::json!({});
+        let state = AppState {
+            config,
+            ..Default::default()
+        };
+        let result = state.db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_render_error_html() {
+        // HTML render_error requires a fully initialized AppState (SiteMatrix),
+        // so we use the full state loaded from config.
+        let state = get_state().await;
+        let mut params = crate::form_parameters::FormParameters::new();
+        params
+            .params
+            .insert("format".to_string(), "html".to_string());
+        let response = state.render_error("Test error".to_string(), &params);
+        assert!(response.s.contains("Test error"));
+        assert_eq!(response.content_type, ContentType::HTML);
+    }
+
+    #[test]
+    fn test_render_error_json() {
+        let config = make_minimal_config("127.0.0.1");
+        let state = AppState {
+            config,
+            ..Default::default()
+        };
+        let mut params = crate::form_parameters::FormParameters::new();
+        params
+            .params
+            .insert("format".to_string(), "json".to_string());
+        let response = state.render_error("Test error".to_string(), &params);
+        assert!(response.s.contains("Test error"));
+        assert_eq!(response.content_type, ContentType::JSON);
+    }
+
+    #[test]
+    fn test_render_error_plain() {
+        let config = make_minimal_config("127.0.0.1");
+        let state = AppState {
+            config,
+            ..Default::default()
+        };
+        let mut params = crate::form_parameters::FormParameters::new();
+        params
+            .params
+            .insert("format".to_string(), "plaintext".to_string());
+        let response = state.render_error("Test error".to_string(), &params);
+        assert_eq!(response.s, "Test error");
+        assert_eq!(response.content_type, ContentType::Plain);
+    }
+
+    #[test]
+    fn test_is_shutting_down_default() {
+        let state = AppState::default();
+        // Default state should not be shutting down
+        assert!(!state.is_shutting_down());
+    }
+
+    #[test]
+    fn test_shut_down() {
+        let state = AppState::default();
+        assert!(!state.is_shutting_down());
+        state.shut_down();
+        assert!(state.is_shutting_down());
     }
 
     #[tokio::test]

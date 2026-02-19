@@ -34,14 +34,17 @@ impl WebServer {
         }
     }
     pub async fn run(&self) -> Result<()> {
-        let listener = self.start_webserver().await;
+        let listener = self.start_webserver().await?;
 
         // We start a loop to continuously accept incoming connections
         loop {
-            let (stream, _) = listener
-                .accept()
-                .await
-                .expect("web_server: Cannot accept request");
+            let (stream, _) = match listener.accept().await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!("web_server: Cannot accept request: {e}");
+                    continue;
+                }
+            };
 
             // Use an adapter to access something implementing `tokio::io` traits as if they implement
             // `hyper::rt` IO traits.
@@ -56,32 +59,30 @@ impl WebServer {
                     .serve_connection(io, service_fn(|req| me.process_request(req)))
                     .await
                 {
-                    println!("Error serving connection: {err}");
+                    tracing::error!("Error serving connection: {err}");
                 }
             });
         }
     }
 
-    async fn start_webserver(&self) -> TcpListener {
+    async fn start_webserver(&self) -> Result<TcpListener> {
+        use anyhow::Context;
         // Run on IP/port
         let port = self.petscan_config["http_port"].as_u64().unwrap_or(80) as u16;
         let ip_address = self.petscan_config["http_server"]
             .as_str()
             .unwrap_or("0.0.0.0")
             .to_string();
-        let ip_address: Vec<u8> = ip_address
-            .split('.')
-            .map(|s| s.parse::<u8>().unwrap())
-            .collect();
-        let ip_address =
-            std::net::Ipv4Addr::new(ip_address[0], ip_address[1], ip_address[2], ip_address[3]);
+        let ip_address: std::net::Ipv4Addr = ip_address
+            .parse()
+            .with_context(|| format!("Invalid http_server IP address: '{ip_address}'"))?;
         let addr = SocketAddr::from((ip_address, port));
-        println!("Listening on http://{addr}");
+        tracing::info!("Listening on http://{addr}");
 
         // We create a TcpListener and bind it to IP:port
         TcpListener::bind(addr)
             .await
-            .expect("web_server: Cannot bind IP")
+            .with_context(|| format!("web_server: Cannot bind to {addr}"))
     }
 
     async fn process_request(
@@ -105,7 +106,18 @@ impl WebServer {
                 *resp.status_mut() = hyper::StatusCode::PAYLOAD_TOO_LARGE;
                 return Ok(resp);
             }
-            let query = req.collect().await.unwrap().to_bytes();
+            let collected = match req.collect().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to read POST body: {e}");
+                    let mut resp = Response::new(Full::from(
+                        b"Internal Server Error".as_ref(),
+                    ));
+                    *resp.status_mut() = hyper::StatusCode::INTERNAL_SERVER_ERROR;
+                    return Ok(resp);
+                }
+            };
+            let query = collected.to_bytes();
             if !query.is_empty() {
                 let query = String::from_utf8_lossy(&query);
                 return self.process_from_query(&query).await;
@@ -122,7 +134,10 @@ impl WebServer {
             .header(header::CONTENT_TYPE, ret.content_type.as_str())
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
             .body(Full::from(ret.s))
-            .unwrap();
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to build HTTP response: {e}");
+                Response::new(Full::from(b"Internal Server Error".as_ref()))
+            });
         Ok(response)
     }
 
@@ -215,7 +230,7 @@ impl WebServer {
         {
             Ok(id) => id,
             Err(e) => {
-                println!("Could not log query start: {e}\n{form_parameters}");
+                tracing::warn!("Could not log query start: {e}\n{form_parameters}");
                 0
             }
         };
@@ -228,7 +243,7 @@ impl WebServer {
         match self.app_state.log_query_end(started_query_id).await {
             Ok(_) => {}
             Err(e) => {
-                println!("Could not log query {started_query_id} end:{e}\n{form_parameters}");
+                tracing::warn!("Could not log query {started_query_id} end:{e}\n{form_parameters}");
             }
         }
         self.app_state.modify_threads_running(-1);
@@ -314,7 +329,7 @@ impl WebServer {
         Ok(Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(NOTFOUND.into())
-            .unwrap())
+            .unwrap_or_else(|_| Response::new(Full::from(NOTFOUND))))
     }
 
     async fn simple_file_send(
@@ -329,7 +344,7 @@ impl WebServer {
                 let response = Response::builder()
                     .header(header::CONTENT_TYPE, content_type)
                     .body(body)
-                    .unwrap();
+                    .unwrap_or_else(|_| Response::new(Full::from(NOTFOUND)));
                 Ok(response)
             }
             Err(_) => Self::not_found(),

@@ -35,7 +35,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, instrument};
@@ -43,6 +43,11 @@ use wikimisc::mediawiki::api::NamespaceID;
 use wikimisc::mediawiki::title::Title;
 
 pub static PAGE_BATCH_SIZE: usize = 15000;
+
+static RE_PARSE_COMBINATION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\w+(?:'\w+)?|[^\w\s]")
+        .expect("Platform::parse_combination_string: Regex is invalid")
+});
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MyResponse {
@@ -220,7 +225,7 @@ impl Platform {
         while !tmp_results.is_empty() {
             let result = tmp_results.remove(0);
             if names.is_empty() {
-                panic!("Platform::run names is empty");
+                return Err(anyhow!("Platform::run: names list is empty unexpectedly"));
             }
             let name = names.remove(0);
             results.insert(name, result?);
@@ -1084,10 +1089,6 @@ impl Platform {
 
     fn get_label_sql_new(&self, namespace_id: &NamespaceID) -> Option<SQLtuple> {
         // wbt_ done
-        lazy_static! {
-            static ref RE1: Regex =
-                Regex::new(r#"[^a-z,]"#).expect("Platform::get_label_sql Regex is invalid");
-        }
         let mut ret: SQLtuple = (String::new(), vec![]);
         let yes = self.get_param_as_vec("labels_yes", "\n");
         let any = self.get_param_as_vec("labels_any", "\n");
@@ -1580,10 +1581,6 @@ impl Platform {
     }
 
     pub fn get_label_sql(&self) -> SQLtuple {
-        lazy_static! {
-            static ref RE1: Regex =
-                Regex::new(r#"[^a-z,]"#).expect("Platform::get_label_sql Regex is invalid");
-        }
         let mut ret: SQLtuple = (String::new(), vec![]);
         let yes = self.get_param_as_vec("labels_yes", "\n");
         let any = self.get_param_as_vec("labels_any", "\n");
@@ -1668,10 +1665,6 @@ impl Platform {
     }
 
     fn parse_combination_string(s: &str) -> Combination {
-        lazy_static! {
-            static ref RE: Regex = Regex::new(r"\w+(?:'\w+)?|[^\w\s]")
-                .expect("Platform::parse_combination_string: Regex is invalid");
-        }
         match s.trim().to_lowercase().as_str() {
             "" => return Combination::None,
             "categories" | "sparql" | "manual" | "pagepile" | "wikidata" | "search" => {
@@ -1679,7 +1672,7 @@ impl Platform {
             }
             _ => {}
         }
-        let mut parts: Vec<String> = RE
+        let mut parts: Vec<String> = RE_PARSE_COMBINATION
             .captures_iter(s)
             .filter_map(|cap| cap.get(0))
             .map(|s| s.as_str().to_string())
@@ -1909,7 +1902,11 @@ mod tests {
         let file = File::open(path).expect("Can not open config file");
         let petscan_config: Value =
             serde_json::from_reader(file).expect("Can not parse JSON from config file");
-        Arc::new(AppState::new_from_config(&petscan_config).await)
+        Arc::new(
+            AppState::new_from_config(&petscan_config)
+                .await
+                .expect("AppState::new_from_config failed in test"),
+        )
     }
 
     async fn get_state() -> Arc<AppState> {
@@ -1967,6 +1964,148 @@ mod tests {
 
     async fn check_results_for_psid(psid: usize, wiki: &str, expected: Vec<Title>) {
         check_results_for_psid_ext(psid, "", wiki, expected).await;
+    }
+
+    fn make_platform_with_params(pairs: Vec<(&str, &str)>) -> Platform {
+        let mut params = std::collections::HashMap::new();
+        for (k, v) in pairs {
+            params.insert(k.to_string(), v.to_string());
+        }
+        let fp = FormParameters::new_from_pairs(params);
+        // Use a dummy AppState (no DB operations will be called)
+        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
+    }
+
+    #[test]
+    fn test_get_param_present() {
+        let p = make_platform_with_params(vec![("format", "json")]);
+        assert_eq!(p.get_param("format"), Some("json".to_string()));
+    }
+
+    #[test]
+    fn test_get_param_missing() {
+        let p = make_platform_with_params(vec![]);
+        assert_eq!(p.get_param("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_get_param_empty_value_treated_as_missing() {
+        let p = make_platform_with_params(vec![("somekey", "")]);
+        assert_eq!(p.get_param("somekey"), None);
+    }
+
+    #[test]
+    fn test_has_param() {
+        let p = make_platform_with_params(vec![("format", "json"), ("empty_key", "")]);
+        assert!(p.has_param("format"));
+        assert!(!p.has_param("empty_key"));
+        assert!(!p.has_param("nonexistent"));
+    }
+
+    #[test]
+    fn test_get_param_blank() {
+        let p = make_platform_with_params(vec![("format", "json")]);
+        assert_eq!(p.get_param_blank("format"), "json".to_string());
+        assert_eq!(p.get_param_blank("missing"), "".to_string());
+    }
+
+    #[test]
+    fn test_get_param_default() {
+        let p = make_platform_with_params(vec![("sortby", "title")]);
+        assert_eq!(
+            p.get_param_default("sortby", "default"),
+            "title".to_string()
+        );
+        assert_eq!(
+            p.get_param_default("missing", "fallback"),
+            "fallback".to_string()
+        );
+        // Empty value should use default
+        let p2 = make_platform_with_params(vec![("key", "")]);
+        assert_eq!(
+            p2.get_param_default("key", "mydefault"),
+            "mydefault".to_string()
+        );
+    }
+
+    #[test]
+    fn test_get_param_as_vec() {
+        let p = make_platform_with_params(vec![("cats", "Cat1\nCat2\nCat3")]);
+        let v = p.get_param_as_vec("cats", "\n");
+        assert_eq!(v.len(), 3);
+        assert!(v.contains(&"Cat1".to_string()));
+    }
+
+    #[test]
+    fn test_prep_quote_basic() {
+        let strings = vec!["foo".to_string(), "bar".to_string(), "baz".to_string()];
+        let (placeholders, values) = Platform::prep_quote(&strings);
+        assert_eq!(placeholders, "?,?,?");
+        assert_eq!(values.len(), 3);
+    }
+
+    #[test]
+    fn test_prep_quote_empty_filtered() {
+        let strings = vec![
+            "foo".to_string(),
+            "".to_string(),
+            "  ".to_string(),
+            "bar".to_string(),
+        ];
+        let (placeholders, values) = Platform::prep_quote(&strings);
+        assert_eq!(placeholders, "?,?");
+        assert_eq!(values.len(), 2);
+    }
+
+    #[test]
+    fn test_prep_quote_empty_input() {
+        let strings: Vec<String> = vec![];
+        let (placeholders, values) = Platform::prep_quote(&strings);
+        assert_eq!(placeholders, "");
+        assert_eq!(values.len(), 0);
+    }
+
+    #[test]
+    fn test_get_placeholders() {
+        assert_eq!(Platform::get_placeholders(0), "");
+        assert_eq!(Platform::get_placeholders(1), "?");
+        assert_eq!(Platform::get_placeholders(3), "?,?,?");
+        assert_eq!(Platform::get_placeholders(5), "?,?,?,?,?");
+    }
+
+    #[test]
+    fn test_append_sql() {
+        let mut sql = ("SELECT * FROM page WHERE ".to_string(), vec![]);
+        let sub = (
+            "page_title=?".to_string(),
+            vec![mysql_async::Value::Bytes("Foo".into())],
+        );
+        Platform::append_sql(&mut sql, sub);
+        assert_eq!(sql.0, "SELECT * FROM page WHERE page_title=?");
+        assert_eq!(sql.1.len(), 1);
+    }
+
+    #[test]
+    fn test_sql_tuple_empty() {
+        let t = Platform::sql_tuple();
+        assert_eq!(t.0, "");
+        assert!(t.1.is_empty());
+    }
+
+    #[test]
+    fn test_warnings() {
+        let p = make_platform_with_params(vec![]);
+        assert!(p.warnings().unwrap().is_empty());
+        p.warn("test warning".to_string()).unwrap();
+        let warnings = p.warnings().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0], "test warning");
+    }
+
+    #[test]
+    fn test_do_output_redlinks_default() {
+        let p = make_platform_with_params(vec![]);
+        assert!(!p.do_output_redlinks());
     }
 
     #[tokio::test]
@@ -2187,7 +2326,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_template_talk_pages() {
-        let platform = run_psid(15059382).await;
+        let platform = run_psid(43089908).await;
         let result = platform.result.unwrap();
         let entries = entries_from_result(result);
         assert!(!entries.is_empty());

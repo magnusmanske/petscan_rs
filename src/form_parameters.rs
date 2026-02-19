@@ -4,7 +4,12 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::LazyLock;
 use url::Url;
+
+static RE_NS_FROM_PARAMS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^ns\[(\d+)\]$"#).expect("FormParameters::ns_from_params:RE")
+});
 
 #[derive(Debug, Clone, Default)]
 pub struct FormParameters {
@@ -41,10 +46,6 @@ impl FormParameters {
 
     /// Extracts namespaces from parameter list
     fn ns_from_params(params: &HashMap<String, String>) -> HashSet<usize> {
-        lazy_static! {
-            static ref RE: Regex =
-                Regex::new(r#"^ns\[(\d+)\]$"#).expect("FormParameters::ns_from_params:RE");
-        }
         let mut ns: HashSet<usize> = HashSet::new();
         params
             .iter()
@@ -54,7 +55,7 @@ impl FormParameters {
                     // Backwards compat
                     ns.insert(0);
                 }
-                for cap in RE.captures_iter(k) {
+                for cap in RE_NS_FROM_PARAMS.captures_iter(k) {
                     if let Ok(ns_num) = cap[1].parse::<usize>() {
                         ns.insert(ns_num);
                     }

@@ -1331,7 +1331,11 @@ mod tests {
         let file = File::open(path).expect("Can not open config file");
         let petscan_config: Value =
             serde_json::from_reader(file).expect("Can not parse JSON from config file");
-        Arc::new(AppState::new_from_config(&petscan_config).await)
+        Arc::new(
+            AppState::new_from_config(&petscan_config)
+                .await
+                .expect("AppState::new_from_config failed in test"),
+        )
     }
 
     async fn simulate_category_query(url_params: Vec<(&str, &str)>) -> Result<PageList> {

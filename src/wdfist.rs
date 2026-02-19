@@ -12,8 +12,19 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use wikimisc::mediawiki::api::Api;
+
+static RE_FILETYPE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^(.+)\.([^.]+)$"#).expect("WDfist::is_valid_filename RE_FILETYPE is invalid")
+});
+static RE_KEY_PHRASES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(Flag_of_|Crystal_Clear_|Nuvola_|Kit_)"#)
+        .expect("WDfist::is_valid_filename RE_KEY_PHRASES is invalid")
+});
+static RE_KEY_PHRASES_PNG: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(600px_)"#).expect("WDfist::is_valid_filename RE_KEY_PHRASES_PNG is invalid")
+});
 
 pub static MIN_IGNORE_DB_FILE_COUNT: usize = 3;
 pub static MAX_FILE_COUNT_IN_RESULT_SET: usize = 5;
@@ -702,16 +713,6 @@ impl WDfist {
 
     // Requires normalized filename
     fn is_valid_filename(&self, filename: &str) -> bool {
-        lazy_static! {
-            static ref RE_FILETYPE: Regex = Regex::new(r#"^(.+)\.([^.]+)$"#)
-                .expect("WDfist::is_valid_filename RE_FILETYPE is invalid");
-            static ref RE_KEY_PHRASES: Regex =
-                Regex::new(r#"(Flag_of_|Crystal_Clear_|Nuvola_|Kit_)"#)
-                    .expect("WDfist::is_valid_filename RE_KEY_PHRASES is invalid");
-            static ref RE_KEY_PHRASES_PNG: Regex = Regex::new(r#"(600px_)"#)
-                .expect("WDfist::is_valid_filename RE_KEY_PHRASES_PNG is invalid");
-        }
-
         if filename.is_empty() {
             return false;
         }
@@ -830,7 +831,11 @@ mod tests {
         let file = File::open(path).expect("Can not open config file");
         let petscan_config: Value =
             serde_json::from_reader(file).expect("Can not parse JSON from config file");
-        Arc::new(AppState::new_from_config(&petscan_config).await)
+        Arc::new(
+            AppState::new_from_config(&petscan_config)
+                .await
+                .expect("AppState::new_from_config failed in test"),
+        )
     }
 
     async fn get_wdfist(params: Vec<(&str, &str)>, items: Vec<&str>) -> WDfist {

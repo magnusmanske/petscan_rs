@@ -8,7 +8,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
 
     let petscan_config = get_petscan_config();
-    let app_state = Arc::new(AppState::new_from_config(&petscan_config).await);
+    let app_state = Arc::new(AppState::new_from_config(&petscan_config).await?);
 
     let args = std::env::args();
     if args.len() > 1 {
