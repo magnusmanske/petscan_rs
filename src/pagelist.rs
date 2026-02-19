@@ -190,16 +190,25 @@ impl PageList {
     pub async fn union(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
         Platform::profile("PageList::union START UNION/1", None);
-        let mut me = self.entries.write().unwrap();
-        if me.is_empty() {
-            *me = pagelist.entries.read().unwrap().clone();
-            return Ok(());
-        }
-        Platform::profile("PageList::union START UNION/2", None);
-        pagelist.entries.read().unwrap().iter().for_each(|x| {
-            me.insert(x.to_owned());
-        });
+        // Clone the other list's entries so they can be moved into the blocking task.
+        let other: HashSet<PageListEntry> = pagelist.entries.read().unwrap().clone();
+        // Fast path: if self is empty just replace with the clone we already have.
+        let is_self_empty = self.entries.read().unwrap().is_empty();
+        let merged = if is_self_empty {
+            other
+        } else {
+            Platform::profile("PageList::union START UNION/2", None);
+            let self_set: HashSet<PageListEntry> = self.entries.write().unwrap().drain().collect();
+            tokio::task::spawn_blocking(move || {
+                let mut result = self_set;
+                result.extend(other);
+                result
+            })
+            .await
+            .map_err(|e| anyhow!("{e}"))?
+        };
         Platform::profile("PageList::union UNION DONE", None);
+        *self.entries.write().unwrap() = merged;
         Ok(())
     }
 
@@ -209,21 +218,35 @@ impl PageList {
         platform: Option<&Platform>,
     ) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
-        let other_entries = pagelist.entries.read().unwrap();
-        self.entries
-            .write()
-            .unwrap()
-            .retain(|page_list_entry| other_entries.contains(page_list_entry));
+        // Clone the other list's entries so they can be moved into the blocking task.
+        let other: HashSet<PageListEntry> = pagelist.entries.read().unwrap().clone();
+        let self_set: HashSet<PageListEntry> = self.entries.write().unwrap().drain().collect();
+        let filtered = tokio::task::spawn_blocking(move || {
+            self_set
+                .into_iter()
+                .filter(|e| other.contains(e))
+                .collect::<HashSet<_>>()
+        })
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+        *self.entries.write().unwrap() = filtered;
         Ok(())
     }
 
     pub async fn difference(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
-        let other_entries = pagelist.entries.read().unwrap();
-        self.entries
-            .write()
-            .unwrap()
-            .retain(|page_list_entry| !other_entries.contains(page_list_entry));
+        // Clone the other list's entries so they can be moved into the blocking task.
+        let other: HashSet<PageListEntry> = pagelist.entries.read().unwrap().clone();
+        let self_set: HashSet<PageListEntry> = self.entries.write().unwrap().drain().collect();
+        let filtered = tokio::task::spawn_blocking(move || {
+            self_set
+                .into_iter()
+                .filter(|e| !other.contains(e))
+                .collect::<HashSet<_>>()
+        })
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
+        *self.entries.write().unwrap() = filtered;
         Ok(())
     }
 
