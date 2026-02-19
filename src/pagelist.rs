@@ -1,12 +1,12 @@
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::pagelist_entry::{PageListEntry, PageListSort};
-use crate::platform::{Platform, PAGE_BATCH_SIZE};
-use anyhow::{anyhow, Result};
+use crate::platform::{PAGE_BATCH_SIZE, Platform};
+use anyhow::{Result, anyhow};
 use futures::future::join_all;
 use mysql_async as my;
-use mysql_async::prelude::Queryable;
 use mysql_async::Value as MyValue;
+use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -129,6 +129,13 @@ impl PageList {
         let mut ret: Vec<PageListEntry> = self.entries.write().unwrap().drain().collect();
         ret.par_sort_by(|a, b| a.compare(b, &sorter, self.is_wikidata()));
         ret
+    }
+
+    /// Drains all entries into an unsorted `Vec`, leaving the set empty.
+    /// Prefer this over `drain_into_sorted_vec` in async contexts so the
+    /// sort can be offloaded to a blocking thread via `spawn_blocking`.
+    pub fn drain_into_vec(&self) -> Vec<PageListEntry> {
+        self.entries.write().unwrap().drain().collect()
     }
 
     pub fn group_by_namespace(&self) -> HashMap<NamespaceID, Vec<String>> {

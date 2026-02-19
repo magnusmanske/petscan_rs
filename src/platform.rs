@@ -3,6 +3,7 @@ use crate::combination::Combination;
 use crate::content_type::ContentType;
 use crate::datasource::DataSource;
 use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
+use rayon::prelude::*;
 
 use crate::datasource::manual::SourceManual;
 use crate::datasource::pagepile::SourcePagePile;
@@ -278,8 +279,16 @@ impl Platform {
         };
 
         let (sortby, sort_order) = self.get_sorting_parameters();
-        let mut pages =
-            result.drain_into_sorted_vec(PageListSort::new_from_params(&sortby, sort_order));
+        let sorter = PageListSort::new_from_params(&sortby, sort_order);
+        let is_wikidata = result.is_wikidata();
+        let entries = result.drain_into_vec();
+        let mut pages = tokio::task::spawn_blocking(move || {
+            let mut ret = entries;
+            ret.par_sort_by(|a, b| a.compare(b, &sorter, is_wikidata));
+            ret
+        })
+        .await
+        .map_err(|e| anyhow!("Sort task failed: {e}"))?;
         self.apply_results_limit(&mut pages);
 
         match self.get_param_blank("format").as_str() {

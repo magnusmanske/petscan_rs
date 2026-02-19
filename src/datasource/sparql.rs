@@ -149,6 +149,8 @@ impl DataSource for SourceSparql {
         };
 
         let response = response.text().await.map_err(|e| anyhow!(e))?;
-        sparql_server.parse_response(&response, &api)
+        tokio::task::spawn_blocking(move || sparql_server.parse_response(&response, &api))
+            .await
+            .map_err(|e| anyhow!("SPARQL parse task failed: {e}"))?
     }
 }

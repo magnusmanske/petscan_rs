@@ -10,7 +10,8 @@ use mysql_async::Value as MyValue;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use tokio::sync::Mutex as TokioMutex;
 use wikimisc::mediawiki::api::NamespaceID;
@@ -284,7 +285,27 @@ impl Platform {
         Platform::profile("after load_missing_metadata", Some(result.len()));
 
         if let Some(regexp) = self.get_param("rxp_filter") {
-            result.regexp_filter(&regexp);
+            let is_wikidata = result.is_wikidata();
+            let entries = result.drain_into_vec();
+            let filtered = tokio::task::spawn_blocking(move || {
+                let regexp_all = format!("^{regexp}$");
+                match Regex::new(&regexp_all) {
+                    Ok(re) => entries
+                        .into_iter()
+                        .filter(|entry| match is_wikidata {
+                            true => match entry.get_wikidata_label() {
+                                Some(s) => re.is_match(s.as_str()),
+                                None => false,
+                            },
+                            false => re.is_match(entry.title().pretty()),
+                        })
+                        .collect::<HashSet<_>>(),
+                    Err(_) => entries.into_iter().collect::<HashSet<_>>(),
+                }
+            })
+            .await
+            .map_err(|e| anyhow!("regexp filter task failed: {e}"))?;
+            result.set_entries(filtered);
         }
         if let Some(search) = self.get_param("search_filter") {
             result.search_filter(self, &search).await?;
