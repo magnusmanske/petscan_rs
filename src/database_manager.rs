@@ -5,16 +5,26 @@ use mysql_async as my;
 use mysql_async::Value as MyValue;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
-use rand::seq::SliceRandom;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::{instrument, trace};
 
+/// The termstore host for the X3 / Wikidata term-store cluster.
+/// This is a non-standard hostname that toolforge does not generate, so we
+/// keep it as a constant and supply credentials separately.
 const TERMSTORE_SERVER: &str = "termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud";
 
-pub type DbUserPass = (String, String);
+// ---------------------------------------------------------------------------
+// Credential source – toolforge (replica.my.cnf) or config.json fallback
+// ---------------------------------------------------------------------------
+
+/// A resolved user/password pair, obtained from either `~/replica.my.cnf`
+/// (via the `toolforge` crate) or the legacy `config.json` fields.
+#[derive(Debug, Clone)]
+struct Credentials {
+    user: String,
+    password: String,
+}
 
 // ---------------------------------------------------------------------------
 // DatabaseManager – owns all database-related state and logic
@@ -22,24 +32,23 @@ pub type DbUserPass = (String, String);
 
 #[derive(Debug, Clone, Default)]
 pub struct DatabaseManager {
-    db_pool: Arc<Mutex<Vec<DbUserPass>>>,
+    /// Full application config (used for feature flags, schema name, and the
+    /// local-dev fallback credentials / port-mapping).
     config: Value,
-    tool_db_mutex: Arc<Mutex<DbUserPass>>,
-    port_mapping: HashMap<String, u16>, // Local testing only
+    /// Port overrides for local SSH-tunnel testing.  Only populated when the
+    /// config contains a `port_mapping` object.
+    port_mapping: HashMap<String, u16>,
 }
 
 impl DatabaseManager {
     /// Initialise from the application config JSON value.
-    pub async fn new_from_config(config: &Value) -> Result<Self> {
-        let user = config["user"]
-            .as_str()
-            .ok_or_else(|| anyhow!("No user key in config file"))?
-            .to_string();
-        let password = config["password"]
-            .as_str()
-            .ok_or_else(|| anyhow!("No password key in config file"))?
-            .to_string();
-        let tool_db_access_tuple = (user, password);
+    ///
+    /// On Toolforge, database credentials are supplied by `~/replica.my.cnf`
+    /// (read on-demand by the `toolforge` crate).  When that file is absent
+    /// (local development), the legacy `config["user"]` / `config["password"]`
+    /// fields and `config["port_mapping"]` are used as a fallback so that
+    /// existing SSH-tunnel workflows continue to work unchanged.
+    pub fn new_from_config(config: &Value) -> Self {
         let port_mapping = config["port_mapping"]
             .as_object()
             .map(|x| x.to_owned())
@@ -48,52 +57,24 @@ impl DatabaseManager {
             .map(|(k, v)| (k.to_string(), v.as_i64().unwrap_or_default() as u16))
             .collect();
 
-        let ret = Self {
-            db_pool: Arc::new(Mutex::new(vec![])),
+        Self {
             config: config.to_owned(),
             port_mapping,
-            tool_db_mutex: Arc::new(Mutex::new(tool_db_access_tuple)),
-        };
-
-        if let Some(up_list) = config["mysql"].as_array() {
-            let mut pool = ret.db_pool.lock().await;
-            for up in up_list {
-                let username = up[0]
-                    .as_str()
-                    .ok_or_else(|| anyhow!("Parsing user from mysql array in config failed"))?
-                    .to_string();
-                let pass = up[1]
-                    .as_str()
-                    .ok_or_else(|| anyhow!("Parsing pass from mysql array in config failed"))?
-                    .to_string();
-                let connections = up[2].as_u64().unwrap_or(5);
-                // Ignore toolname up[3]
-
-                for _num in 1..connections {
-                    pool.push((username.to_string(), pass.to_string()));
-                }
-            }
-            let mut rng = rand::rng();
-            pool.shuffle(&mut rng);
         }
-        if ret.db_pool.lock().await.is_empty() {
-            return Err(anyhow!("No database access config available"));
-        }
-        Ok(ret)
     }
 
     // ------------------------------------------------------------------
     // Test / minimal constructor
     // ------------------------------------------------------------------
 
-    /// Create a [`DatabaseManager`] seeded with only a config value and default
-    /// values for all other fields.  Intended for unit tests that exercise
-    /// config-derived logic without needing a real database connection.
+    /// Create a [`DatabaseManager`] seeded with only a config value.
+    /// Intended for unit tests that exercise config-derived logic without
+    /// needing a real database connection.
     #[cfg(test)]
     pub(crate) fn with_config(config: Value) -> Self {
         Self {
             config,
-            ..Default::default()
+            port_mapping: HashMap::new(),
         }
     }
 
@@ -116,56 +97,42 @@ impl DatabaseManager {
     }
 
     // ------------------------------------------------------------------
-    // Internal helpers: MySQL connection options
+    // Credential resolution
     // ------------------------------------------------------------------
 
-    fn get_mysql_opts_for_wiki(
-        &self,
-        wiki: &str,
-        user: &str,
-        pass: &str,
-        cluster: DatabaseCluster,
-    ) -> Result<my::Opts> {
-        let (host, schema) = self.db_host_and_schema_for_wiki(wiki, cluster)?;
-        let port: u16 = self.port_mapping.get(wiki).map_or_else(
-            || self.config["db_port"].as_u64().unwrap_or(3306) as u16,
-            |port| *port,
-        );
-        let opts = my::OptsBuilder::default()
-            .ip_or_hostname(host)
-            .db_name(Some(schema))
-            .user(Some(user))
-            .pass(Some(pass))
-            .tcp_port(port)
-            .into();
-        Ok(opts)
-    }
+    /// Resolve database credentials.
+    ///
+    /// Tries `~/replica.my.cnf` first (standard Toolforge setup).  When that
+    /// file is absent – e.g. during local development – falls back to the
+    /// `user` / `password` fields in the JSON config.
+    fn credentials(&self) -> Result<Credentials> {
+        // Attempt toolforge / replica.my.cnf first.
+        if let Ok(info) = toolforge::connection_info!("enwiki") {
+            return Ok(Credentials {
+                user: info.user,
+                password: info.password,
+            });
+        }
 
-    fn get_mysql_opts_for_term_store(&self, user: &str, pass: &str) -> Result<my::Opts> {
-        let (host, schema) =
-            self.db_host_and_schema_for_wiki("wikidatawiki", DatabaseCluster::X3)?;
-        let port: u16 = self.port_mapping.get("x3").map_or_else(
-            || self.config["db_port"].as_u64().unwrap_or(3306) as u16,
-            |port| *port,
-        );
-        let opts = my::OptsBuilder::default()
-            .ip_or_hostname(host)
-            .db_name(Some(schema))
-            .user(Some(user))
-            .pass(Some(pass))
-            .tcp_port(port)
-            .into();
-        Ok(opts)
-    }
-
-    fn get_db_server_group(&self) -> &str {
-        self.config["dbservergroup"]
+        // Fall back to config.json (local dev).
+        let user = self.config["user"]
             .as_str()
-            .unwrap_or(".web.db.svc.eqiad.wmflabs")
+            .ok_or_else(|| {
+                anyhow!(
+                    "No ~/replica.my.cnf found and no 'user' key in config – \
+                     cannot resolve database credentials"
+                )
+            })?
+            .to_string();
+        let password = self.config["password"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        Ok(Credentials { user, password })
     }
 
     // ------------------------------------------------------------------
-    // Server / schema name resolution
+    // Server / schema name resolution (credential-free helpers)
     // ------------------------------------------------------------------
 
     pub fn fix_wiki_name(&self, wiki: &str) -> String {
@@ -177,58 +144,72 @@ impl DatabaseManager {
         .replace('-', "_")
     }
 
-    /// Returns the server and database name for the wiki, as a tuple.
-    /// # Panics
-    /// Panics if the host key is missing from the config file
+    /// Returns the canonical Toolforge host and `_p`-suffixed database name
+    /// for a wiki replica, as a `(host, schema)` tuple.
+    ///
+    /// For the default (WEB) cluster the host follows the standard Toolforge
+    /// pattern `{wiki}.web.db.svc.wikimedia.cloud`.  For the X3 cluster the
+    /// hard-coded termstore hostname is returned.
+    ///
+    /// This method is credential-free; use [`Self::get_wiki_db_connection`]
+    /// when you need an actual connection.
     pub fn db_host_and_schema_for_wiki(
         &self,
         wiki: &str,
         cluster: DatabaseCluster,
-    ) -> Result<(String, String)> {
-        // TESTING
-        /*
-        ssh magnus@login.toolforge.org -L 3307:dewiki.web.db.svc.eqiad.wmflabs:3306 -N &
-        ssh magnus@login.toolforge.org -L 3309:wikidatawiki.web.db.svc.eqiad.wmflabs:3306 -N &
-        ssh magnus@login.toolforge.org -L 3305:commonswiki.web.db.svc.eqiad.wmflabs:3306 -N &
-        ssh magnus@login.toolforge.org -L 3310:enwiki.web.db.svc.eqiad.wmflabs:3306 -N &
-         */
-
+    ) -> (String, String) {
         let wiki = self.fix_wiki_name(wiki);
-        let host = match self.config["host"].as_str() {
-            Some("127.0.0.1") => "127.0.0.1".to_string(),
-            Some(_host) => {
-                if cluster == DatabaseCluster::X3 {
-                    TERMSTORE_SERVER.to_string()
-                } else {
-                    wiki.to_owned() + self.get_db_server_group()
-                }
-            }
-            None => return Err(anyhow!("No host in config file")),
+        let host = match cluster {
+            DatabaseCluster::X3 => TERMSTORE_SERVER.to_string(),
+            _ => format!("{wiki}.web.db.svc.wikimedia.cloud"),
         };
         let schema = format!("{wiki}_p");
-        Ok((host, schema))
-    }
-
-    /// Returns the server and database name for the tool db, as a tuple.
-    pub fn db_host_and_schema_for_tool_db(&self) -> Result<(String, String)> {
-        // TESTING
-        /*
-        ssh magnus@login.toolforge.org -L 3308:tools-db:3306 -N &
-        */
-        let host = self.config["host"]
-            .as_str()
-            .ok_or_else(|| anyhow!("No host key in config file"))?
-            .to_string();
-        let schema = self.config["schema"]
-            .as_str()
-            .ok_or_else(|| anyhow!("No schema key in config file"))?
-            .to_string();
-        Ok((host, schema))
+        (host, schema)
     }
 
     // ------------------------------------------------------------------
-    // Connection pool
+    // Connection helpers
     // ------------------------------------------------------------------
+
+    /// Build [`my::Opts`] for a wiki-replica or termstore connection.
+    ///
+    /// On Toolforge, credentials come from `~/replica.my.cnf` (via the
+    /// `toolforge` crate).  Locally they fall back to `config["user"]` /
+    /// `config["password"]`, and the port is taken from `port_mapping` (for
+    /// SSH-tunnel setups) or `config["db_port"]`.
+    fn get_mysql_opts_for_wiki(&self, wiki: &str, cluster: DatabaseCluster) -> Result<my::Opts> {
+        let creds = self.credentials()?;
+
+        let (host, schema) = self.db_host_and_schema_for_wiki(wiki, cluster);
+
+        // Port: prefer an explicit port_mapping entry (local SSH tunnels),
+        // then fall back to config["db_port"], then the default 3306.
+        let port_key = match cluster {
+            DatabaseCluster::X3 => "x3",
+            _ => wiki,
+        };
+        let port: u16 = self
+            .port_mapping
+            .get(port_key)
+            .copied()
+            .unwrap_or_else(|| self.config["db_port"].as_u64().unwrap_or(3306) as u16);
+
+        // When running locally (host = 127.0.0.1 in config), always bind to
+        // 127.0.0.1 regardless of what db_host_and_schema_for_wiki computed.
+        let effective_host = if self.config["host"].as_str() == Some("127.0.0.1") {
+            "127.0.0.1".to_string()
+        } else {
+            host
+        };
+
+        Ok(my::OptsBuilder::default()
+            .ip_or_hostname(effective_host)
+            .db_name(Some(schema))
+            .user(Some(creds.user))
+            .pass(Some(creds.password))
+            .tcp_port(port)
+            .into())
+    }
 
     async fn set_group_concat_max_len(&self, wiki: &str, conn: &mut my::Conn) -> Result<()> {
         if wiki == "commonswiki" {
@@ -245,18 +226,7 @@ impl DatabaseManager {
             other => (other, DatabaseCluster::Default),
         };
 
-        let mut pool = self.db_pool.lock().await;
-        if pool.is_empty() {
-            return Err(anyhow!("Database connection pool is empty"));
-        }
-        pool.rotate_left(1);
-        let last = pool.len() - 1;
-        let opts = match &cluster {
-            DatabaseCluster::X3 => {
-                self.get_mysql_opts_for_term_store(&pool[last].0, &pool[last].1)?
-            }
-            _ => self.get_mysql_opts_for_wiki(wiki, &pool[last].0, &pool[last].1, cluster)?,
-        };
+        let opts = self.get_mysql_opts_for_wiki(wiki, cluster)?;
 
         trace!(user = opts.user());
         let mut conn;
@@ -267,9 +237,8 @@ impl DatabaseManager {
             {
                 Ok(conn2) => conn2,
                 Err(s) => {
-                    // Checking if max_user_connections was exceeded. That should not happen but sometimes it does.
+                    // Retry when the per-user connection limit is momentarily exceeded.
                     if s.contains("max_user_connections") {
-                        // trace!(s);
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                         continue;
                     }
@@ -282,36 +251,65 @@ impl DatabaseManager {
         Ok(conn)
     }
 
-    /// Connects to the X3 cluster TBD
+    /// Connects to the X3 / Wikidata term-store cluster.
     pub async fn get_x3_db_connection(&self) -> Result<my::Conn> {
         self.get_wiki_db_connection("x3").await
     }
 
-    pub async fn get_tool_db_connection(&self, tool_db_user_pass: DbUserPass) -> Result<my::Conn> {
-        let (host, schema) = self.db_host_and_schema_for_tool_db()?;
-        let (user, pass) = tool_db_user_pass.clone();
-        let port: u16 = match self.config["host"].as_str() {
-            Some("127.0.0.1") => 3308,
-            Some(_host) => self.config["db_port"].as_u64().unwrap_or(3306) as u16,
-            None => 3306, // Fallback
+    /// Opens a connection to the tool database.
+    ///
+    /// The schema name is read from `config["schema"]`.  On Toolforge,
+    /// credentials come from `~/replica.my.cnf` via `toolforge::db::toolsdb`;
+    /// locally they fall back to `config["user"]` / `config["password"]` and
+    /// the port is taken from `config["db_port"]` (defaulting to 3308 when
+    /// the host is 127.0.0.1, matching the conventional local SSH-tunnel
+    /// mapping).
+    pub async fn get_tool_db_connection(&self) -> Result<my::Conn> {
+        let schema = self.config["schema"]
+            .as_str()
+            .ok_or_else(|| anyhow!("No schema key in config file"))?
+            .to_string();
+
+        // Try toolforge (replica.my.cnf) first.
+        let (host, user, password, port) = if let Ok(info) = toolforge::db::toolsdb(schema.clone())
+        {
+            let port = 3306_u16;
+            (info.host, info.user, info.password, port)
+        } else {
+            // Local-dev fallback: use config.json credentials.
+            let host = self.config["host"]
+                .as_str()
+                .ok_or_else(|| anyhow!("No host key in config file"))?
+                .to_string();
+            let user = self.config["user"]
+                .as_str()
+                .ok_or_else(|| anyhow!("No user key in config file"))?
+                .to_string();
+            let password = self.config["password"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let port: u16 = if host == "127.0.0.1" {
+                // Conventional local SSH-tunnel port for tools-db.
+                self.config["db_port"].as_u64().unwrap_or(3308) as u16
+            } else {
+                self.config["db_port"].as_u64().unwrap_or(3306) as u16
+            };
+            (host, user, password, port)
         };
+
         let opts = my::OptsBuilder::default()
-            .ip_or_hostname(host.to_owned())
+            .ip_or_hostname(host.clone())
             .db_name(Some(schema))
             .user(Some(user))
-            .pass(Some(pass))
+            .pass(Some(password))
             .tcp_port(port);
 
-        match my::Conn::new(opts).await {
-            Ok(conn) => Ok(conn),
-            Err(e) => Err(anyhow!(
-                "AppState::get_tool_db_connection can't get DB connection to {host}:{port} : '{e}'"
-            )),
-        }
-    }
-
-    pub const fn get_tool_db_user_pass(&self) -> &Arc<Mutex<DbUserPass>> {
-        &self.tool_db_mutex
+        my::Conn::new(opts).await.map_err(|e| {
+            anyhow!(
+                "DatabaseManager::get_tool_db_connection cannot connect to {host}:{port}: '{e}'"
+            )
+        })
     }
 
     // ------------------------------------------------------------------
@@ -319,9 +317,7 @@ impl DatabaseManager {
     // ------------------------------------------------------------------
 
     pub async fn get_query_from_psid(&self, psid: &str) -> Result<String> {
-        let mut conn = self
-            .get_tool_db_connection(self.tool_db_mutex.lock().await.clone())
-            .await?;
+        let mut conn = self.get_tool_db_connection().await?;
 
         let psid = match psid.parse::<usize>() {
             Ok(psid) => psid,
@@ -356,15 +352,12 @@ impl DatabaseManager {
             ],
         );
 
-        let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = self
-            .get_tool_db_connection(tool_db_user_pass.clone())
-            .await?;
+        let mut conn = self.get_tool_db_connection().await?;
         conn.exec_drop(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!(e))?;
         conn.last_insert_id()
-            .ok_or_else(|| anyhow!("AppState::log_query_start: Could not insert"))
+            .ok_or_else(|| anyhow!("DatabaseManager::log_query_start: Could not insert"))
     }
 
     pub async fn log_query_end(&self, query_id: u64) -> Result<()> {
@@ -372,8 +365,7 @@ impl DatabaseManager {
             "DELETE FROM `started_queries` WHERE id=?",
             vec![MyValue::UInt(query_id)],
         );
-        let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        self.get_tool_db_connection(tool_db_user_pass.clone())
+        self.get_tool_db_connection()
             .await
             .map_err(|e| anyhow!(e))?
             .exec_drop(sql.0, mysql_async::Params::Positional(sql.1))
@@ -383,12 +375,9 @@ impl DatabaseManager {
 
     #[instrument(skip_all, ret)]
     pub async fn get_or_create_psid_for_query(&self, query_string: &str) -> Result<u64> {
-        let tool_db_user_pass = self.tool_db_mutex.lock().await;
-        let mut conn = self
-            .get_tool_db_connection(tool_db_user_pass.clone())
-            .await?;
+        let mut conn = self.get_tool_db_connection().await?;
 
-        // Check for existing entry
+        // Check for existing entry.
         let sql1 = (
             "SELECT id FROM query WHERE querystring=? LIMIT 1",
             vec![MyValue::Bytes(query_string.to_owned().into())],
@@ -406,7 +395,7 @@ impl DatabaseManager {
             return Ok(*id);
         }
 
-        // Create new entry
+        // Create new entry.
         let utc: DateTime<Utc> = Utc::now();
         let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
         let sql2 = (

@@ -15,8 +15,8 @@ url = "2"
 rayon = "1"
 htmlescape = "0.3"
 rand = "0.9"
-mysql_async = { version = "0.35", features = ["tracing"] }
-# reqwest = { version = "0.12", features = ["json"] }
+mysql_async = { version = "0.36", features = ["tracing"] }
+toolforge = { version = "5", features = ["mysql"] }
 percent-encoding = "2"
 async-trait = "0.1"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc" }

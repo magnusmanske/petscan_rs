@@ -1,5 +1,5 @@
 use crate::content_type::ContentType;
-use crate::database_manager::{DatabaseManager, DbUserPass};
+use crate::database_manager::DatabaseManager;
 use crate::form_parameters::FormParameters;
 use crate::pagelist::DatabaseCluster;
 use crate::platform::MyResponse;
@@ -8,7 +8,6 @@ use mysql_async as my;
 use serde_json::Value;
 use std::fs;
 use std::sync::{Arc, RwLock};
-use tokio::sync::Mutex;
 use wikimisc::mediawiki::api::Api;
 use wikimisc::site_matrix::SiteMatrix;
 
@@ -37,7 +36,7 @@ impl AppState {
             .parse()
             .map_err(|e: std::convert::Infallible| anyhow!("Parsing index.html failed: {e}"))?;
 
-        let db_manager = DatabaseManager::new_from_config(config).await?;
+        let db_manager = DatabaseManager::new_from_config(config);
 
         Ok(Self {
             db_manager,
@@ -74,20 +73,14 @@ impl AppState {
         self.db_manager.fix_wiki_name(wiki)
     }
 
-    /// Returns the server and database name for the wiki, as a tuple.
-    /// # Panics
-    /// Panics if the host key is missing from the config file
+    /// Returns the canonical Toolforge host and `_p`-suffixed database name
+    /// for a wiki replica, as a `(host, schema)` tuple.
     pub fn db_host_and_schema_for_wiki(
         &self,
         wiki: &str,
         cluster: DatabaseCluster,
-    ) -> Result<(String, String)> {
+    ) -> (String, String) {
         self.db_manager.db_host_and_schema_for_wiki(wiki, cluster)
-    }
-
-    /// Returns the server and database name for the tool db, as a tuple.
-    pub fn db_host_and_schema_for_tool_db(&self) -> Result<(String, String)> {
-        self.db_manager.db_host_and_schema_for_tool_db()
     }
 
     // ------------------------------------------------------------------
@@ -98,19 +91,14 @@ impl AppState {
         self.db_manager.get_wiki_db_connection(wiki).await
     }
 
-    /// Connects to the X3 cluster TBD
+    /// Connects to the X3 / Wikidata term-store cluster.
     pub async fn get_x3_db_connection(&self) -> Result<my::Conn> {
         self.db_manager.get_x3_db_connection().await
     }
 
-    pub async fn get_tool_db_connection(&self, tool_db_user_pass: DbUserPass) -> Result<my::Conn> {
-        self.db_manager
-            .get_tool_db_connection(tool_db_user_pass)
-            .await
-    }
-
-    pub const fn get_tool_db_user_pass(&self) -> &Arc<Mutex<DbUserPass>> {
-        self.db_manager.get_tool_db_user_pass()
+    /// Opens a connection to the tool database.
+    pub async fn get_tool_db_connection(&self) -> Result<my::Conn> {
+        self.db_manager.get_tool_db_connection().await
     }
 
     // ------------------------------------------------------------------
@@ -278,17 +266,13 @@ mod tests {
     }
 
     async fn get_state() -> Arc<AppState> {
-        get_new_state().await // TODO use static
+        get_new_state().await
     }
 
     /// Build a minimal config for unit tests that don't need a real DB connection.
-    fn make_minimal_config(host: &str) -> Value {
+    fn make_minimal_config() -> Value {
         serde_json::json!({
-            "host": host,
-            "user": "testuser",
-            "password": "testpass",
             "schema": "test_schema",
-            "db_port": 3306
         })
     }
 
@@ -302,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_fix_wiki_name_be_tarask() {
-        let state = state_with_config(make_minimal_config("127.0.0.1"));
+        let state = state_with_config(make_minimal_config());
         assert_eq!(state.fix_wiki_name("be-taraskwiki"), "be_x_oldwiki");
         assert_eq!(state.fix_wiki_name("be-x-oldwiki"), "be_x_oldwiki");
         assert_eq!(state.fix_wiki_name("be_taraskwiki"), "be_x_oldwiki");
@@ -311,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_fix_wiki_name_normal() {
-        let state = state_with_config(make_minimal_config("127.0.0.1"));
+        let state = state_with_config(make_minimal_config());
         assert_eq!(state.fix_wiki_name("enwiki"), "enwiki");
         assert_eq!(state.fix_wiki_name("wikidatawiki"), "wikidatawiki");
         // Hyphens converted to underscores for non-special wikis
@@ -346,20 +330,30 @@ mod tests {
     }
 
     #[test]
-    fn test_db_host_and_schema_for_wiki_local() {
-        let state = state_with_config(make_minimal_config("127.0.0.1"));
-        let (host, schema) = state
-            .db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default)
-            .unwrap();
-        assert_eq!(host, "127.0.0.1");
+    fn test_db_host_and_schema_for_wiki_web() {
+        let state = state_with_config(make_minimal_config());
+        let (host, schema) = state.db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default);
+        assert_eq!(host, "enwiki.web.db.svc.wikimedia.cloud");
         assert_eq!(schema, "enwiki_p");
     }
 
     #[test]
-    fn test_db_host_and_schema_for_wiki_no_host() {
-        let state = state_with_config(serde_json::json!({}));
-        let result = state.db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default);
-        assert!(result.is_err());
+    fn test_db_host_and_schema_for_wiki_x3() {
+        let state = state_with_config(make_minimal_config());
+        let (host, schema) = state.db_host_and_schema_for_wiki("wikidatawiki", DatabaseCluster::X3);
+        assert_eq!(
+            host,
+            "termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud"
+        );
+        assert_eq!(schema, "wikidatawiki_p");
+    }
+
+    #[test]
+    fn test_db_host_and_schema_normalises_wiki_name() {
+        let state = state_with_config(make_minimal_config());
+        let (_host, schema) =
+            state.db_host_and_schema_for_wiki("be-taraskwiki", DatabaseCluster::Default);
+        assert_eq!(schema, "be_x_oldwiki_p");
     }
 
     #[tokio::test]
@@ -378,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_render_error_json() {
-        let state = state_with_config(make_minimal_config("127.0.0.1"));
+        let state = state_with_config(make_minimal_config());
         let mut params = crate::form_parameters::FormParameters::new();
         params
             .params
@@ -390,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_render_error_plain() {
-        let state = state_with_config(make_minimal_config("127.0.0.1"));
+        let state = state_with_config(make_minimal_config());
         let mut params = crate::form_parameters::FormParameters::new();
         params
             .params
@@ -432,21 +426,19 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_db_host_and_schema_for_wiki() {
-        let state = get_state().await;
+    #[test]
+    fn test_db_host_and_schema_for_wiki_schema_names() {
+        let state = state_with_config(make_minimal_config());
         assert_eq!(
             "enwiki_p".to_string(),
             state
                 .db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default)
-                .unwrap()
                 .1
         );
         assert_eq!(
             "be_x_oldwiki_p".to_string(),
             state
                 .db_host_and_schema_for_wiki("be-taraskwiki", DatabaseCluster::Default)
-                .unwrap()
                 .1
         );
     }

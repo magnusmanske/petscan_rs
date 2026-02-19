@@ -558,13 +558,10 @@ impl WDfist {
     }
 
     async fn get_db_conn(&mut self) -> Result<my::Conn> {
-        let state = self.state.clone();
-        let tool_db_user_pass = state.get_tool_db_user_pass().lock().await;
-        let conn = state
-            .get_tool_db_connection(tool_db_user_pass.clone())
+        self.state
+            .get_tool_db_connection()
             .await
-            .map_err(|e| anyhow!("{e}"))?;
-        Ok(conn)
+            .map_err(|e| anyhow!("{e}"))
     }
 
     fn filter_files_from_ignore_database_prepare_batches(&mut self) -> Vec<(String, Vec<MyValue>)> {
