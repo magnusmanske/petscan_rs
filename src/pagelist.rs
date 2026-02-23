@@ -293,11 +293,12 @@ impl PageList {
     }
 
     pub fn replace_entries(&self, other: &PageList) {
-        other.entries.read().unwrap().iter().for_each(|entry| {
-            if let Ok(mut entries) = self.entries.write() {
+        let other_entries = other.entries.read().unwrap();
+        if let Ok(mut entries) = self.entries.write() {
+            for entry in other_entries.iter() {
                 entries.replace(entry.to_owned());
             }
-        });
+        }
     }
 
     async fn run_batch_query(
@@ -343,33 +344,8 @@ impl PageList {
             .wiki()
             .ok_or_else(|| anyhow!("PageList::run_batch_queries: No wiki"))?;
 
-        if true {
-            self.run_batch_queries_mutex(state, batches, wiki, cluster)
-                .await
-        } else {
-            self.run_batch_queries_serial(state, batches, wiki, cluster)
-                .await
-        }
-    }
-
-    /// Runs batched queries for `process_batch_results` and `annotate_batch_results`
-    /// Uses serial processing (not Mutex)
-    async fn run_batch_queries_serial(
-        &self,
-        state: &AppState,
-        batches: Vec<SQLtuple>,
-        wiki: String,
-        cluster: DatabaseCluster,
-    ) -> Result<Vec<my::Row>> {
-        // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
-        let mut rows: Vec<my::Row> = vec![];
-        for sql in batches {
-            let mut data = self
-                .run_batch_query(state, sql, &wiki, cluster.to_owned())
-                .await?;
-            rows.append(&mut data);
-        }
-        Ok(rows)
+        self.run_batch_queries_mutex(state, batches, wiki, cluster)
+            .await
     }
 
     /// Runs batched queries for `process_batch_results` and `annotate_batch_results`
@@ -534,16 +510,24 @@ impl PageList {
                     "property" => "wbpt_term_in_lang_id",
                     _ => return None,
                 };
-                let item_ids = sql_batch
+                let id_params: Vec<MyValue> = sql_batch
                     .1
                     .iter()
-                    .map(|s| match s {
-                        MyValue::Bytes(s) => String::from_utf8_lossy(s)[1..].to_string(),
-                        _ => String::new(),
+                    .filter_map(|s| match s {
+                        MyValue::Bytes(b) => {
+                            let s = String::from_utf8_lossy(b);
+                            s.get(1..)?.parse::<u64>().ok().map(MyValue::UInt)
+                        }
+                        _ => None,
                     })
-                    .collect::<Vec<String>>()
-                    .join(",");
-                sql_batch.1 = vec![MyValue::Bytes(wikidata_language.to_owned().into())];
+                    .collect();
+                if id_params.is_empty() {
+                    return None;
+                }
+                let id_placeholders = vec!["?"; id_params.len()].join(",");
+                sql_batch.1 = std::iter::once(MyValue::Bytes(wikidata_language.to_owned().into()))
+                    .chain(id_params)
+                    .collect();
                 sql_batch.0 = format!(
                     "SELECT concat('{prefix}',{field_name}) AS term_full_entity_id,
                 	{namespace_id} AS dummy_namespace,
@@ -557,7 +541,7 @@ impl PageList {
 					 INNER JOIN wbt_type ON wbtl_type_id = wby_id
 					 INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id
 					 INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language=?
-					 WHERE {field_name} IN ({item_ids})"
+					 WHERE {field_name} IN ({id_placeholders})"
                 );
                 Some(sql_batch.to_owned())
             })

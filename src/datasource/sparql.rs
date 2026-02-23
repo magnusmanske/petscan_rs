@@ -40,67 +40,22 @@ impl SparqlServer {
         }
     }
 
+    /// Parse a standard SPARQL JSON response. Both WDQS and QLever emit the same
+    /// W3C SPARQL 1.1 JSON format, so one parser handles both endpoints.
     fn parse_response(&self, response: &str, api: &Api) -> Result<PageList> {
-        match self {
-            SparqlServer::QLeverWd => Self::parse_response_qlever_wd(response, api),
-            SparqlServer::Wikidata => Self::parse_response_wikidata(response, api),
-        }
+        Self::parse_response_standard(response, api)
     }
-    fn parse_response_qlever_wd(response: &str, api: &Api) -> Result<PageList> {
+
+    fn parse_response_standard(response: &str, api: &Api) -> Result<PageList> {
         let result: Value = serde_json::from_str(response)?;
         let first_var = result["head"]["vars"][0]
             .as_str()
-            .ok_or(anyhow!("No variables found in SPARQL result"))?;
+            .ok_or_else(|| anyhow!("No variables found in SPARQL result"))?;
         let ret = PageList::new_from_wiki("wikidatawiki");
         api.entities_from_sparql_result(&result, first_var)
             .iter()
             .filter_map(|e| Platform::entry_from_entity(e))
             .for_each(|entry| ret.add_entry(entry));
-        Ok(ret)
-    }
-
-    fn parse_response_wikidata(response: &str, api: &Api) -> Result<PageList> {
-        let ret = PageList::new_from_wiki("wikidatawiki");
-        let mut mode: u8 = 0;
-        let mut header = String::new();
-        let mut binding = String::new();
-        let mut first_var = String::new();
-        for line in response.split('\n') {
-            match line {
-                "{" => continue,
-                "}" => continue,
-                "  \"results\" : {" => {}
-                "    \"bindings\" : [ {" => {
-                    mode += 1;
-                    header = "{".to_string() + &header + "\"dummy\": {}}";
-                    let j: Value = serde_json::from_str(&header).unwrap_or_else(|_| json!({}));
-                    first_var = j["head"]["vars"][0]
-                        .as_str()
-                        .ok_or_else(|| anyhow!("No variables found in SPARQL result"))?
-                        .to_string();
-                }
-                "    }, {" | "    } ]" => match mode {
-                    0 => header += line,
-                    1 => {
-                        binding = "{".to_string() + &binding + "}";
-                        let j: Value = serde_json::from_str(&binding).unwrap_or_else(|_| json!({}));
-                        binding.clear();
-                        if let Some(entity_url) = j[&first_var]["value"].as_str()
-                            && let Ok(entity) = api.extract_entity_from_uri(entity_url)
-                            && let Some(entry) = Platform::entry_from_entity(&entity)
-                        {
-                            ret.add_entry(entry);
-                        }
-                    }
-                    _ => {}
-                },
-                other => match mode {
-                    0 => header += other,
-                    1 => binding += other,
-                    _ => {}
-                },
-            }
-        }
         Ok(ret)
     }
 }

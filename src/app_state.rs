@@ -222,7 +222,7 @@ impl AppState {
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        self.shutting_down.read().map_or(true, |x| *x)
+        self.shutting_down.read().map_or(false, |x| *x)
     }
 
     pub fn shut_down(&self) {
