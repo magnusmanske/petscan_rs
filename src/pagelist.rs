@@ -250,20 +250,27 @@ impl PageList {
         Ok(())
     }
 
-    pub fn to_sql_batches(&self, chunk_size: usize) -> Vec<SQLtuple> {
-        let mut ret: Vec<SQLtuple> = vec![];
-        if self.is_empty() {
-            return ret;
-        }
-        let by_ns = self.group_by_namespace();
-        for (nsid, titles) in by_ns {
-            titles.chunks(chunk_size).for_each(|chunk| {
+    /// Builds SQL WHERE-clause batches for .
+    /// Each chunk of  titles becomes one .
+    fn sql_batches_for_ns(chunk_size: usize, nsid: NamespaceID, titles: &[String]) -> Vec<SQLtuple> {
+        titles
+            .chunks(chunk_size)
+            .map(|chunk| {
                 let mut sql = crate::datasource::prep_quote(chunk);
-                sql.0 = format!("(page_namespace={} AND page_title IN({}))", nsid, &sql.0);
-                ret.push(sql);
-            });
+                sql.0 = format!("(page_namespace={nsid} AND page_title IN({}))", sql.0);
+                sql
+            })
+            .collect()
+    }
+
+    pub fn to_sql_batches(&self, chunk_size: usize) -> Vec<SQLtuple> {
+        if self.is_empty() {
+            return vec![];
         }
-        ret
+        self.group_by_namespace()
+            .into_iter()
+            .flat_map(|(nsid, titles)| Self::sql_batches_for_ns(chunk_size, nsid, &titles))
+            .collect()
     }
 
     pub fn to_sql_batches_namespace(
@@ -271,21 +278,14 @@ impl PageList {
         chunk_size: usize,
         namespace_id: NamespaceID,
     ) -> Vec<SQLtuple> {
-        let mut ret: Vec<SQLtuple> = vec![];
         if self.is_empty() {
-            return ret;
+            return vec![];
         }
-        let by_ns = self.group_by_namespace();
-        for (nsid, titles) in by_ns {
-            if nsid == namespace_id {
-                titles.chunks(chunk_size).for_each(|chunk| {
-                    let mut sql = crate::datasource::prep_quote(chunk);
-                    sql.0 = format!("(page_namespace={} AND page_title IN({}))", nsid, &sql.0);
-                    ret.push(sql);
-                });
-            }
-        }
-        ret
+        self.group_by_namespace()
+            .into_iter()
+            .filter(|(nsid, _)| *nsid == namespace_id)
+            .flat_map(|(nsid, titles)| Self::sql_batches_for_ns(chunk_size, nsid, &titles))
+            .collect()
     }
 
     pub fn clear_entries(&self) {
@@ -315,7 +315,7 @@ impl PageList {
         .map_err(|e| anyhow!(e))?;
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
-            .await? // TODO fix to_owned?
+            .await?
             .collect_and_drop()
             .await?;
         if let Err(e) = conn.disconnect().await { tracing::warn!("Failed to disconnect DB connection: {e}"); }
@@ -357,10 +357,9 @@ impl PageList {
         wiki: String,
         cluster: DatabaseCluster,
     ) -> Result<Vec<my::Row>> {
-        // TODO?: "SET STATEMENT max_statement_time = 300 FOR SELECT..."
         let mut futures = vec![];
         for sql in batches {
-            futures.push(self.run_batch_query(state, sql, &wiki, cluster.to_owned()));
+            futures.push(self.run_batch_query(state, sql, &wiki, cluster));
         }
         let results = join_all(futures).await;
         let mut ret = vec![];

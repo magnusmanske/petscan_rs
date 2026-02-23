@@ -21,8 +21,9 @@ use wikimisc::mediawiki::api::{Api, NamespaceID};
 use tracing::debug;
 use wikimisc::mediawiki::title::Title;
 
-static MAX_CATEGORY_BATCH_SIZE: usize = 2500;
-static MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
+const MAX_CATEGORY_BATCH_SIZE: usize = 2500;
+const MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
+const PAGE_SELECT_PREFIX: &str = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len";
 
 type PrimaryResultRow = (u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount);
 
@@ -579,7 +580,7 @@ impl SourceDatabase {
                     .par_iter()
                     .map(|s| s.to_owned())
                     .collect::<Vec<String>>();
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
+                sql.0 = PAGE_SELECT_PREFIX.to_string() ;
                 sql.0 += &params.link_count_sql;
                 sql.0 += &format!(" FROM ( {subquery} IN (");
                 super::append_sql(&mut sql, super::prep_quote(&tmp));
@@ -788,7 +789,7 @@ impl SourceDatabase {
         nslist.iter().for_each(|nsgroup| {
             nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
                 let mut sql = super::sql_tuple();
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
+                sql.0 = PAGE_SELECT_PREFIX.to_string() ;
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
                 if !params.is_before_after_done {
@@ -817,7 +818,6 @@ impl SourceDatabase {
         }
         let results = join_all(futures).await;
 
-        // TODO futures? tricky
         for pl2 in results {
             ret.union(&pl2?, None).await?;
         }
@@ -873,7 +873,7 @@ impl SourceDatabase {
                     .await;
             }
             "no_wikidata" => {
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len".to_string() ;
+                sql.0 = PAGE_SELECT_PREFIX.to_string() ;
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
                 if !params.is_before_after_done {
@@ -883,7 +883,7 @@ impl SourceDatabase {
                 sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')";
             }
             "templates" | "links_from" => {
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len ".to_string() ;
+                sql.0 = PAGE_SELECT_PREFIX.to_string() ;
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
                 if !params.is_before_after_done {

@@ -3,8 +3,9 @@ use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
 use crate::platform::{MyResponse, Platform};
 use anyhow::Result;
-use http_body_util::{BodyExt, Full};
-use hyper::body::{Body, Bytes};
+use http_body_util::{BodyExt, Full, Limited};
+use hyper::body::Bytes;
+use std::collections::HashMap;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, header};
@@ -24,13 +25,32 @@ static BODY_TOO_BIG: &[u8] = b"POST body too large";
 pub struct WebServer {
     app_state: Arc<AppState>,
     petscan_config: Arc<Value>,
+    /// Static files cached at startup: URL path -> (bytes, content-type).
+    static_files: Arc<HashMap<&'static str, (Bytes, &'static str)>>,
 }
 
 impl WebServer {
     pub fn new(app_state: Arc<AppState>, petscan_config: Value) -> Self {
+        const STATIC: &[(&str, &str)] = &[
+            ("/index.html",  "text/html; charset=utf-8"),
+            ("/autolist.js", "application/javascript; charset=utf-8"),
+            ("/main.js",     "application/javascript; charset=utf-8"),
+            ("/favicon.ico", "image/x-icon"),
+            ("/robots.txt",  "text/plain; charset=utf-8"),
+        ];
+        let mut static_files = HashMap::with_capacity(STATIC.len());
+        for (url_path, content_type) in STATIC {
+            let disk_path = format!("html{url_path}");
+            if let Ok(bytes) = std::fs::read(&disk_path) {
+                static_files.insert(*url_path, (Bytes::from(bytes), *content_type));
+            } else {
+                tracing::warn!("Could not pre-load static file: {disk_path}");
+            }
+        }
         WebServer {
             app_state,
             petscan_config: Arc::new(petscan_config),
+            static_files: Arc::new(static_files),
         }
     }
     pub async fn run(&self) -> Result<()> {
@@ -89,26 +109,29 @@ impl WebServer {
         &self,
         req: Request<hyper::body::Incoming>,
     ) -> Result<Response<Full<Bytes>>, Infallible> {
-        let path = req.uri().path().to_string();
+        let (parts, body) = req.into_parts();
+        let path = parts.uri.path().to_string();
 
         // URL GET query
-        if let Some(query) = req.uri().query()
+        if let Some(query) = parts.uri.query()
             && !query.is_empty()
         {
             return self.process_from_query(query).await;
-        };
+        }
 
-        // POST
-        if req.method() == Method::POST {
-            let upper = req.body().size_hint().upper().unwrap_or(u64::MAX);
-            if upper > MAX_POST_SIZE {
-                let mut resp = Response::new(Full::from(BODY_TOO_BIG));
-                *resp.status_mut() = hyper::StatusCode::PAYLOAD_TOO_LARGE;
-                return Ok(resp);
-            }
-            let collected = match req.collect().await {
+        // POST – enforce body size limit during streaming via Limited
+        if parts.method == Method::POST {
+            let limited = Limited::new(body, MAX_POST_SIZE as usize);
+            let collected = match limited.collect().await {
                 Ok(c) => c,
                 Err(e) => {
+                    // Check whether the limit was exceeded or it is a genuine I/O error
+                    if (&*e as &dyn std::error::Error).is::<http_body_util::LengthLimitError>() {
+                        tracing::warn!("POST body exceeded {MAX_POST_SIZE} bytes – rejecting");
+                        let mut resp = Response::new(Full::from(BODY_TOO_BIG));
+                        *resp.status_mut() = hyper::StatusCode::PAYLOAD_TOO_LARGE;
+                        return Ok(resp);
+                    }
                     tracing::error!("Failed to read POST body: {e}");
                     let mut resp = Response::new(Full::from(b"Internal Server Error".as_ref()));
                     *resp.status_mut() = hyper::StatusCode::INTERNAL_SERVER_ERROR;
@@ -285,33 +308,19 @@ impl WebServer {
         response
     }
 
-    async fn serve_file_path(&self, filename: &str) -> Result<Response<Full<Bytes>>, Infallible> {
-        match filename {
-            "/" => {
-                self.simple_file_send("/index.html", "text/html; charset=utf-8")
-                    .await
+    /// Serve a static file from the in-memory cache populated at startup.
+    /// "/" is an alias for "/index.html".
+    async fn serve_file_path(&self, path: &str) -> Result<Response<Full<Bytes>>, Infallible> {
+        let key = if path == "/" { "/index.html" } else { path };
+        match self.static_files.get(key) {
+            Some((bytes, content_type)) => {
+                let response = Response::builder()
+                    .header(header::CONTENT_TYPE, *content_type)
+                    .body(Full::from(bytes.clone()))
+                    .unwrap_or_else(|_| Response::new(Full::from(NOTFOUND)));
+                Ok(response)
             }
-            "/index.html" => {
-                self.simple_file_send(filename, "text/html; charset=utf-8")
-                    .await
-            }
-            "/autolist.js" => {
-                self.simple_file_send(filename, "application/javascript; charset=utf-8")
-                    .await
-            }
-            "/main.js" => {
-                self.simple_file_send(filename, "application/javascript; charset=utf-8")
-                    .await
-            }
-            "/favicon.ico" => {
-                self.simple_file_send(filename, "image/x-icon; charset=utf-8")
-                    .await
-            }
-            "/robots.txt" => {
-                self.simple_file_send(filename, "text/plain; charset=utf-8")
-                    .await
-            }
-            _ => Self::not_found(),
+            None => Self::not_found(),
         }
     }
 
@@ -321,24 +330,5 @@ impl WebServer {
             .status(StatusCode::NOT_FOUND)
             .body(NOTFOUND.into())
             .unwrap_or_else(|_| Response::new(Full::from(NOTFOUND))))
-    }
-
-    async fn simple_file_send(
-        &self,
-        filename: &str,
-        content_type: &str,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
-        let filename = format!("html{filename}");
-        match std::fs::read(filename) {
-            Ok(bytes) => {
-                let body = Full::from(bytes);
-                let response = Response::builder()
-                    .header(header::CONTENT_TYPE, content_type)
-                    .body(body)
-                    .unwrap_or_else(|_| Response::new(Full::from(NOTFOUND)));
-                Ok(response)
-            }
-            Err(_) => Self::not_found(),
-        }
     }
 }
