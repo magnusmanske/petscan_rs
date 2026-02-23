@@ -317,7 +317,7 @@ impl PageList {
             .await? // TODO fix to_owned?
             .collect_and_drop()
             .await?;
-        conn.disconnect().await.unwrap();
+        if let Err(e) = conn.disconnect().await { tracing::warn!("Failed to disconnect DB connection: {e}"); }
 
         Ok(rows)
     }
@@ -451,10 +451,8 @@ impl PageList {
             };
             let col_title = 0;
             let col_ns = 1;
-            self.run_batch_queries(&platform.state(), batches)
-                .await
-                .unwrap()
-                .iter()
+            let rows = self.run_batch_queries(&platform.state(), batches).await?;
+            rows.iter()
                 .filter_map(|row| {
                     self.entry_from_row(row, col_title, col_ns)
                         .map(|entry| (row, entry))
@@ -462,7 +460,7 @@ impl PageList {
                 .filter_map(|(row, entry)| {
                     match self.entries.read() {
                         Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
-                        _ => None, // TODO error?
+                        _ => None,
                     }
                 })
                 .for_each(|(row, mut entry)| {

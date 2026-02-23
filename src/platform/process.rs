@@ -205,7 +205,7 @@ impl Platform {
             ret.0 =
                 "SELECT DISTINCT CONCAT('Q',wbit_item_id) AS term_full_entity_id FROM wbt_item_terms t1 WHERE 1=1".to_string();
         } else if *namespace_id == 120 {
-            ret.0 = "SELECT DISTINCT CONACT('P',wbit_property_id) AS term_full_entity_id FROM wbt_property_terms t1 WHERE 1=1"
+            ret.0 = "SELECT DISTINCT CONCAT('P',wbit_property_id) AS term_full_entity_id FROM wbt_property_terms t1 WHERE 1=1"
                 .to_string();
         } else {
             return None;

@@ -269,14 +269,7 @@ impl WebServer {
             {
                 Ok(psid) => Some(psid),
                 Err(e) => {
-                    if self
-                        .app_state
-                        .log_query_end(started_query_id)
-                        .await
-                        .is_err()
-                    {
-                        // Ignore error
-                    }
+                    // log_query_end was already called above after platform.run(); do not call it again
                     return self.app_state.render_error(e.to_string(), &form_parameters);
                 }
             },

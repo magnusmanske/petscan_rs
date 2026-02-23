@@ -14,7 +14,7 @@ impl ContentType {
         match self {
             Self::HTML => "text/html; charset=utf-8",
             Self::Plain => "text/plain; charset=utf-8",
-            Self::JSON => " application/json",
+            Self::JSON => "application/json",
             Self::JSONP => "application/javascript",
             Self::CSV => "text/csv; charset=utf-8",
             Self::TSV => "text/tab-separated-values; charset=utf-8",
@@ -31,7 +31,7 @@ mod tests {
     fn test_content_type_as_str() {
         assert_eq!(ContentType::HTML.as_str(), "text/html; charset=utf-8");
         assert_eq!(ContentType::Plain.as_str(), "text/plain; charset=utf-8");
-        assert_eq!(ContentType::JSON.as_str(), " application/json");
+        assert_eq!(ContentType::JSON.as_str(), "application/json");
         assert_eq!(ContentType::JSONP.as_str(), "application/javascript");
         assert_eq!(ContentType::CSV.as_str(), "text/csv; charset=utf-8");
         assert_eq!(
