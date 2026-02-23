@@ -7,6 +7,7 @@ pub enum ContentType {
     CSV,
     TSV,
     KML,
+    JSONL,
 }
 
 impl ContentType {
@@ -19,6 +20,7 @@ impl ContentType {
             Self::CSV => "text/csv; charset=utf-8",
             Self::TSV => "text/tab-separated-values; charset=utf-8",
             Self::KML => "application/vnd.google-earth.kml+xml",
+            Self::JSONL => "application/x-ndjson",
         }
     }
 }
@@ -42,6 +44,7 @@ mod tests {
             ContentType::KML.as_str(),
             "application/vnd.google-earth.kml+xml"
         );
+        assert_eq!(ContentType::JSONL.as_str(), "application/x-ndjson");
     }
 
     #[test]

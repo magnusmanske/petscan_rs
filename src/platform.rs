@@ -202,19 +202,12 @@ impl Platform {
 
         Platform::profile("begin futures 1", None);
 
-        let mut tmp_results = join_all(futures).await;
-
-        let mut results: HashMap<String, PageList> = HashMap::new();
-        let mut names = available_sources.clone();
-        while !tmp_results.is_empty() {
-            let result = tmp_results.remove(0);
-            if names.is_empty() {
-                return Err(anyhow!("Platform::run: names list is empty unexpectedly"));
-            }
-            let name = names.remove(0);
-            results.insert(name, result?);
-        }
-        drop(tmp_results);
+        let mut results: HashMap<String, PageList> = available_sources
+            .iter()
+            .cloned()
+            .zip(join_all(futures).await)
+            .map(|(name, result)| result.map(|pl| (name, pl)))
+            .collect::<Result<_, _>>()?;
 
         self.wiki_by_source = results
             .iter()

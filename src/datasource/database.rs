@@ -18,6 +18,7 @@ use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use wikimisc::mediawiki::api::{Api, NamespaceID};
+use tracing::debug;
 use wikimisc::mediawiki::title::Title;
 
 static MAX_CATEGORY_BATCH_SIZE: usize = 2500;
@@ -364,7 +365,7 @@ impl SourceDatabase {
                     }
                 }
             }
-            // println!("Depth {remaining_depth} adding {} new sub-categories",categories_new.len());
+            debug!(remaining_depth, count = categories_new.len(), "added new sub-categories");
             if categories_done.len() > MAX_SUBCATEGORIES_IN_TREE {
                 return Err(anyhow!(
                     "Sub-categories for \"{new_title}\" exceed {MAX_SUBCATEGORIES_IN_TREE}, please limit that category depth, or fix the category tree"
@@ -1276,24 +1277,14 @@ impl SourceDatabase {
         state: &AppState,
         sql: &mut (String, Vec<MyValue>),
     ) {
-        let negative_categories_use_not_exists = false;
         if !self.cat_neg.is_empty() {
             let mut cats: Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
             cats.sort_unstable();
             cats.dedup();
-            if negative_categories_use_not_exists {
-                if state.using_new_categorylinks_table() {
-                    sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=p.page_id AND lt_namespace=14 AND lt_title";
-                } else {
-                    sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks WHERE cl_from=p.page_id AND cl_to";
-                }
+            if state.using_new_categorylinks_table() {
+                sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
             } else {
-                #[allow(clippy::collapsible_else_if)]
-                if state.using_new_categorylinks_table() {
-                    sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
-                } else {
-                    sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
-                }
+                sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
             }
             Self::sql_in(&cats, sql);
             sql.0 += ")";

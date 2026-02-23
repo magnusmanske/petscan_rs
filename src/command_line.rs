@@ -8,7 +8,7 @@ use std::fs::File;
 use std::sync::Arc;
 use url::form_urlencoded;
 
-pub async fn command_line_useage(app_state: Arc<AppState>) -> Result<()> {
+pub async fn command_line_usage(app_state: Arc<AppState>) -> Result<()> {
     let mut args = std::env::args();
     let _ = args.next(); // the actual command
     let argument: String = args

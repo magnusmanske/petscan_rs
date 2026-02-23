@@ -30,9 +30,7 @@ impl fmt::Display for FormParameters {
 
 impl FormParameters {
     pub fn new() -> Self {
-        Self {
-            ..Default::default()
-        }
+        Self::default()
     }
 
     pub fn new_from_pairs(parameter_pairs: HashMap<String, String>) -> Self {

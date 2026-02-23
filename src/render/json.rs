@@ -107,15 +107,7 @@ impl RenderJSON {
                 header.push((col.to_string(), col.to_string()));
             }
         }
-        let mut header: Vec<(String, String)> = header
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        for col in self.get_initial_columns(params) {
-            if !header.iter().any(|(k, _)| col == k) && col != "number" {
-                header.push((col.to_string(), col.to_string()));
-            }
-        }
+
         if params.file_data() {
             self.file_data_keys()
                 .iter()

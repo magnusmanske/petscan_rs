@@ -26,10 +26,10 @@ static RE_KEY_PHRASES_PNG: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(600px_)"#).expect("WDfist::is_valid_filename RE_KEY_PHRASES_PNG is invalid")
 });
 
-pub static MIN_IGNORE_DB_FILE_COUNT: usize = 3;
-pub static MAX_FILE_COUNT_IN_RESULT_SET: usize = 5;
-pub static NEARBY_FILES_RADIUS_IN_METERS: usize = 100;
-pub static MAX_WIKI_API_THREADS: usize = 10;
+pub const MIN_IGNORE_DB_FILE_COUNT: usize = 3;
+pub const MAX_FILE_COUNT_IN_RESULT_SET: usize = 5;
+pub const NEARBY_FILES_RADIUS_IN_METERS: usize = 100;
+pub const MAX_WIKI_API_THREADS: usize = 10;
 
 #[derive(Debug, Clone)]
 pub struct WDfist {

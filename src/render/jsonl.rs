@@ -21,7 +21,7 @@ impl Render for RenderJSONL {
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse> {
         let mut params = RenderParams::new(platform, wiki).await?;
-        let content_type = ContentType::Plain;
+        let content_type = ContentType::JSONL;
 
         let rj = RenderJSON::new();
 
