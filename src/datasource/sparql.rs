@@ -47,7 +47,11 @@ impl SparqlServer {
     }
 
     fn parse_response_standard(response: &str, api: &Api) -> Result<PageList> {
-        let result: Value = serde_json::from_str(response)?;
+        let sanitized: String = response
+            .chars()
+            .map(|c| if c.is_control() && c != '\n' && c != '\r' && c != '\t' { ' ' } else { c })
+            .collect();
+        let result: Value = serde_json::from_str(&sanitized)?;
         let first_var = result["head"]["vars"][0]
             .as_str()
             .ok_or_else(|| anyhow!("No variables found in SPARQL result"))?;
