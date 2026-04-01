@@ -88,7 +88,7 @@ impl DataSource for SourceSparql {
             .get_param("sparql")
             .ok_or_else(|| anyhow!("Missing parameter \'sparql\'"))?;
 
-        let timeout = time::Duration::from_secs(600);
+        let timeout = time::Duration::from_secs(3600);
         let builder = ClientBuilder::new().timeout(timeout);
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder).await?;
 
