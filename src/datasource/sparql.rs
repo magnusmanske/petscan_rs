@@ -49,7 +49,13 @@ impl SparqlServer {
     fn parse_response_standard(response: &str, api: &Api) -> Result<PageList> {
         let sanitized: String = response
             .chars()
-            .map(|c| if c.is_control() && c != '\n' && c != '\r' && c != '\t' { ' ' } else { c })
+            .map(|c| {
+                if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
+                    ' '
+                } else {
+                    c
+                }
+            })
             .collect();
         let result: Value = serde_json::from_str(&sanitized)?;
         let first_var = result["head"]["vars"][0]
@@ -82,7 +88,7 @@ impl DataSource for SourceSparql {
             .get_param("sparql")
             .ok_or_else(|| anyhow!("Missing parameter \'sparql\'"))?;
 
-        let timeout = time::Duration::from_secs(120);
+        let timeout = time::Duration::from_secs(600);
         let builder = ClientBuilder::new().timeout(timeout);
         let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder).await?;
 
