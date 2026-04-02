@@ -5,10 +5,11 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::value::Value;
 use std::collections::HashMap;
-use std::time;
+use std::time::{self, Duration};
 use wikimisc::mediawiki::api::Api;
 use wikimisc::mediawiki::reqwest::{self, ClientBuilder};
 
+const SPARQL_TIMEOUT_SEC: u64 = 60 * 10; // 10 min
 const QLEVER_WD_PREFIX: &str = "PREFIX wikibase: <http://wikiba.se/ontology#>
 PREFIX wd: <http://www.wikidata.org/entity/>
 PREFIX wdt: <http://www.wikidata.org/prop/direct/>";
@@ -47,6 +48,8 @@ impl SparqlServer {
     }
 
     fn parse_response_standard(response: &str, api: &Api) -> Result<PageList> {
+        // println!("Sanitize before: {}", response.len());
+        // println!("End of response: {}", &response[response.len() - 20..]);
         let sanitized: String = response
             .chars()
             .map(|c| {
@@ -57,7 +60,9 @@ impl SparqlServer {
                 }
             })
             .collect();
+        // println!("Sanitize after: {}", sanitized.len());
         let result: Value = serde_json::from_str(&sanitized)?;
+        // println!("JSON parsing complete");
         let first_var = result["head"]["vars"][0]
             .as_str()
             .ok_or_else(|| anyhow!("No variables found in SPARQL result"))?;
@@ -105,6 +110,7 @@ impl DataSource for SourceSparql {
             .client()
             .post(sparql_url)
             .header(reqwest::header::USER_AGENT, "PetScan")
+            .timeout(Duration::from_secs(SPARQL_TIMEOUT_SEC))
             .form(&params)
             .send()
             .await
@@ -113,7 +119,7 @@ impl DataSource for SourceSparql {
             Err(e) => return Err(anyhow!("SPARQL: {e}")),
         };
 
-        let response = response.text().await.map_err(|e| anyhow!(e))?;
+        let response = response.text().await?;
         tokio::task::spawn_blocking(move || sparql_server.parse_response(&response, &api))
             .await
             .map_err(|e| anyhow!("SPARQL parse task failed: {e}"))?
