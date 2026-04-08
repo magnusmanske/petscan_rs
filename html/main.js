@@ -95,7 +95,7 @@ function setPermalink() {
 		// Removing empty parameters
 		if (value === "") params.delete(key);
 		// Removing default values
-		if (value === default_params[key]) params.delete(key);
+		if (Object.hasOwn(default_params, key) && value === default_params[key]) params.delete(key);
 	});
 
 	var url = "/?" + params;
@@ -104,7 +104,7 @@ function setPermalink() {
 	h = h.replace(/\$1/, url + "&doit=");
 	h = h.replace(/\$2/, url);
 
-	if (psid != 0) {
+	if (psid !== 0) {
 		var psid_note = _t("psid_note").split("$1").join(psid); // ( /\$1/ , psid ) ;
 		h += " ";
 		h += psid_note;
@@ -262,14 +262,15 @@ function loadNamespaces(callback) {
 	if (p == "wikidata") wiki = "wikidatawiki";
 	else if (p != "wikipedia" && l != "species" && l != "commons") wiki = l + p;
 	if (
-		typeof ores_data[wiki] == "undefined" ||
-		typeof ores_data[wiki].models == "undefined"
+		!Object.hasOwn(ores_data, wiki) ||
+		!Object.hasOwn(ores_data[wiki], "models")
 	) {
 		$("#ores_options").hide();
 	} else {
 		var current = $("#ores_model_select").val();
+		var ores_wiki_data = ores_data[wiki];
 		var h = "<option value='any' tt='ores_any'></option>";
-		$.each(ores_data[wiki].models, function (model, content) {
+		$.each(ores_wiki_data.models, function (model, content) {
 			h += "<option value='" + model + "'>" + model + "</option>";
 		});
 		$("#ores_model_select").html(h);
@@ -290,7 +291,7 @@ function loadNamespaces(callback) {
 			if (id < 0) return;
 			var title = v["*"];
 			if (title == "") title = "<span tt='namespace_0'></span>"; //_t('namespace_0',l) ;
-			last_namespaces[id] = [title, v.canonical || title];
+			last_namespaces[id] = [title, v.canonical || title]; // eslint-disable-line security/detect-object-injection -- id is validated numeric
 			if (id > max_namespace_id) max_namespace_id = id;
 		});
 
@@ -299,10 +300,11 @@ function loadNamespaces(callback) {
 		var nsl = [];
 		function renderNS(ns) {
 			var h = "<div>";
-			if (typeof last_namespaces[ns] != "undefined") {
+			if (Object.hasOwn(last_namespaces, ns)) {
+				var nsData = last_namespaces[ns];
 				h += "<label";
-				if (last_namespaces[ns][0] != last_namespaces[ns][1])
-					h += " title='" + (last_namespaces[ns][1] || "") + "'";
+				if (nsData[0] != nsData[1])
+					h += " title='" + (nsData[1] || "") + "'";
 				h +=
 					"><input type='checkbox' value='1' ns='" +
 					ns +
@@ -314,7 +316,7 @@ function loadNamespaces(callback) {
 					h += " checked";
 				}
 				h += "> ";
-				h += last_namespaces[ns][0];
+				h += nsData[0];
 				h += "</label>";
 			} else h += "&mdash;";
 			h += "</div>";
@@ -326,8 +328,8 @@ function loadNamespaces(callback) {
 		h += "<div class='smaller'>";
 		for (var ns = 0; ns <= max_namespace_id; ns += 2) {
 			if (
-				typeof last_namespaces[ns] == "undefined" &&
-				typeof last_namespaces[ns + 1] == "undefined"
+				!Object.hasOwn(last_namespaces, ns) &&
+				!Object.hasOwn(last_namespaces, ns + 1)
 			)
 				continue;
 			h += "<div class='ns-block'>";
@@ -350,14 +352,14 @@ function loadNamespaces(callback) {
 	}
 
 	var server = lp + ".org";
-	if (typeof global_namespace_cache[server] == "undefined") {
+	if (!Object.hasOwn(global_namespace_cache, server)) {
 		namespaces_loading = true;
 		$.getJSON(
 			"https://" +
 			server +
 			"/w/api.php?action=query&meta=siteinfo&siprop=namespaces&format=json&callback=?",
 			function (d) {
-				global_namespace_cache[server] = d;
+				global_namespace_cache[server] = d; // eslint-disable-line security/detect-object-injection -- server is constructed from validated input
 				namespaceDataLoaded(d);
 			},
 		).always(function () {
@@ -365,7 +367,7 @@ function loadNamespaces(callback) {
 			if (typeof callback != "undefined") callback();
 		});
 	} else {
-		namespaceDataLoaded(global_namespace_cache[server]);
+		namespaceDataLoaded(global_namespace_cache[server]); // eslint-disable-line security/detect-object-injection -- server is validated, and already checked via Object.hasOwn above
 		namespaces_loading = false;
 		if (typeof callback != "undefined") callback();
 	}
@@ -503,7 +505,7 @@ function addExamples() {
 	var o = $('a[tt="examples"]');
 	o.click(function () {
 		$("#example_search").val("");
-		if (example_list.length == 0) {
+		if (example_list.length === 0) {
 			$.getJSON(
 				"https://meta.wikimedia.org/w/api.php?action=parse&prop=wikitext&page=PetScan/Examples&format=json&callback=?",
 				function (d) {
@@ -536,7 +538,7 @@ function initializeInterface() {
 	$.each(p, function (k, v) {
 		cnt++;
 	});
-	if (cnt == 0) p["ns[0]"] = 1;
+	if (cnt === 0) p["ns[0]"] = 1;
 
 	// Legacy parameters
 	if (typeof p.category != "undefined" && (p.categories || "") == "")
@@ -606,7 +608,7 @@ function initializeInterface() {
 
 		// mode == 'thumbnails'
 
-		if ($("#thumbnails").length == 0) {
+		if ($("#thumbnails").length === 0) {
 			generateThumbnailView();
 		}
 

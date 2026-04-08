@@ -192,7 +192,7 @@ function AutoList(callback) {
         remove_q = me.commands_todo.length;
         me.commands_todo.push(cmd);
       });
-      if (typeof remove_q != "undefined") {
+      if (typeof remove_q != "undefined" && Object.hasOwn(me.commands_todo, remove_q)) {
         me.commands_todo[remove_q].remove_q = true;
         me.commands_todo[remove_q].cb_id = o.attr("id");
       }
@@ -201,6 +201,7 @@ function AutoList(callback) {
 
   this.finishCommand = function (id) {
     var me = this;
+    if (!Object.hasOwn(me.commands_todo, id)) return;
     me.commands_todo[id].status = "done";
     var cmd = me.commands_todo[id];
 
@@ -225,7 +226,7 @@ function AutoList(callback) {
   };
 
   this.addNewQ = function (q) {
-    if ($("#autolist_box_new_q").length == 0) {
+    if ($("#autolist_box_new_q").length === 0) {
       $("#autolist_box").append(
         "<div class='autolist_subbox'><div tt='created_items'></div><textarea id='autolist_box_new_q' rows='4' style='width:80px;font-size:8pt'></textarea></div>",
       );
@@ -239,6 +240,7 @@ function AutoList(callback) {
 
   this.runCommand = function (id) {
     var me = this;
+    if (!Object.hasOwn(me.commands_todo, id)) return;
     me.running.push(id);
     me.commands_todo[id].status = "running";
     var cmd = me.commands_todo[id];
@@ -271,7 +273,7 @@ function AutoList(callback) {
           var old_q = cmd.q;
           me.addNewQ(new_q);
           $.each(me.commands_todo, function (k, v) {
-            if (v.q == old_q) me.commands_todo[k].q = new_q;
+            if (v.q == old_q && Object.hasOwn(me.commands_todo, k)) me.commands_todo[k].q = new_q;
           });
 
           // Next
@@ -354,7 +356,7 @@ function AutoList(callback) {
 
     var q_running = {};
     $.each(me.running, function (k, v) {
-      q_running[me.commands_todo[v].q] = 1;
+      if (Object.hasOwn(me.commands_todo, v)) q_running[me.commands_todo[v].q] = 1;
     });
 
     var run_next;
@@ -616,8 +618,8 @@ function AutoList(callback) {
 
   var me = this;
   if (
-    $("#autolist_box").length == 0 ||
-    $("#main_table input.qcb").length == 0
+    $("#autolist_box").length === 0 ||
+    $("#main_table input.qcb").length === 0
   ) {
     // Don't bother
     if (typeof callback != "undefined") callback();

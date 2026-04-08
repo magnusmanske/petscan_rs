@@ -578,18 +578,18 @@ mod tests {
         // Old parameter
         check_results_for_psid_ext(
             10140344,
-            "&regexp_filter=.*Manske",
+            "&wikidata_label_language=en&regexp_filter=Douglas.*",
             "wikidatawiki",
-            vec![Title::new("Q13520818", 0)],
+            vec![Title::new("Q42", 0)],
         )
         .await;
 
         // New parameter
         check_results_for_psid_ext(
             10140344,
-            "&rxp_filter=.*Manske",
+            "&wikidata_label_language=en&rxp_filter=Douglas.*",
             "wikidatawiki",
-            vec![Title::new("Q13520818", 0)],
+            vec![Title::new("Q42", 0)],
         )
         .await;
     }
@@ -598,14 +598,14 @@ mod tests {
     async fn test_manual_list_wikidata_regexp() {
         check_results_for_psid_ext(
             10140344,
-            "&rxp_filter=.*Manske",
+            "&wikidata_label_language=en&rxp_filter=Douglas.*",
             "wikidatawiki",
-            vec![Title::new("Q13520818", 0)],
+            vec![Title::new("Q42", 0)],
         )
         .await;
         check_results_for_psid_ext(
             10140344,
-            "&rxp_filter=Graaf.*",
+            "&wikidata_label_language=en&rxp_filter=Count.*",
             "wikidatawiki",
             vec![Title::new("Q12345", 0)],
         )
