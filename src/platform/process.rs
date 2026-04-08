@@ -1124,7 +1124,6 @@ impl Platform {
 
     /// Builds the `sql_post` snippet that encodes all Wikidata property/item filters.
     fn build_filter_wikidata_sql_post(
-        &self,
         parts: &[SQLtuple],
         no_statements: bool,
         no_sitelinks: bool,
@@ -1244,7 +1243,7 @@ impl Platform {
             })
             .collect::<Vec<SQLtuple>>();
 
-        let sql_post = self.build_filter_wikidata_sql_post(
+        let sql_post = Self::build_filter_wikidata_sql_post(
             &parts,
             no_statements,
             no_sitelinks,
@@ -1571,26 +1570,48 @@ mod tests {
 
     #[test]
     fn test_build_filter_wikidata_sql_post_empty() {
-        let p = make_platform(vec![]);
-        let sql =
-            p.build_filter_wikidata_sql_post(&[], false, false, None, None, None, None, "any");
+        let sql = Platform::build_filter_wikidata_sql_post(
+            &[],
+            false,
+            false,
+            None,
+            None,
+            None,
+            None,
+            "any",
+        );
         assert!(sql.0.is_empty());
         assert!(sql.1.is_empty());
     }
 
     #[test]
     fn test_build_filter_wikidata_sql_post_min_statements() {
-        let p = make_platform(vec![]);
-        let sql =
-            p.build_filter_wikidata_sql_post(&[], false, false, Some(3), None, None, None, "any");
+        let sql = Platform::build_filter_wikidata_sql_post(
+            &[],
+            false,
+            false,
+            Some(3),
+            None,
+            None,
+            None,
+            "any",
+        );
         assert!(sql.0.contains("wb-claims"));
         assert!(sql.0.contains("3"));
     }
 
     #[test]
     fn test_build_filter_wikidata_sql_post_no_statements_flag() {
-        let p = make_platform(vec![]);
-        let sql = p.build_filter_wikidata_sql_post(&[], true, false, None, None, None, None, "any");
+        let sql = Platform::build_filter_wikidata_sql_post(
+            &[],
+            true,
+            false,
+            None,
+            None,
+            None,
+            None,
+            "any",
+        );
         assert!(sql.0.contains("pp_sortkey=0"));
     }
 

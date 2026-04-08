@@ -43,7 +43,7 @@ impl SparqlServer {
 
     /// Parse a standard SPARQL JSON response. Both WDQS and QLever emit the same
     /// W3C SPARQL 1.1 JSON format, so one parser handles both endpoints.
-    fn parse_response(&self, response: &str, api: &Api) -> Result<PageList> {
+    fn parse_response(response: &str, api: &Api) -> Result<PageList> {
         Self::parse_response_standard(response, api)
     }
 
@@ -120,7 +120,7 @@ impl DataSource for SourceSparql {
         };
 
         let response = response.text().await?;
-        tokio::task::spawn_blocking(move || sparql_server.parse_response(&response, &api))
+        tokio::task::spawn_blocking(move || SparqlServer::parse_response(&response, &api))
             .await
             .map_err(|e| anyhow!("SPARQL parse task failed: {e}"))?
     }

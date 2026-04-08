@@ -252,7 +252,11 @@ impl PageList {
 
     /// Builds SQL WHERE-clause batches for .
     /// Each chunk of  titles becomes one .
-    fn sql_batches_for_ns(chunk_size: usize, nsid: NamespaceID, titles: &[String]) -> Vec<SQLtuple> {
+    fn sql_batches_for_ns(
+        chunk_size: usize,
+        nsid: NamespaceID,
+        titles: &[String],
+    ) -> Vec<SQLtuple> {
         titles
             .chunks(chunk_size)
             .map(|chunk| {
@@ -318,7 +322,9 @@ impl PageList {
             .await?
             .collect_and_drop()
             .await?;
-        if let Err(e) = conn.disconnect().await { tracing::warn!("Failed to disconnect DB connection: {e}"); }
+        if let Err(e) = conn.disconnect().await {
+            tracing::warn!("Failed to disconnect DB connection: {e}");
+        }
 
         Ok(rows)
     }
@@ -432,11 +438,9 @@ impl PageList {
                     self.entry_from_row(row, col_title, col_ns)
                         .map(|entry| (row, entry))
                 })
-                .filter_map(|(row, entry)| {
-                    match self.entries.read() {
-                        Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
-                        _ => None,
-                    }
+                .filter_map(|(row, entry)| match self.entries.read() {
+                    Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
+                    _ => None,
                 })
                 .for_each(|(row, mut entry)| {
                     the_f(row.clone(), &mut entry);
@@ -512,7 +516,7 @@ impl PageList {
                 let id_params: Vec<MyValue> = sql_batch
                     .1
                     .iter()
-                    .filter_map(|s| match s {
+                    .filter_map(|s2| match s2 {
                         MyValue::Bytes(b) => {
                             let s = String::from_utf8_lossy(b);
                             s.get(1..)?.parse::<u64>().ok().map(MyValue::UInt)

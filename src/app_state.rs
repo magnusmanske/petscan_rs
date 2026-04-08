@@ -57,10 +57,6 @@ impl AppState {
         self.db_manager.using_file_table()
     }
 
-    pub fn using_new_categorylinks_table(&self) -> bool {
-        self.db_manager.using_new_categorylinks_table()
-    }
-
     pub fn get_restart_code(&self) -> Option<&str> {
         self.db_manager.get_restart_code()
     }
@@ -222,7 +218,7 @@ impl AppState {
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        self.shutting_down.read().map_or(false, |x| *x)
+        self.shutting_down.read().is_ok_and(|x| *x)
     }
 
     pub fn shut_down(&self) {
@@ -312,12 +308,6 @@ mod tests {
 
         let state_missing = state_with_config(serde_json::json!({}));
         assert!(!state_missing.using_file_table());
-    }
-
-    #[test]
-    fn test_using_new_categorylinks_table() {
-        let state = state_with_config(serde_json::json!({ "use_new_categorylinks_table": true }));
-        assert!(state.using_new_categorylinks_table());
     }
 
     #[test]

@@ -17,8 +17,8 @@ use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use wikimisc::mediawiki::api::{Api, NamespaceID};
 use tracing::debug;
+use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
 
 const MAX_CATEGORY_BATCH_SIZE: usize = 2500;
@@ -303,11 +303,7 @@ impl SourceDatabase {
         wiki: &str,
         categories: &[String],
     ) -> Result<Vec<String>> {
-        let sql = if state.using_new_categorylinks_table() {
-            "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN ("
-        } else {
-            "SELECT DISTINCT page_title FROM page,categorylinks WHERE cl_from=page_id AND cl_type='subcat' AND cl_to IN ("
-        };
+        let sql = "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN (";
         let mut sql: SQLtuple = (sql.to_string(), vec![]);
         super::append_sql(&mut sql, super::prep_quote(categories));
         sql.0 += ")";
@@ -366,7 +362,11 @@ impl SourceDatabase {
                     }
                 }
             }
-            debug!(remaining_depth, count = categories_new.len(), "added new sub-categories");
+            debug!(
+                remaining_depth,
+                count = categories_new.len(),
+                "added new sub-categories"
+            );
             if categories_done.len() > MAX_SUBCATEGORIES_IN_TREE {
                 return Err(anyhow!(
                     "Sub-categories for \"{new_title}\" exceed {MAX_SUBCATEGORIES_IN_TREE}, please limit that category depth, or fix the category tree"
@@ -540,11 +540,7 @@ impl SourceDatabase {
         state: &AppState,
         ret: &PageList,
     ) -> Result<()> {
-        let subquery = if state.using_new_categorylinks_table() {
-            "SELECT cl_from,cl_target_id,lt_title AS cl_to from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title"
-        } else {
-            "SELECT * FROM categorylinks WHERE cl_to"
-        };
+        let subquery = "SELECT cl_from,cl_target_id,lt_title from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
         let mut sql = super::sql_tuple();
         match self.params.combine.as_str() {
             "subset" => {
@@ -556,15 +552,8 @@ impl SourceDatabase {
                 super::append_sql(&mut sql, super::prep_quote(&category_batch[0]));
                 sql.0 += ")) cl0";
                 for (a, item) in category_batch.iter().enumerate().skip(1) {
-                    if state.using_new_categorylinks_table() {
-                        sql.0 += &format!(" INNER JOIN categorylinks cl{a} ON cl0.cl_from=cl{a}.cl_from
+                    sql.0 += &format!(" INNER JOIN categorylinks cl{a} ON cl0.cl_from=cl{a}.cl_from
                        INNER JOIN linktarget lt{a} ON lt{a}.lt_namespace=14 AND lt{a}.lt_id=cl{a}.cl_target_id AND lt{a}.lt_title IN (");
-                    } else {
-                        sql.0 += &format!(
-                            " INNER JOIN categorylinks cl{a}
-                            	ON cl0.cl_from=cl{a}.cl_from AND cl{a}.cl_to IN ("
-                        );
-                    }
                     super::append_sql(&mut sql, super::prep_quote(item));
                     sql.0 += ")";
                 }
@@ -580,7 +569,7 @@ impl SourceDatabase {
                     .par_iter()
                     .map(|s| s.to_owned())
                     .collect::<Vec<String>>();
-                sql.0 = PAGE_SELECT_PREFIX.to_string() ;
+                sql.0 = PAGE_SELECT_PREFIX.to_string();
                 sql.0 += &params.link_count_sql;
                 sql.0 += &format!(" FROM ( {subquery} IN (");
                 super::append_sql(&mut sql, super::prep_quote(&tmp));
@@ -787,9 +776,9 @@ impl SourceDatabase {
         let nslist = primary_pagelist.group_by_namespace();
         let mut batches: Vec<SQLtuple> = vec![];
         nslist.iter().for_each(|nsgroup| {
-            nsgroup.1.chunks(PAGE_BATCH_SIZE*2).for_each(|titles| {
+            nsgroup.1.chunks(PAGE_BATCH_SIZE * 2).for_each(|titles| {
                 let mut sql = super::sql_tuple();
-                sql.0 = PAGE_SELECT_PREFIX.to_string() ;
+                sql.0 = PAGE_SELECT_PREFIX.to_string();
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
                 if !params.is_before_after_done {
@@ -838,7 +827,6 @@ impl SourceDatabase {
         let mut pl2 = PageList::new_from_wiki(&wiki.clone());
         let api = state.get_api_for_wiki(wiki.clone()).await?;
         self.get_pages_for_primary(
-            state,
             &mut conn,
             &params.primary.to_string(),
             sql,
@@ -873,7 +861,7 @@ impl SourceDatabase {
                     .await;
             }
             "no_wikidata" => {
-                sql.0 = PAGE_SELECT_PREFIX.to_string() ;
+                sql.0 = PAGE_SELECT_PREFIX.to_string();
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
                 if !params.is_before_after_done {
@@ -883,7 +871,7 @@ impl SourceDatabase {
                 sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')";
             }
             "templates" | "links_from" => {
-                sql.0 = PAGE_SELECT_PREFIX.to_string() ;
+                sql.0 = PAGE_SELECT_PREFIX.to_string();
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
                 if !params.is_before_after_done {
@@ -902,7 +890,6 @@ impl SourceDatabase {
         let mut ret = PageList::new_from_wiki(&params.wiki);
         let mut conn = state.get_wiki_db_connection(&params.wiki).await?;
         self.get_pages_for_primary(
-            state,
             &mut conn,
             &params.primary.to_string(),
             sql,
@@ -935,7 +922,6 @@ impl SourceDatabase {
         );
         let ret = self
             .get_pages_for_primary(
-                state,
                 &mut conn,
                 primary,
                 sql,
@@ -952,7 +938,6 @@ impl SourceDatabase {
     #[allow(clippy::too_many_arguments)]
     async fn get_pages_for_primary(
         &self,
-        state: &AppState,
         conn: &mut my::Conn,
         primary: &String,
         mut sql: SQLtuple,
@@ -964,7 +949,7 @@ impl SourceDatabase {
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
 
         self.get_pages_for_primary_namespaces(primary, &mut sql);
-        self.get_pages_for_primary_negative_categories(state, &mut sql);
+        self.get_pages_for_primary_negative_categories(&mut sql);
         self.get_pages_for_primary_templates_as_secondary(&mut sql);
         self.get_pages_for_primary_negative_templates(&mut sql);
         self.get_pages_for_primary_links_from(&mut sql, &api);
@@ -1272,20 +1257,12 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_negative_categories(
-        &self,
-        state: &AppState,
-        sql: &mut (String, Vec<MyValue>),
-    ) {
+    fn get_pages_for_primary_negative_categories(&self, sql: &mut (String, Vec<MyValue>)) {
         if !self.cat_neg.is_empty() {
             let mut cats: Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
             cats.sort_unstable();
             cats.dedup();
-            if state.using_new_categorylinks_table() {
-                sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
-            } else {
-                sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks WHERE cl_to";
-            }
+            sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
             Self::sql_in(&cats, sql);
             sql.0 += ")";
         }
