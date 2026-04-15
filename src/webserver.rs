@@ -225,7 +225,7 @@ impl WebServer {
         // No "doit" parameter, just display the HTML form with the current query
         if form_parameters
             .params
-            .get("psid")
+            .get("format")
             .unwrap_or(&"html".to_string())
             == "html"
             && (!form_parameters.params.contains_key("doit")
