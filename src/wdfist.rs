@@ -680,7 +680,11 @@ impl WDfist {
         filenames.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = crate::datasource::prep_quote(chunk);
             sql.0 = format!(
-                "SELECT DISTINCT il_to FROM imagelinks WHERE il_from_namespace=0 AND il_to IN ({})",
+                "SELECT DISTINCT lt_title FROM imagelinks,linktarget
+                WHERE il_target_id=lt_id
+                AND il_from_namespace=0
+                AND lt_namespace=6
+                AND lt_title IN ({})",
                 &sql.0
             );
             batches.push(sql);
