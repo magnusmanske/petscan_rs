@@ -116,3 +116,108 @@ impl RenderTSV {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tsv() -> RenderTSV {
+        RenderTSV { separator: "\t".to_string() }
+    }
+
+    fn csv() -> RenderTSV {
+        RenderTSV { separator: ",".to_string() }
+    }
+
+    // ── escape_cell ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_escape_cell_tsv_replaces_tab_with_space() {
+        let r = tsv();
+        assert_eq!(r.escape_cell("hello\tworld"), "hello world");
+    }
+
+    #[test]
+    fn test_escape_cell_tsv_leaves_plain_text_unchanged() {
+        let r = tsv();
+        assert_eq!(r.escape_cell("plain text"), "plain text");
+    }
+
+    #[test]
+    fn test_escape_cell_csv_wraps_in_double_quotes() {
+        let r = csv();
+        assert_eq!(r.escape_cell("hello"), "\"hello\"");
+    }
+
+    #[test]
+    fn test_escape_cell_csv_escapes_internal_quotes() {
+        let r = csv();
+        assert_eq!(r.escape_cell("say \"hi\""), "\"say \\\"hi\\\"\"");
+    }
+
+    #[test]
+    fn test_escape_cell_csv_empty_string() {
+        let r = csv();
+        assert_eq!(r.escape_cell(""), "\"\"");
+    }
+
+    #[test]
+    fn test_escape_cell_tsv_multiple_tabs() {
+        let r = tsv();
+        assert_eq!(r.escape_cell("a\tb\tc"), "a b c");
+    }
+
+    // ── Render default helpers (called through RenderTSV) ────────────────────
+
+    #[test]
+    fn test_opt_usize() {
+        let r = tsv();
+        assert_eq!(r.opt_usize(&Some(42_usize)), "42");
+        assert_eq!(r.opt_usize(&None::<usize>), "");
+    }
+
+    #[test]
+    fn test_opt_u32() {
+        let r = tsv();
+        assert_eq!(r.opt_u32(&Some(100_u32)), "100");
+        assert_eq!(r.opt_u32(&None::<u32>), "");
+    }
+
+    #[test]
+    fn test_opt_linkcount() {
+        let r = tsv();
+        assert_eq!(r.opt_linkcount(&Some(7_u32)), "7");
+        assert_eq!(r.opt_linkcount(&None::<u32>), "");
+    }
+
+    #[test]
+    fn test_opt_bool() {
+        let r = tsv();
+        assert_eq!(r.opt_bool(&Some(true)), "Y");
+        assert_eq!(r.opt_bool(&Some(false)), "N");
+        assert_eq!(r.opt_bool(&None), "");
+    }
+
+    #[test]
+    fn test_opt_string() {
+        let r = tsv();
+        assert_eq!(r.opt_string(&Some("hello".to_string())), "hello");
+        assert_eq!(r.opt_string(&None::<String>), "");
+    }
+
+    #[test]
+    fn test_file_data_keys() {
+        let r = tsv();
+        let keys = r.file_data_keys();
+        assert_eq!(keys.len(), 9);
+        assert!(keys.contains(&"img_size"));
+        assert!(keys.contains(&"img_width"));
+        assert!(keys.contains(&"img_height"));
+        assert!(keys.contains(&"img_media_type"));
+        assert!(keys.contains(&"img_major_mime"));
+        assert!(keys.contains(&"img_minor_mime"));
+        assert!(keys.contains(&"img_user_text"));
+        assert!(keys.contains(&"img_timestamp"));
+        assert!(keys.contains(&"img_sha1"));
+    }
+}

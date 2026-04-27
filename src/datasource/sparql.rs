@@ -125,3 +125,94 @@ impl DataSource for SourceSparql {
             .map_err(|e| anyhow!("SPARQL parse task failed: {e}"))?
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use crate::form_parameters::FormParameters;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_platform(pairs: Vec<(&str, &str)>) -> Platform {
+        let mut params = HashMap::new();
+        for (k, v) in pairs {
+            params.insert(k.to_string(), v.to_string());
+        }
+        let fp = FormParameters::new_from_pairs(params);
+        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
+    }
+
+    // ── SparqlServer::from ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_sparql_server_from_none() {
+        assert!(matches!(SparqlServer::from(None), SparqlServer::Wikidata));
+    }
+
+    #[test]
+    fn test_sparql_server_from_qlever_wd() {
+        assert!(matches!(
+            SparqlServer::from(Some("qlever_wd".to_string())),
+            SparqlServer::QLeverWd
+        ));
+    }
+
+    #[test]
+    fn test_sparql_server_from_unknown_falls_back_to_wikidata() {
+        assert!(matches!(
+            SparqlServer::from(Some("unknown_server".to_string())),
+            SparqlServer::Wikidata
+        ));
+    }
+
+    // ── SparqlServer::url ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_sparql_server_wikidata_url() {
+        let url = SparqlServer::Wikidata.url();
+        assert!(url.contains("wikidata.org"), "Expected wikidata.org in: {url}");
+    }
+
+    #[test]
+    fn test_sparql_server_qlever_url() {
+        let url = SparqlServer::QLeverWd.url();
+        assert!(url.contains("qlever"), "Expected qlever in: {url}");
+    }
+
+    // ── SparqlServer::add_prefix ─────────────────────────────────────────────
+
+    #[test]
+    fn test_add_prefix_wikidata_returns_sparql_unchanged() {
+        let sparql = "SELECT ?item WHERE { ?item wdt:P31 wd:Q5 }";
+        let result = SparqlServer::Wikidata.add_prefix(sparql);
+        assert_eq!(result, sparql);
+    }
+
+    #[test]
+    fn test_add_prefix_qlever_prepends_prefix_block() {
+        let sparql = "SELECT ?item WHERE { ?item wdt:P31 wd:Q5 }";
+        let result = SparqlServer::QLeverWd.add_prefix(sparql);
+        assert!(result.starts_with("PREFIX"), "Expected PREFIX at start, got: {result}");
+        assert!(result.contains(sparql), "Expected original query in result");
+    }
+
+    // ── can_run / name ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_name() {
+        assert_eq!(SourceSparql.name(), "sparql");
+    }
+
+    #[test]
+    fn test_can_run_with_sparql_param() {
+        let p = make_platform(vec![("sparql", "SELECT ?x WHERE {}")]);
+        assert!(SourceSparql.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_without_sparql_param() {
+        let p = make_platform(vec![]);
+        assert!(!SourceSparql.can_run(&p));
+    }
+}

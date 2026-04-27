@@ -43,3 +43,57 @@ impl DataSource for SourceManual {
         Ok(ret)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use crate::form_parameters::FormParameters;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_platform(pairs: Vec<(&str, &str)>) -> Platform {
+        let mut params = HashMap::new();
+        for (k, v) in pairs {
+            params.insert(k.to_string(), v.to_string());
+        }
+        let fp = FormParameters::new_from_pairs(params);
+        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
+    }
+
+    #[test]
+    fn test_can_run_requires_both_params() {
+        let src = SourceManual;
+        let platform_both = make_platform(vec![
+            ("manual_list", "Article one\nArticle two"),
+            ("manual_list_wiki", "enwiki"),
+        ]);
+        assert!(src.can_run(&platform_both));
+    }
+
+    #[test]
+    fn test_can_run_missing_manual_list() {
+        let src = SourceManual;
+        let platform = make_platform(vec![("manual_list_wiki", "enwiki")]);
+        assert!(!src.can_run(&platform));
+    }
+
+    #[test]
+    fn test_can_run_missing_manual_list_wiki() {
+        let src = SourceManual;
+        let platform = make_platform(vec![("manual_list", "Article one")]);
+        assert!(!src.can_run(&platform));
+    }
+
+    #[test]
+    fn test_can_run_missing_both() {
+        let src = SourceManual;
+        let platform = make_platform(vec![]);
+        assert!(!src.can_run(&platform));
+    }
+
+    #[test]
+    fn test_name() {
+        assert_eq!(SourceManual.name(), "manual");
+    }
+}

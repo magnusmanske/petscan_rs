@@ -66,3 +66,38 @@ impl SourcePagePile {
         Ok(v)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use crate::form_parameters::FormParameters;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_platform(pairs: Vec<(&str, &str)>) -> Platform {
+        let mut params = HashMap::new();
+        for (k, v) in pairs {
+            params.insert(k.to_string(), v.to_string());
+        }
+        let fp = FormParameters::new_from_pairs(params);
+        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
+    }
+
+    #[test]
+    fn test_name() {
+        assert_eq!(SourcePagePile.name(), "pagepile");
+    }
+
+    #[test]
+    fn test_can_run_with_pagepile_param() {
+        let p = make_platform(vec![("pagepile", "12345")]);
+        assert!(SourcePagePile.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_without_pagepile_param() {
+        let p = make_platform(vec![]);
+        assert!(!SourcePagePile.can_run(&p));
+    }
+}

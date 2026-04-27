@@ -80,3 +80,74 @@ impl DataSource for SourceSearch {
         Ok(ret)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use crate::form_parameters::FormParameters;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_platform(pairs: Vec<(&str, &str)>) -> Platform {
+        let mut params = HashMap::new();
+        for (k, v) in pairs {
+            params.insert(k.to_string(), v.to_string());
+        }
+        let fp = FormParameters::new_from_pairs(params);
+        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
+    }
+
+    #[test]
+    fn test_name() {
+        assert_eq!(SourceSearch.name(), "search");
+    }
+
+    #[test]
+    fn test_can_run_all_required_params() {
+        let p = make_platform(vec![
+            ("search_query", "test query"),
+            ("search_wiki", "enwiki"),
+            ("search_max_results", "50"),
+        ]);
+        assert!(SourceSearch.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_missing_query() {
+        let p = make_platform(vec![
+            ("search_wiki", "enwiki"),
+            ("search_max_results", "50"),
+        ]);
+        assert!(!SourceSearch.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_missing_wiki() {
+        let p = make_platform(vec![
+            ("search_query", "test query"),
+            ("search_max_results", "50"),
+        ]);
+        assert!(!SourceSearch.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_missing_max_results() {
+        let p = make_platform(vec![
+            ("search_query", "test query"),
+            ("search_wiki", "enwiki"),
+        ]);
+        assert!(!SourceSearch.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_blank_query_not_allowed() {
+        // Empty search_query should not satisfy can_run even if key is present
+        let p = make_platform(vec![
+            ("search_query", "   "),
+            ("search_wiki", "enwiki"),
+            ("search_max_results", "50"),
+        ]);
+        assert!(!SourceSearch.can_run(&p));
+    }
+}

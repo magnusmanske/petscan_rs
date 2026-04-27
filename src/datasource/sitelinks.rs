@@ -157,3 +157,115 @@ impl SourceSitelinks {
         Ok(rows)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use crate::form_parameters::FormParameters;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_platform(pairs: Vec<(&str, &str)>) -> Platform {
+        let mut params = HashMap::new();
+        for (k, v) in pairs {
+            params.insert(k.to_string(), v.to_string());
+        }
+        let fp = FormParameters::new_from_pairs(params);
+        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
+    }
+
+    // ── can_run / name ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_name() {
+        assert_eq!(SourceSitelinks::new().name(), "sitelinks");
+    }
+
+    #[test]
+    fn test_can_run_sitelinks_yes() {
+        let src = SourceSitelinks::new();
+        let p = make_platform(vec![("sitelinks_yes", "enwiki")]);
+        assert!(src.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_sitelinks_any() {
+        let src = SourceSitelinks::new();
+        let p = make_platform(vec![("sitelinks_any", "frwiki")]);
+        assert!(src.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_neither_param() {
+        let src = SourceSitelinks::new();
+        let p = make_platform(vec![]);
+        assert!(!src.can_run(&p));
+    }
+
+    // ── site2lang ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_site2lang_strips_wiki_suffix() {
+        let src = SourceSitelinks { main_wiki: "dewiki".to_string(), use_min_max: false };
+        assert_eq!(src.site2lang("enwiki"), Some("en".to_string()));
+        assert_eq!(src.site2lang("frwiki"), Some("fr".to_string()));
+        assert_eq!(src.site2lang("commonswiki"), Some("commons".to_string()));
+    }
+
+    #[test]
+    fn test_site2lang_returns_none_for_main_wiki() {
+        let src = SourceSitelinks { main_wiki: "enwiki".to_string(), use_min_max: false };
+        assert_eq!(src.site2lang("enwiki"), None);
+    }
+
+    #[test]
+    fn test_site2lang_no_wiki_suffix_returns_as_is() {
+        let src = SourceSitelinks { main_wiki: "enwiki".to_string(), use_min_max: false };
+        assert_eq!(src.site2lang("some_other_site"), Some("some_other_site".to_string()));
+    }
+
+    // ── generate_sql_query ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_generate_sql_query_sitelinks_yes() {
+        let mut src = SourceSitelinks::new();
+        // enwiki becomes the main wiki (first); frwiki generates the ll_lang=? condition
+        let p = make_platform(vec![("sitelinks_yes", "enwiki\nfrwiki")]);
+        let (sql, params) = src.generate_sql_query(&p).unwrap();
+        assert!(sql.contains("ll_lang=?"), "Expected ll_lang=? in: {sql}");
+        assert_eq!(params.len(), 1); // only "fr"; enwiki is the main wiki
+        assert_eq!(src.main_wiki, "enwiki");
+    }
+
+    #[test]
+    fn test_generate_sql_query_sitelinks_any() {
+        let mut src = SourceSitelinks::new();
+        // enwiki is main wiki; fr and de generate the IN (?,?) condition
+        let p = make_platform(vec![("sitelinks_any", "enwiki\nfrwiki\ndewiki")]);
+        let (sql, params) = src.generate_sql_query(&p).unwrap();
+        assert!(sql.contains("ll_lang IN ("), "Expected ll_lang IN in: {sql}");
+        assert_eq!(params.len(), 2); // "fr" and "de"; enwiki filtered out as main wiki
+    }
+
+    #[test]
+    fn test_generate_sql_query_no_sitelinks_returns_error() {
+        let mut src = SourceSitelinks::new();
+        let p = make_platform(vec![]);
+        assert!(src.generate_sql_query(&p).is_err());
+    }
+
+    #[test]
+    fn test_generate_sql_query_min_max_adds_having() {
+        let mut src = SourceSitelinks::new();
+        let p = make_platform(vec![
+            ("sitelinks_yes", "enwiki"),
+            ("min_sitelink_count", "10"),
+            ("max_sitelink_count", "100"),
+        ]);
+        let (sql, _) = src.generate_sql_query(&p).unwrap();
+        assert!(sql.contains("HAVING"), "Expected HAVING in: {sql}");
+        assert!(sql.contains("sitelink_count>=10"), "Expected sitelink_count>=10 in: {sql}");
+        assert!(sql.contains("sitelink_count<=100"), "Expected sitelink_count<=100 in: {sql}");
+    }
+}

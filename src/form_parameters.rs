@@ -338,4 +338,124 @@ mod tests {
         assert_eq!(form_params.params.get("test"), Some(&"value".to_string()));
         assert_eq!(form_params.params.get("test2"), Some(&"value3".to_string()));
     }
+
+    // ── rebase edge cases ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_rebase_overwrites_empty_existing_value() {
+        // An empty string in self should be replaced by base's value
+        let mut current = FormParameters::new();
+        current.set_param("lang", "");
+        let mut base = FormParameters::new();
+        base.set_param("lang", "de");
+        current.rebase(&base);
+        assert_eq!(current.params.get("lang"), Some(&"de".to_string()));
+    }
+
+    // ── ns_from_params ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ns_from_params_only_includes_value_1() {
+        let mut params = HashMap::new();
+        params.insert("ns[0]".to_string(), "1".to_string());
+        params.insert("ns[1]".to_string(), "0".to_string()); // value is not "1"
+        params.insert("ns[2]".to_string(), "yes".to_string()); // value is not "1"
+        let fp = FormParameters::new_from_pairs(params);
+        assert!(fp.ns.contains(&0));
+        assert!(!fp.ns.contains(&1));
+        assert!(!fp.ns.contains(&2));
+    }
+
+    // ── has_param_with_value ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_has_param_with_value_whitespace_returns_false() {
+        let mut fp = FormParameters::new();
+        fp.set_param("key", "   ");
+        assert!(!fp.has_param_with_value("key"));
+    }
+
+    // ── legacy_parameters: comb_subset / comb_union ──────────────────────────
+
+    #[test]
+    fn test_legacy_comb_subset_sets_combination() {
+        let mut fp = FormParameters::new();
+        fp.set_param("comb_subset", "1");
+        fp.legacy_parameters();
+        assert_eq!(fp.params.get("combination"), Some(&"subset".to_string()));
+    }
+
+    #[test]
+    fn test_legacy_comb_union_sets_combination() {
+        let mut fp = FormParameters::new();
+        fp.set_param("comb_union", "1");
+        fp.legacy_parameters();
+        assert_eq!(fp.params.get("combination"), Some(&"union".to_string()));
+    }
+
+    // ── legacy_parameters: wikidata_item aliases ─────────────────────────────
+
+    #[test]
+    fn test_legacy_get_q_sets_wikidata_item_any() {
+        let mut fp = FormParameters::new();
+        fp.set_param("get_q", "1");
+        fp.legacy_parameters();
+        assert_eq!(fp.params.get("wikidata_item"), Some(&"any".to_string()));
+    }
+
+    #[test]
+    fn test_legacy_wikidata_param_sets_wikidata_item_any() {
+        let mut fp = FormParameters::new();
+        fp.set_param("wikidata", "1");
+        fp.legacy_parameters();
+        assert_eq!(fp.params.get("wikidata_item"), Some(&"any".to_string()));
+    }
+
+    #[test]
+    fn test_legacy_wikidata_no_item_sets_without() {
+        let mut fp = FormParameters::new();
+        fp.set_param("wikidata_no_item", "1");
+        fp.legacy_parameters();
+        assert_eq!(fp.params.get("wikidata_item"), Some(&"without".to_string()));
+    }
+
+    // ── legacy_parameters: QuickIntersection ────────────────────────────────
+
+    #[test]
+    fn test_legacy_quick_intersection_sets_output_compatability() {
+        let mut fp = FormParameters::new();
+        fp.set_param("max", "500");
+        fp.legacy_parameters();
+        assert_eq!(
+            fp.params.get("output_compatability"),
+            Some(&"quick-intersection".to_string())
+        );
+    }
+
+    #[test]
+    fn test_legacy_quick_intersection_ns_star_adds_ns0() {
+        let mut fp = FormParameters::new();
+        fp.set_param("max", "500");
+        fp.set_param("ns", "*");
+        fp.legacy_parameters();
+        assert_eq!(fp.params.get("ns[0]"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn test_legacy_quick_intersection_ns_numeric_adds_bracket_key() {
+        let mut fp = FormParameters::new();
+        fp.set_param("max", "500");
+        fp.set_param("ns", "4");
+        fp.legacy_parameters();
+        assert_eq!(fp.params.get("ns[4]"), Some(&"1".to_string()));
+    }
+
+    #[test]
+    fn test_legacy_quick_intersection_jsonfm_sets_json_pretty() {
+        let mut fp = FormParameters::new();
+        fp.set_param("max", "100");
+        fp.set_param("format", "jsonfm");
+        fp.legacy_parameters();
+        assert_eq!(fp.params.get("json-pretty"), Some(&"1".to_string()));
+    }
 }

@@ -738,4 +738,194 @@ mod tests {
         );
         assert_eq!(fi.file_usage, vec![fu]);
     }
+
+    fn make_entry(title: &str, ns: NamespaceID) -> PageListEntry {
+        PageListEntry::new(Title::new(title, ns))
+    }
+
+    #[test]
+    fn test_page_list_sort_new_from_params() {
+        assert!(matches!(PageListSort::new_from_params("title", false), PageListSort::Title(false)));
+        assert!(matches!(PageListSort::new_from_params("title", true), PageListSort::Title(true)));
+        assert!(matches!(PageListSort::new_from_params("ns_title", false), PageListSort::NsTitle(_)));
+        assert!(matches!(PageListSort::new_from_params("size", false), PageListSort::Size(_)));
+        assert!(matches!(PageListSort::new_from_params("date", false), PageListSort::Date(_)));
+        assert!(matches!(PageListSort::new_from_params("redlinks", false), PageListSort::RedlinksCount(_)));
+        assert!(matches!(PageListSort::new_from_params("incoming_links", false), PageListSort::IncomingLinks(_)));
+        assert!(matches!(PageListSort::new_from_params("defaultsort", false), PageListSort::DefaultSort(_)));
+        assert!(matches!(PageListSort::new_from_params("filesize", false), PageListSort::FileSize(_)));
+        assert!(matches!(PageListSort::new_from_params("uploaddate", false), PageListSort::UploadDate(_)));
+        assert!(matches!(PageListSort::new_from_params("sitelinks", false), PageListSort::Sitelinks(_)));
+        assert!(matches!(PageListSort::new_from_params("random", false), PageListSort::Random(_)));
+        assert!(matches!(PageListSort::new_from_params("bogus", false), PageListSort::Default(_)));
+        assert!(matches!(PageListSort::new_from_params("", false), PageListSort::Default(_)));
+    }
+
+    #[test]
+    fn test_compare_by_title() {
+        let entry_a = make_entry("Apple", 0);
+        let entry_b = make_entry("Banana", 0);
+        let asc = PageListSort::Title(false);
+        let desc = PageListSort::Title(true);
+        assert_eq!(entry_a.compare(&entry_b, &asc, false), Ordering::Less);
+        assert_eq!(entry_b.compare(&entry_a, &asc, false), Ordering::Greater);
+        assert_eq!(entry_a.compare(&entry_a, &asc, false), Ordering::Equal);
+        assert_eq!(entry_a.compare(&entry_b, &desc, false), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_by_ns_title() {
+        let entry_main = make_entry("Article", 0);
+        let entry_talk = make_entry("Article", 1);
+        let sorter = PageListSort::NsTitle(false);
+        // namespace 0 < namespace 1
+        assert_eq!(entry_main.compare(&entry_talk, &sorter, false), Ordering::Less);
+        assert_eq!(entry_talk.compare(&entry_main, &sorter, false), Ordering::Greater);
+        // same namespace falls back to title
+        let entry_az = make_entry("Aardvark", 0);
+        let entry_bz = make_entry("Buffalo", 0);
+        assert_eq!(entry_az.compare(&entry_bz, &sorter, false), Ordering::Less);
+    }
+
+    #[test]
+    fn test_compare_by_page_id() {
+        let mut entry_low = make_entry("A", 0);
+        entry_low.set_page_id(Some(100));
+        let mut entry_high = make_entry("B", 0);
+        entry_high.set_page_id(Some(500));
+        let sorter = PageListSort::Default(false);
+        assert_eq!(entry_low.compare(&entry_high, &sorter, false), Ordering::Less);
+        assert_eq!(entry_high.compare(&entry_low, &sorter, false), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_by_size() {
+        let mut entry_small = make_entry("ShortArticle", 0);
+        entry_small.set_page_bytes(Some(100));
+        let mut entry_large = make_entry("LongArticle", 0);
+        entry_large.set_page_bytes(Some(5000));
+        let sorter = PageListSort::Size(false);
+        assert_eq!(entry_small.compare(&entry_large, &sorter, false), Ordering::Less);
+        assert_eq!(entry_large.compare(&entry_small, &sorter, false), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_by_date() {
+        let mut entry_old = make_entry("OldArticle", 0);
+        entry_old.set_page_timestamp(Some("20100101000000".to_string()));
+        let mut entry_new = make_entry("NewArticle", 0);
+        entry_new.set_page_timestamp(Some("20230101000000".to_string()));
+        let sorter = PageListSort::Date(false);
+        assert_eq!(entry_old.compare(&entry_new, &sorter, false), Ordering::Less);
+        assert_eq!(entry_new.compare(&entry_old, &sorter, false), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_by_incoming_links() {
+        let mut entry_few = make_entry("StubArticle", 0);
+        entry_few.set_incoming_links(Some(3));
+        let mut entry_many = make_entry("FeaturedArticle", 0);
+        entry_many.set_incoming_links(Some(300));
+        let sorter = PageListSort::IncomingLinks(false);
+        assert_eq!(entry_few.compare(&entry_many, &sorter, false), Ordering::Less);
+    }
+
+    #[test]
+    fn test_compare_by_sitelinks() {
+        let mut entry_local = make_entry("LocalArticle", 0);
+        entry_local.set_sitelink_count(Some(2));
+        let mut entry_global = make_entry("GlobalArticle", 0);
+        entry_global.set_sitelink_count(Some(200));
+        let sorter = PageListSort::Sitelinks(false);
+        assert_eq!(entry_local.compare(&entry_global, &sorter, false), Ordering::Less);
+    }
+
+    #[test]
+    fn test_compare_by_redlinks() {
+        let mut entry_solid = make_entry("SolidArticle", 0);
+        entry_solid.set_redlink_count(Some(1));
+        let mut entry_linked = make_entry("LinkedArticle", 0);
+        entry_linked.set_redlink_count(Some(20));
+        let sorter = PageListSort::RedlinksCount(false);
+        assert_eq!(entry_solid.compare(&entry_linked, &sorter, false), Ordering::Less);
+    }
+
+    #[test]
+    fn test_compare_by_defaultsort_explicit() {
+        let mut entry_a = make_entry("Aardvark_(band)", 0);
+        entry_a.set_defaultsort(Some("Aardvark".to_string()));
+        let mut entry_z = make_entry("Zebra_article", 0);
+        entry_z.set_defaultsort(Some("Zebra".to_string()));
+        let sorter = PageListSort::DefaultSort(false);
+        assert_eq!(entry_a.compare(&entry_z, &sorter, false), Ordering::Less);
+    }
+
+    #[test]
+    fn test_compare_by_defaultsort_falls_back_to_title() {
+        // No defaultsort → falls back to title for non-wikidata
+        let entry_a = make_entry("Apple", 0);
+        let entry_b = make_entry("Banana", 0);
+        let sorter = PageListSort::DefaultSort(false);
+        assert_eq!(entry_a.compare(&entry_b, &sorter, false), Ordering::Less);
+    }
+
+    #[test]
+    fn test_compare_none_sorts_last() {
+        // Entry with no value sorts after one that has a value
+        let mut entry_with_size = make_entry("ArticleA", 0);
+        entry_with_size.set_page_bytes(Some(100));
+        let entry_no_size = make_entry("ArticleB", 0);
+        let sorter = PageListSort::Size(false);
+        assert_eq!(entry_with_size.compare(&entry_no_size, &sorter, false), Ordering::Less);
+        assert_eq!(entry_no_size.compare(&entry_with_size, &sorter, false), Ordering::Greater);
+        assert_eq!(entry_no_size.compare(&entry_no_size, &sorter, false), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_compare_by_file_size() {
+        let mut fi_small = FileInfo::new();
+        fi_small.img_size = Some(1024);
+        let mut entry_small = make_entry("File:Thumbnail.jpg", 6);
+        entry_small.set_file_info(Some(fi_small));
+
+        let mut fi_large = FileInfo::new();
+        fi_large.img_size = Some(1_000_000);
+        let mut entry_large = make_entry("File:Wallpaper.jpg", 6);
+        entry_large.set_file_info(Some(fi_large));
+
+        let sorter = PageListSort::FileSize(false);
+        assert_eq!(entry_small.compare(&entry_large, &sorter, false), Ordering::Less);
+        assert_eq!(entry_large.compare(&entry_small, &sorter, false), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_by_upload_date() {
+        let mut fi_old = FileInfo::new();
+        fi_old.img_timestamp = Some("20190101000000".to_string());
+        let mut entry_old = make_entry("File:OldPhoto.jpg", 6);
+        entry_old.set_file_info(Some(fi_old));
+
+        let mut fi_new = FileInfo::new();
+        fi_new.img_timestamp = Some("20230101000000".to_string());
+        let mut entry_new = make_entry("File:NewPhoto.jpg", 6);
+        entry_new.set_file_info(Some(fi_new));
+
+        let sorter = PageListSort::UploadDate(false);
+        assert_eq!(entry_old.compare(&entry_new, &sorter, false), Ordering::Less);
+        assert_eq!(entry_new.compare(&entry_old, &sorter, false), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_compare_file_size_missing_file_info() {
+        // Entry with file info sorts before entry without
+        let mut fi = FileInfo::new();
+        fi.img_size = Some(500);
+        let mut entry_with = make_entry("File:Has.jpg", 6);
+        entry_with.set_file_info(Some(fi));
+        let entry_without = make_entry("File:NoInfo.jpg", 6);
+        let sorter = PageListSort::FileSize(false);
+        assert_eq!(entry_with.compare(&entry_without, &sorter, false), Ordering::Less);
+        assert_eq!(entry_without.compare(&entry_with, &sorter, false), Ordering::Greater);
+        assert_eq!(entry_without.compare(&entry_without, &sorter, false), Ordering::Equal);
+    }
 }

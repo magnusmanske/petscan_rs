@@ -75,3 +75,80 @@ impl SourceWikidata {
         Ok(ret)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_state::AppState;
+    use crate::form_parameters::FormParameters;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_platform(pairs: Vec<(&str, &str)>) -> Platform {
+        let mut params = HashMap::new();
+        for (k, v) in pairs {
+            params.insert(k.to_string(), v.to_string());
+        }
+        let fp = FormParameters::new_from_pairs(params);
+        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
+    }
+
+    // ── can_run / name ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_name() {
+        assert_eq!(SourceWikidata.name(), "wikidata");
+    }
+
+    #[test]
+    fn test_can_run_requires_both_params() {
+        let p = make_platform(vec![
+            ("wpiu_no_statements", "1"),
+            ("wikidata_source_sites", "enwiki"),
+        ]);
+        assert!(SourceWikidata.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_missing_no_statements() {
+        let p = make_platform(vec![("wikidata_source_sites", "enwiki")]);
+        assert!(!SourceWikidata.can_run(&p));
+    }
+
+    #[test]
+    fn test_can_run_missing_source_sites() {
+        let p = make_platform(vec![("wpiu_no_statements", "1")]);
+        assert!(!SourceWikidata.can_run(&p));
+    }
+
+    // ── generate_sql_query ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_generate_sql_query_basic() {
+        let p = make_platform(vec![
+            ("wikidata_source_sites", "enwiki,frwiki"),
+        ]);
+        let sql = SourceWikidata::generate_sql_query(&p).unwrap();
+        assert!(sql.contains("wb_items_per_site"), "Expected wb_items_per_site in: {sql}");
+        assert!(sql.contains("ips_site_id IN ("), "Expected ips_site_id IN in: {sql}");
+        // no_statements is false, so no page_props join
+        assert!(!sql.contains("page_props"), "Unexpected page_props in: {sql}");
+    }
+
+    #[test]
+    fn test_generate_sql_query_no_statements_adds_joins() {
+        let p = make_platform(vec![
+            ("wpiu_no_statements", "1"),
+            ("wikidata_source_sites", "enwiki"),
+        ]);
+        let sql = SourceWikidata::generate_sql_query(&p).unwrap();
+        assert!(sql.contains("page_props"), "Expected page_props in: {sql}");
+        assert!(sql.contains("wb-claims"), "Expected wb-claims in: {sql}");
+    }
+
+    #[test]
+    fn test_generate_sql_query_missing_sites_returns_error() {
+        let p = make_platform(vec![("wpiu_no_statements", "1")]);
+        assert!(SourceWikidata::generate_sql_query(&p).is_err());
+    }
+}
