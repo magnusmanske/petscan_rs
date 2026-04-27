@@ -1435,4 +1435,5 @@ mod tests {
         let result = simulate_category_query(params).await.unwrap();
         assert!(!result.is_empty());
     }
+
 }

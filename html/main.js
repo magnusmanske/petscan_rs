@@ -690,6 +690,12 @@ function initializeInterface() {
 		$('input[name="show_redirects"][value="no"]').prop("checked", true);
 	});
 
+	$("#quick_wikipedia").click(function () {
+		$("input[name='language']").val("en");
+		$("input[name='project']").val("wikipedia");
+		loadNamespaces();
+		return false;
+	});
 	$("#quick_commons").click(function () {
 		$("input[name='language']").val("commons");
 		$("input[name='project']").val("wikimedia");
