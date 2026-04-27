@@ -88,6 +88,7 @@ pub struct SourceDatabaseParameters {
     use_new_category_mode: bool,
     category_namespace_is_case_insensitive: bool,
     template_namespace_is_case_insensitive: bool,
+    created_by: Vec<String>,
 }
 
 impl SourceDatabaseParameters {
@@ -191,6 +192,7 @@ impl SourceDatabaseParameters {
             use_new_category_mode: true,
             category_namespace_is_case_insensitive: !ns14_case_sensitive,
             template_namespace_is_case_insensitive: !ns10_case_sensitive,
+            created_by: vec![],
         };
         ret.templates_yes = Self::vec_to_ucfirst(
             platform.get_param_as_vec("templates_yes", "\n"),
@@ -204,6 +206,7 @@ impl SourceDatabaseParameters {
             platform.get_param_as_vec("templates_no", "\n"),
             ret.template_namespace_is_case_insensitive,
         );
+        ret.created_by = platform.get_param_as_vec("created_by", "\n");
         ret
     }
 
@@ -250,6 +253,7 @@ impl DataSource for SourceDatabase {
             || platform.has_param("outlinks_any")
             || platform.has_param("links_to_all")
             || platform.has_param("links_to_any")
+            || platform.has_param("created_by")
     }
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList> {
@@ -714,6 +718,8 @@ impl SourceDatabase {
             "pagelist"
         } else if self.params.page_wikidata_item == "without" {
             "no_wikidata"
+        } else if !self.params.created_by.is_empty() {
+            "created_by"
         } else {
             return Err(anyhow!("SourceDatabase: Missing primary"));
         };
@@ -870,7 +876,7 @@ impl SourceDatabase {
                 }
                 sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')";
             }
-            "templates" | "links_from" => {
+            "templates" | "links_from" | "created_by" => {
                 sql.0 = PAGE_SELECT_PREFIX.to_string();
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
@@ -957,6 +963,7 @@ impl SourceDatabase {
         self.get_pages_for_primary_lead_image(&mut sql);
         self.get_pages_for_primary_ores(&mut sql);
         self.get_pages_for_primary_last_edit(&mut sql);
+        self.get_pages_for_primary_created_by(&mut sql);
         self.get_pages_for_primary_page_types(&mut sql);
         self.get_pages_for_primary_page_size(&mut sql);
         self.get_pages_for_primary_wikidata_item_speedup(primary, &mut sql);
@@ -1122,6 +1129,16 @@ impl SourceDatabase {
             }
             _ => {}
         }
+    }
+
+    fn get_pages_for_primary_created_by(&self, sql: &mut SQLtuple) {
+        if self.params.created_by.is_empty() {
+            return;
+        }
+        let tmp = super::prep_quote(&self.params.created_by);
+        sql.0 += " AND p.page_id IN (SELECT r.rev_page FROM revision r INNER JOIN actor a ON r.rev_actor=a.actor_id WHERE r.rev_parent_id=0 AND a.actor_name IN (";
+        super::append_sql(sql, tmp);
+        sql.0 += "))";
     }
 
     fn get_pages_for_primary_ores(&self, sql: &mut (String, Vec<MyValue>)) {
