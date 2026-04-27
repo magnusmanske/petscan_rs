@@ -734,9 +734,11 @@ impl Platform {
 
     async fn process_files(&self, result: &PageList) -> Result<()> {
         let giu = self.has_param("giu");
+        let media_type_filter = self.file_media_types_filter();
         let file_data = self.has_param("ext_image_data")
             || self.get_param("sortby") == Some("filesize".to_string())
-            || self.get_param("sortby") == Some("uploaddate".to_string());
+            || self.get_param("sortby") == Some("uploaddate".to_string())
+            || media_type_filter.is_some();
         let file_usage = giu || self.has_param("file_usage_data");
         let file_usage_data_ns0 = self.has_param("file_usage_data_ns0");
 
@@ -745,13 +747,49 @@ impl Platform {
         }
 
         if file_data {
-            self.process_file_data(result).await?;
+            self.process_file_data(result, media_type_filter.as_deref())
+                .await?;
+        }
+        if let Some(allowed) = media_type_filter {
+            let allowed: HashSet<String> = allowed.into_iter().collect();
+            let entries = result.drain_into_vec();
+            let filtered: HashSet<PageListEntry> = entries
+                .into_iter()
+                .filter(|e| match e.get_file_info() {
+                    Some(fi) => match &fi.img_media_type {
+                        Some(mt) => allowed.contains(mt),
+                        None => false,
+                    },
+                    None => false,
+                })
+                .collect();
+            result.set_entries(filtered);
         }
         Ok(())
     }
 
-    async fn process_file_data(&self, result: &PageList) -> Result<()> {
-        let sql = if self.state.using_file_table() {
+    /// Parses the `file_media_types` parameter into a normalized list of
+    /// allowed media-type values (e.g. `["VIDEO", "AUDIO"]`).
+    /// Values are uppercased; only ASCII alphanumerics are accepted as a
+    /// guard against SQL injection — values are still passed as bound
+    /// parameters, but this keeps the placeholder count consistent.
+    fn file_media_types_filter(&self) -> Option<Vec<String>> {
+        let raw = self.get_param("file_media_types")?;
+        let allowed: Vec<String> = raw
+            .split('|')
+            .map(|s| s.trim().to_uppercase())
+            .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
+            .collect();
+        if allowed.is_empty() { None } else { Some(allowed) }
+    }
+
+    async fn process_file_data(
+        &self,
+        result: &PageList,
+        media_type_filter: Option<&[String]>,
+    ) -> Result<()> {
+        let using_file_table = self.state.using_file_table();
+        let sql = if using_file_table {
             "SELECT file.file_name AS img_name,6 AS namespace_id,
             fr_size AS img_size,
             fr_width AS img_width,
@@ -771,6 +809,11 @@ impl Platform {
         } else {
             "SELECT img_name,6 AS namespace_id,img_size,img_width,img_height,img_media_type,img_major_mime,img_minor_mime,img_user_text,img_timestamp,img_sha1 FROM image_compat WHERE img_name IN ("
         };
+        let media_type_col = if using_file_table {
+            "ft_media_type"
+        } else {
+            "img_media_type"
+        };
         let batches: Vec<SQLtuple> = result
             .to_sql_batches(PAGE_BATCH_SIZE)
             .par_iter_mut()
@@ -778,6 +821,16 @@ impl Platform {
                 sql_batch.0 = sql.to_string();
                 sql_batch.0 += &crate::datasource::get_placeholders(sql_batch.1.len());
                 sql_batch.0 += ")";
+                if let Some(types) = media_type_filter
+                    && !types.is_empty()
+                {
+                    sql_batch.0 += &format!(" AND {media_type_col} IN (");
+                    sql_batch.0 += &crate::datasource::get_placeholders(types.len());
+                    sql_batch.0 += ")";
+                    for t in types {
+                        sql_batch.1.push(MyValue::Bytes(t.as_bytes().to_vec()));
+                    }
+                }
                 sql_batch.to_owned()
             })
             .collect::<Vec<SQLtuple>>();
@@ -1653,5 +1706,40 @@ mod tests {
         let mut batch: SQLtuple = ("page_title=?".to_string(), vec![]);
         Platform::build_redlinks_sql(&mut batch, false, true);
         assert!(batch.0.contains("pl_from_namespace=10"));
+    }
+
+    // ─── file_media_types_filter ──────────────────────────────────────────────
+
+    #[test]
+    fn test_file_media_types_filter_unset_is_none() {
+        let p = make_platform(vec![]);
+        assert!(p.file_media_types_filter().is_none());
+    }
+
+    #[test]
+    fn test_file_media_types_filter_blank_is_none() {
+        let p = make_platform(vec![("file_media_types", "   ")]);
+        assert!(p.file_media_types_filter().is_none());
+    }
+
+    #[test]
+    fn test_file_media_types_filter_pipe_separated() {
+        let p = make_platform(vec![("file_media_types", "video|audio")]);
+        let got = p.file_media_types_filter().unwrap();
+        assert_eq!(got, vec!["VIDEO".to_string(), "AUDIO".to_string()]);
+    }
+
+    #[test]
+    fn test_file_media_types_filter_drops_invalid_chars() {
+        // Non-alphanumeric values are silently dropped.
+        let p = make_platform(vec![("file_media_types", "VIDEO|foo bar|;DROP|3D")]);
+        let got = p.file_media_types_filter().unwrap();
+        assert_eq!(got, vec!["VIDEO".to_string(), "3D".to_string()]);
+    }
+
+    #[test]
+    fn test_file_media_types_filter_all_invalid_is_none() {
+        let p = make_platform(vec![("file_media_types", "|; |--")]);
+        assert!(p.file_media_types_filter().is_none());
     }
 }

@@ -558,6 +558,21 @@ function initializeInterface() {
 	params.sortby = params.sortby.replace(/ /g, "_");
 	$("#ores_model_select").val(params.ores_type);
 
+	// Pre-select file_media_types options from URL param (pipe-separated)
+	if (typeof params.file_media_types != "undefined" && params.file_media_types !== "") {
+		var selectedTypes = params.file_media_types.split("|");
+		$("#file_media_types_select").val(selectedTypes);
+		$("#file_media_types_input").val(params.file_media_types);
+	}
+
+	// Combine multi-select values into a single pipe-separated hidden input on submit
+	$("#main_form").on("submit", function () {
+		var $sel = $("#file_media_types_select");
+		var vals = $sel.val() || [];
+		$("#file_media_types_input").val(vals.join("|"));
+		$sel.prop("disabled", true);
+	});
+
 	$.each(["yes", "any", "no"], function (k, v) {
 		let base = "cb_labels_" + v + "_";
 		if (

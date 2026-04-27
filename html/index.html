@@ -773,6 +773,30 @@ function receiveEnglishNamespaceData ( j ) {
 
 
 <div class="form-group row">
+<label class="col-sm-2 form-control-label" tt="file_media_types">Media type</label>
+<div class="col-sm-4">
+	<select id='file_media_types_select' multiple size='6' class='form-control'>
+		<option value='BITMAP'>Image (bitmap)</option>
+		<option value='DRAWING'>Drawing</option>
+		<option value='AUDIO'>Audio</option>
+		<option value='VIDEO'>Video</option>
+		<option value='MULTIMEDIA'>Multimedia</option>
+		<option value='3D'>3D</option>
+		<option value='OFFICE'>Office</option>
+		<option value='TEXT'>Text</option>
+		<option value='EXECUTABLE'>Executable</option>
+		<option value='ARCHIVE'>Archive</option>
+		<option value='UNKNOWN'>Unknown</option>
+	</select>
+	<input type='hidden' name='file_media_types' id='file_media_types_input' />
+</div>
+<div class="col-sm-6">
+	<span tt='file_media_types_note'>Restrict file results to selected media types (Commons schema). Leave empty to keep all.</span>
+</div>
+</div>
+
+
+<div class="form-group row">
 <label class="col-sm-2 form-control-label" tt="add_metadata"></label>
 <div class="col-sm-10">
 <label style='margin-right:20px;'><input type='checkbox' name='add_image' /> <span tt='add_image'></span></label>

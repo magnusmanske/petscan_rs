@@ -328,6 +328,16 @@ paths:
           in: query
           schema:
             type: string
+        - name: file_media_types
+          in: query
+          description: >-
+            Pipe-separated list of `ft_media_type` values to keep
+            (e.g. `VIDEO|AUDIO`). When set, only file entries whose
+            Commons media type matches are returned. Allowed values
+            include BITMAP, DRAWING, AUDIO, VIDEO, MULTIMEDIA, 3D,
+            OFFICE, TEXT, EXECUTABLE, ARCHIVE, UNKNOWN.
+          schema:
+            type: string
         - name: min_redlink_count
           in: query
           schema:
