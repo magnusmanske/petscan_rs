@@ -9,7 +9,7 @@ git pull
 cargo build --release
 sudo systemctl stop petscan
 cp target/release/main ./petscan_rs
-sudo systemctl start petscan
+sudo systemctl restart petscan
 
 # Get restart code from config file
 #code=`jq -r '.["restart-code"]' config.json`
@@ -22,4 +22,4 @@ sudo systemctl start petscan
 #sleep 1
 #screen -r pts-0.petscan4
 #/usr/sbin/service ./target/release/petscan_rs restart
-sudo killall petscan_rs
+#sudo killall petscan_rs
