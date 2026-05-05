@@ -722,10 +722,17 @@ function setupResultMultiSelect() {
 	var $table = $("#main_table");
 	if ($table.length === 0) return;
 
-	$table.find("thead tr").prepend("<th><input type='checkbox' id='row_select_all' /></th>");
-	$table.find("tbody tr").each(function () {
-		$(this).prepend("<td><input type='checkbox' class='row-select' /></td>");
-	});
+	var $qcb = $table.find("input.qcb");
+	if ($qcb.length) {
+		$qcb.addClass("row-select");
+		$table.find("thead tr th").first()
+			.html("<input type='checkbox' id='row_select_all' />");
+	} else {
+		$table.find("thead tr")
+			.prepend("<th><input type='checkbox' id='row_select_all' /></th>");
+		$table.find("tbody tr")
+			.prepend("<td><input type='checkbox' class='row-select' /></td>");
+	}
 
 	var $toolbar = $(
 		"<div class='row-select-toolbar' style='margin-bottom:8px'>" +
