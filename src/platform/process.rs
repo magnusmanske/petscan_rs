@@ -444,7 +444,6 @@ impl Platform {
                 el.insert(String::from_utf8_lossy(&wbx_text).into_owned());
             }
         }
-        conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
         Ok(())
     }
 
@@ -504,7 +503,6 @@ impl Platform {
             self.process_redlinks_batch(&mut conn, sql, &mut redlink_counter)
                 .await?;
         }
-        conn.disconnect().await.map_err(|e| anyhow!(e))?;
 
         let min_redlinks = self
             .get_param_default("min_redlink_count", "1")
@@ -593,7 +591,6 @@ impl Platform {
                 result.add_entry(PageListEntry::new(Title::new(&page_title, page_namespace)));
             }
         }
-        conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
         Ok(())
     }
 
@@ -966,8 +963,7 @@ impl Platform {
                 .collect_and_drop()
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
-            conn.disconnect().await.map_err(|e| anyhow!("{e}"))?;
-            rows.lock().await.append(&mut subresult);
+                rows.lock().await.append(&mut subresult);
         }
 
         let locked = rows.lock().await;

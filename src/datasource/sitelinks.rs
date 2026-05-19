@@ -153,7 +153,7 @@ impl SourceSitelinks {
             .map_and_drop(from_row::<(Vec<u8>, u32)>)
             .await
             .map_err(|e| anyhow!(e))?;
-        conn.disconnect().await.map_err(|e| anyhow!(e))?;
+        // `conn` is pooled; drop returns it.
         Ok(rows)
     }
 }

@@ -64,7 +64,8 @@ impl SourceWikidata {
             .map_and_drop(from_row::<usize>)
             .await
             .map_err(|e| anyhow!(e))?;
-        conn.disconnect().await.map_err(|e| anyhow!(e))?;
+        // `conn` is pooled; drop returns it.
+        drop(conn);
         let ret = PageList::new_from_wiki("wikidatawiki");
         for ips_item_id in rows {
             let term_full_entity_id = format!("Q{ips_item_id}");

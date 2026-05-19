@@ -36,7 +36,7 @@ fn write_lock<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     lock.write().unwrap_or_else(|p| p.into_inner())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DatabaseCluster {
     Default,
     X3,
@@ -335,9 +335,10 @@ impl PageList {
             .await?
             .collect_and_drop()
             .await?;
-        if let Err(e) = conn.disconnect().await {
-            tracing::warn!("Failed to disconnect DB connection: {e}");
-        }
+        // `conn` is leased from a `mysql_async::Pool`; dropping returns it
+        // to the pool. Explicit `disconnect()` would terminate the
+        // connection instead of recycling it.
+        drop(conn);
 
         Ok(rows)
     }

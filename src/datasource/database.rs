@@ -658,7 +658,6 @@ impl SourceDatabase {
 
         let mut conn = state.get_wiki_db_connection(&wiki).await?;
         self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn).await?;
-        conn.disconnect().await.map_err(|e| anyhow!(e))?;
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
@@ -918,7 +917,6 @@ impl SourceDatabase {
             state.get_api_for_wiki(params.wiki.clone()).await?,
         )
         .await?;
-        conn.disconnect().await.map_err(|e| anyhow!(e))?;
         Ok(ret)
     }
 
@@ -950,7 +948,6 @@ impl SourceDatabase {
                 api,
             )
             .await;
-        conn.disconnect().await.map_err(|e| anyhow!(e))?;
         ret
     }
 

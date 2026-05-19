@@ -7,6 +7,8 @@ use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{instrument, trace};
 
 /// The termstore host for the X3 / Wikidata term-store cluster.
@@ -33,6 +35,15 @@ const DB_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// (True per-query read timeouts need `tokio::time::timeout` at each call
 /// site and belong with the request-level wall-clock budget — see P1 #7.)
 const TCP_KEEPALIVE_MS: u32 = 30_000;
+
+/// Maximum live connections held in any one per-wiki pool. Wikimedia
+/// replicas enforce ~10 connections per user; 5 leaves headroom for
+/// concurrent requests that hit the same wiki.
+const WIKI_POOL_MAX: usize = 5;
+const TOOL_DB_POOL_MAX: usize = 5;
+/// Idle pool connections older than this are closed and recreated. Avoids
+/// retaining sockets the upstream has silently dropped.
+const POOL_INACTIVE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Deterministic exponential backoff (no jitter) capped at `MAX_DELAY_MS`.
 /// Pulled out as a free function so it is unit-testable; jitter is applied
@@ -69,6 +80,11 @@ pub struct DatabaseManager {
     /// Port overrides for local SSH-tunnel testing.  Only populated when the
     /// config contains a `port_mapping` object.
     port_mapping: HashMap<String, u16>,
+    /// Per-`(wiki, cluster)` connection pools, lazily created. Pools live
+    /// for the lifetime of the manager and reuse TCP/TLS/auth handshakes.
+    wiki_pools: Arc<Mutex<HashMap<(String, DatabaseCluster), my::Pool>>>,
+    /// Shared pool for the tool DB (PSID + query log).
+    tool_db_pool: Arc<Mutex<Option<my::Pool>>>,
 }
 
 impl DatabaseManager {
@@ -91,6 +107,8 @@ impl DatabaseManager {
         Self {
             config: config.to_owned(),
             port_mapping,
+            wiki_pools: Arc::new(Mutex::new(HashMap::new())),
+            tool_db_pool: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -106,6 +124,8 @@ impl DatabaseManager {
         Self {
             config,
             port_mapping: HashMap::new(),
+            wiki_pools: Arc::new(Mutex::new(HashMap::new())),
+            tool_db_pool: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -227,6 +247,9 @@ impl DatabaseManager {
             host
         };
 
+        let pool_opts = my::PoolOpts::default()
+            .with_constraints(my::PoolConstraints::new(0, WIKI_POOL_MAX).expect("valid"))
+            .with_inactive_connection_ttl(POOL_INACTIVE_TTL);
         Ok(my::OptsBuilder::default()
             .ip_or_hostname(effective_host)
             .db_name(Some(schema))
@@ -234,6 +257,7 @@ impl DatabaseManager {
             .pass(Some(creds.password))
             .tcp_port(port)
             .tcp_keepalive(Some(TCP_KEEPALIVE_MS))
+            .pool_opts(pool_opts)
             .into())
     }
 
@@ -245,6 +269,21 @@ impl DatabaseManager {
         Ok(())
     }
 
+    /// Get or lazily create the connection pool for `(wiki, cluster)`.
+    /// Pools are kept for the lifetime of the manager so the TCP/TLS/auth
+    /// handshake is only paid once per replica per process.
+    async fn get_wiki_pool(&self, wiki: &str, cluster: DatabaseCluster) -> Result<my::Pool> {
+        let key = (wiki.to_string(), cluster);
+        let mut pools = self.wiki_pools.lock().await;
+        if let Some(p) = pools.get(&key) {
+            return Ok(p.clone());
+        }
+        let opts = self.get_mysql_opts_for_wiki(wiki, cluster)?;
+        let pool = my::Pool::new(opts);
+        pools.insert(key, pool.clone());
+        Ok(pool)
+    }
+
     #[instrument(skip(self), err)]
     pub async fn get_wiki_db_connection(&self, wiki: &str) -> Result<my::Conn> {
         let (wiki, cluster) = match wiki {
@@ -252,18 +291,17 @@ impl DatabaseManager {
             other => (other, DatabaseCluster::Default),
         };
 
-        let opts = self.get_mysql_opts_for_wiki(wiki, cluster)?;
-
-        trace!(user = opts.user());
+        let pool = self.get_wiki_pool(wiki, cluster).await?;
+        trace!(wiki, ?cluster, "leasing connection from pool");
         let mut attempt: u32 = 0;
         let mut conn;
         loop {
-            let connect = tokio::time::timeout(DB_CONNECT_TIMEOUT, my::Conn::new(opts.to_owned()));
+            let connect = tokio::time::timeout(DB_CONNECT_TIMEOUT, pool.get_conn());
             let result: Result<my::Conn, String> = match connect.await {
                 Ok(Ok(c)) => Ok(c),
                 Ok(Err(e)) => Err(format!("{e:?}")),
                 Err(_) => Err(format!(
-                    "Conn::new timed out after {DB_CONNECT_TIMEOUT:?} for wiki={wiki}"
+                    "Pool::get_conn timed out after {DB_CONNECT_TIMEOUT:?} for wiki={wiki}"
                 )),
             };
             conn = match result {
@@ -344,21 +382,37 @@ impl DatabaseManager {
             (host, user, password, port)
         };
 
-        let opts = my::OptsBuilder::default()
-            .ip_or_hostname(host.clone())
-            .db_name(Some(schema))
-            .user(Some(user))
-            .pass(Some(password))
-            .tcp_port(port)
-            .tcp_keepalive(Some(TCP_KEEPALIVE_MS));
+        let pool = {
+            let mut slot = self.tool_db_pool.lock().await;
+            if let Some(p) = slot.as_ref() {
+                p.clone()
+            } else {
+                let pool_opts = my::PoolOpts::default()
+                    .with_constraints(
+                        my::PoolConstraints::new(0, TOOL_DB_POOL_MAX).expect("valid"),
+                    )
+                    .with_inactive_connection_ttl(POOL_INACTIVE_TTL);
+                let opts = my::OptsBuilder::default()
+                    .ip_or_hostname(host.clone())
+                    .db_name(Some(schema))
+                    .user(Some(user))
+                    .pass(Some(password))
+                    .tcp_port(port)
+                    .tcp_keepalive(Some(TCP_KEEPALIVE_MS))
+                    .pool_opts(pool_opts);
+                let pool = my::Pool::new(opts);
+                *slot = Some(pool.clone());
+                pool
+            }
+        };
 
-        match tokio::time::timeout(DB_CONNECT_TIMEOUT, my::Conn::new(opts)).await {
+        match tokio::time::timeout(DB_CONNECT_TIMEOUT, pool.get_conn()).await {
             Ok(Ok(conn)) => Ok(conn),
             Ok(Err(e)) => Err(anyhow!(
-                "DatabaseManager::get_tool_db_connection cannot connect to {host}:{port}: '{e}'"
+                "DatabaseManager::get_tool_db_connection cannot lease pooled connection to {host}:{port}: '{e}'"
             )),
             Err(_) => Err(anyhow!(
-                "DatabaseManager::get_tool_db_connection timed out connecting to {host}:{port} after {:?}",
+                "DatabaseManager::get_tool_db_connection timed out leasing pooled connection to {host}:{port} after {:?}",
                 DB_CONNECT_TIMEOUT
             )),
         }
