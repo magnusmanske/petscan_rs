@@ -1,9 +1,8 @@
 use crate::app_state::AppState;
 use crate::platform::Platform;
-use crate::render::AUTOLIST_WIKIDATA;
+use crate::render::{AUTOLIST_WIKIDATA, ApiNamespaceContext, NamespaceContext};
 use anyhow::Result;
 use std::sync::Arc;
-use wikimisc::mediawiki::api::Api;
 
 #[derive(Debug, Clone)]
 pub struct RenderParams {
@@ -24,7 +23,13 @@ pub struct RenderParams {
     use_autolist: bool,
     autolist_creator_mode: bool,
     autolist_wiki_server: String,
-    api: Api,
+    /// Namespace/title operations. Production holds an `ApiNamespaceContext`
+    /// wrapping a live `Api`; tests can inject a stub. Behind a trait
+    /// object (`Arc<dyn NamespaceContext>`) so `RenderParams` doesn't
+    /// pin the upstream `Api` type — without this, tests couldn't
+    /// construct a `RenderParams` because `Api` only exposes async
+    /// constructors that hit the network.
+    ns: Arc<dyn NamespaceContext>,
     state: Arc<AppState>,
     row_number: usize,
     json_output_compatability: String,
@@ -37,6 +42,7 @@ pub struct RenderParams {
 impl RenderParams {
     pub async fn new(platform: &Platform, wiki: &str) -> Result<Self> {
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
+        let ns: Arc<dyn NamespaceContext> = ApiNamespaceContext::new(api);
         let mut ret = Self {
             wiki: wiki.to_string(),
             file_data: platform.has_param("ext_image_data"),
@@ -56,7 +62,7 @@ impl RenderParams {
             use_autolist: false,          // Possibly set downstream
             autolist_creator_mode: false, // Possibly set downstream
             autolist_wiki_server: AUTOLIST_WIKIDATA.to_string(), // Possibly set downstream
-            api,
+            ns,
             state: platform.state(),
             row_number: 0,
             json_output_compatability: platform
@@ -68,6 +74,41 @@ impl RenderParams {
         };
         ret.show_wikidata_item = ret.wdi == "any" || ret.wdi == "with";
         Ok(ret)
+    }
+
+    /// Test-only constructor that injects a custom `NamespaceContext`.
+    /// All boolean knobs default to `false` (matching a fresh
+    /// no-features render); mutate via the existing `*_mut` accessors
+    /// for tests that need them flipped.
+    #[cfg(test)]
+    pub fn for_tests(wiki: &str, ns: Arc<dyn NamespaceContext>) -> Self {
+        Self {
+            wiki: wiki.to_string(),
+            file_data: false,
+            file_usage: false,
+            thumbnails_in_wiki_output: false,
+            wdi: String::new(),
+            show_wikidata_item: false,
+            is_wikidata: wiki == "wikidatawiki",
+            add_coordinates: false,
+            add_image: false,
+            add_defaultsort: false,
+            add_disambiguation: false,
+            add_incoming_links: false,
+            add_sitelinks: false,
+            do_output_redlinks: false,
+            use_autolist: false,
+            autolist_creator_mode: false,
+            autolist_wiki_server: AUTOLIST_WIKIDATA.to_string(),
+            ns,
+            state: Arc::new(AppState::default()),
+            row_number: 0,
+            json_output_compatability: "catscan".to_string(),
+            json_callback: String::new(),
+            json_sparse: false,
+            json_pretty: false,
+            giu: false,
+        }
     }
 
     pub const fn show_wikidata_item(&self) -> bool {
@@ -90,8 +131,8 @@ impl RenderParams {
         self.thumbnails_in_wiki_output
     }
 
-    pub const fn api(&self) -> &Api {
-        &self.api
+    pub fn ns(&self) -> &dyn NamespaceContext {
+        self.ns.as_ref()
     }
 
     pub const fn is_wikidata(&self) -> bool {

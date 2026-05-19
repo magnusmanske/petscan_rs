@@ -121,7 +121,7 @@ impl RenderJSON {
         let entry_data: Vec<Value> = if params.json_sparse() {
             entries
                 .iter()
-                .filter_map(|entry| Some(json!(entry.title().full_with_underscores(params.api())?)))
+                .filter_map(|entry| Some(json!(params.ns().full_with_underscores(entry.title())?)))
                 .collect()
         } else {
             entries.iter().map(|entry| {
@@ -132,7 +132,7 @@ impl RenderJSON {
                     "namespace":entry.title().namespace_id(),
                     "len":entry.page_bytes().unwrap_or(0),
                     "touched":entry.get_page_timestamp().unwrap_or_default(),
-                    "nstext":params.api().get_canonical_namespace_name(entry.title().namespace_id()).unwrap_or("")
+                    "nstext":params.ns().canonical_namespace_name(entry.title().namespace_id()).unwrap_or("")
                 });
                 if let Some(q) = entry.get_wikidata_item() {
                     o["q"] = json!(q);
@@ -176,19 +176,15 @@ impl RenderJSON {
         }
 
         // Namespaces
-        if let Some(namespaces) = params.api().get_site_info()["query"]["namespaces"].as_object() {
-            for (k, v) in namespaces {
-                if let Some(ns_local_name) = v["*"].as_str() {
-                    ret["namespaces"][k] = json!(ns_local_name);
-                }
-            }
-        }
+        params.ns().for_each_local_namespace(&mut |k, name| {
+            ret["namespaces"][k] = json!(name);
+        });
 
         // Entries
         if params.json_sparse() {
             ret["pages"] = entries
                 .iter()
-                .filter_map(|entry| entry.title().full_with_underscores(params.api()))
+                .filter_map(|entry| params.ns().full_with_underscores(entry.title()))
                 .collect();
         } else {
             ret["pages"] = entries

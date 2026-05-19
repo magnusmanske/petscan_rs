@@ -14,9 +14,89 @@ use crate::platform::{MyResponse, Platform};
 use crate::render::params::RenderParams;
 use anyhow::Result;
 use async_trait::async_trait;
+use std::sync::Arc;
+use wikimisc::mediawiki::api::{Api, NamespaceID};
+use wikimisc::mediawiki::title::Title;
 
 pub static AUTOLIST_WIKIDATA: &str = "www.wikidata.org";
 pub static AUTOLIST_COMMONS: &str = "commons.wikimedia.org";
+
+/// Namespace-and-title operations that the renderers need from a
+/// MediaWiki `Api`. Extracting these behind a trait lets `RenderParams`
+/// hold an `Arc<dyn NamespaceContext>` instead of an `Api` directly,
+/// which unblocks unit tests for renderer code: production injects an
+/// `ApiNamespaceContext` wrapping a real network-backed `Api`; tests
+/// inject a `StubNamespaceContext` driven by a `HashMap`.
+///
+/// Methods take `&self` and return borrowed `&str` where possible so the
+/// hot path (one call per rendered row) doesn't allocate.
+pub trait NamespaceContext: std::fmt::Debug + Send + Sync {
+    /// Local (UI-language) namespace name for `namespace_id`, e.g. "User"
+    /// or "Benutzer" depending on the wiki.
+    fn local_namespace_name(&self, namespace_id: NamespaceID) -> Option<&str>;
+
+    /// Canonical namespace name (the wiki-independent English form).
+    fn canonical_namespace_name(&self, namespace_id: NamespaceID) -> Option<&str>;
+
+    /// `"Talk:Foo"` etc., with spaces. Delegates to `Title::full_pretty`.
+    fn full_pretty(&self, title: &Title) -> Option<String>;
+
+    /// `"Talk:Foo_bar"`, with underscores. Delegates to
+    /// `Title::full_with_underscores`.
+    fn full_with_underscores(&self, title: &Title) -> Option<String>;
+
+    /// Iterate `(namespace_id_string, local_name)` pairs for the JSON
+    /// renderer's namespaces section. Functional callback to avoid
+    /// committing to an iterator type on the trait.
+    fn for_each_local_namespace(&self, f: &mut dyn FnMut(&str, &str));
+}
+
+/// Production [`NamespaceContext`] backed by a real `wikimisc` `Api`.
+#[derive(Debug, Clone)]
+pub struct ApiNamespaceContext {
+    api: Arc<Api>,
+}
+
+impl ApiNamespaceContext {
+    pub fn new(api: Api) -> Arc<Self> {
+        Arc::new(Self { api: Arc::new(api) })
+    }
+
+    pub fn api(&self) -> &Api {
+        &self.api
+    }
+}
+
+impl NamespaceContext for ApiNamespaceContext {
+    fn local_namespace_name(&self, namespace_id: NamespaceID) -> Option<&str> {
+        self.api.get_local_namespace_name(namespace_id)
+    }
+
+    fn canonical_namespace_name(&self, namespace_id: NamespaceID) -> Option<&str> {
+        self.api.get_canonical_namespace_name(namespace_id)
+    }
+
+    fn full_pretty(&self, title: &Title) -> Option<String> {
+        title.full_pretty(&self.api)
+    }
+
+    fn full_with_underscores(&self, title: &Title) -> Option<String> {
+        title.full_with_underscores(&self.api)
+    }
+
+    fn for_each_local_namespace(&self, f: &mut dyn FnMut(&str, &str)) {
+        if let Some(namespaces) =
+            self.api.get_site_info()["query"]["namespaces"].as_object()
+        {
+            for (k, v) in namespaces {
+                if let Some(local_name) = v["*"].as_str() {
+                    f(k, local_name);
+                }
+            }
+        }
+    }
+}
+
 
 /// Percent-encode `s` and then escape the four XML/HTML attribute specials
 /// (`<`, `>`, `"`, `'`). Used by the HTML and KML renderers when building

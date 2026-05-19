@@ -209,9 +209,9 @@ impl Render for RenderHTML {
         }
     }
     fn render_cell_namespace(&self, entry: &PageListEntry, params: &RenderParams) -> String {
-        let namespace_name = entry
-            .title()
-            .namespace_name(params.api())
+        let namespace_name = params
+            .ns()
+            .local_namespace_name(entry.title().namespace_id())
             .unwrap_or("UNKNOWN NAMESPACE")
             .to_string();
         if namespace_name.is_empty() {
@@ -351,11 +351,11 @@ impl RenderHTML {
             Ok(url) => url,
             Err(_e) => return String::new(),
         };
-        let full_title = match title.full_with_underscores(params.api()) {
+        let full_title = match params.ns().full_with_underscores(title) {
             Some(ft) => ft,
             None => format!("{title:?}"),
         };
-        let full_title_pretty = match title.full_pretty(params.api()) {
+        let full_title_pretty = match params.ns().full_pretty(title) {
             Some(ft) => ft,
             None => format!("{title:?}"),
         };

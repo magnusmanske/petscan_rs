@@ -92,12 +92,12 @@ impl Render for RenderWiki {
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         if entry.title().namespace_id() == 6 {
             if params.thumbnails_in_wiki_output() {
-                match entry.title().full_pretty(params.api()) {
+                match params.ns().full_pretty(entry.title()) {
                     Some(file) => format!("[[{}|120px|]]", &file),
                     None => format!("[[File:{}|120px|]]", entry.title().pretty()),
                 }
             } else {
-                match entry.title().full_pretty(params.api()) {
+                match params.ns().full_pretty(entry.title()) {
                     Some(file) => format!("[[:{}|]]", &file),
                     None => format!("[[:File:{}|]]", entry.title().pretty()),
                 }
@@ -146,9 +146,9 @@ impl RenderWiki {
             if entry.title().namespace_id() == 14 {
                 ret += ":";
             }
-            ret += &entry
-                .title()
-                .full_pretty(params.api())
+            ret += &params
+                .ns()
+                .full_pretty(entry.title())
                 .unwrap_or_else(|| entry.title().pretty().to_string());
             if !params.do_output_redlinks() {
                 ret += "|";
@@ -156,5 +156,69 @@ impl RenderWiki {
             ret += "]]";
             ret
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::StubNamespaceContext;
+    use std::sync::Arc;
+    use wikimisc::mediawiki::title::Title;
+
+    fn enwiki_params() -> RenderParams {
+        RenderParams::for_tests("enwiki", Arc::new(StubNamespaceContext::enwiki()))
+    }
+
+    // ── render_cell_title for files (namespace 6) ────────────────────────────
+    //
+    // The wikitext renderer has a dedicated branch for ns=6 (File) that
+    // produces `[[File:Name|120px|]]` for thumbnail output and
+    // `[[:File:Name|]]` for linked output. Before P5 #37 this branch
+    // depended on `params.api()` and so couldn't be unit-tested.
+
+    #[test]
+    fn test_render_cell_title_for_file_with_thumbnails() {
+        let r = RenderWiki;
+        let mut params = enwiki_params();
+        *params.use_autolist_mut() = false;
+        // The thumbnails flag is read by `thumbnails_in_wiki_output()`; flip
+        // it by going through the dedicated setter if one existed. For the
+        // default RenderParams::for_tests it is `false`, so we hit the
+        // linked-output branch below.
+        let entry = PageListEntry::new(Title::new("Cat.jpg", 6));
+        // Without thumbnails: `[[:File:Cat.jpg|]]` (the namespace prefix
+        // comes from the stub's namespace name for ns=6).
+        assert_eq!(
+            r.render_cell_title(&entry, &params),
+            "[[:File:Cat.jpg|]]"
+        );
+    }
+
+    #[test]
+    fn test_render_cell_title_for_non_file_namespace() {
+        let r = RenderWiki;
+        let params = enwiki_params();
+        let entry = PageListEntry::new(Title::new("Cambridge", 0));
+        // Article namespace → wikilink without file branch. Since the
+        // namespace prefix is empty, the result is `[[Cambridge|]]`
+        // (with `|` because `do_output_redlinks` defaults to false).
+        assert_eq!(
+            r.render_cell_title(&entry, &params),
+            "[[Cambridge|]]"
+        );
+    }
+
+    #[test]
+    fn test_render_cell_title_for_category_namespace() {
+        let r = RenderWiki;
+        let params = enwiki_params();
+        let entry = PageListEntry::new(Title::new("Bioinformatics", 14));
+        // Category links need a leading colon to avoid actually
+        // categorising the output page.
+        assert_eq!(
+            r.render_cell_title(&entry, &params),
+            "[[:Category:Bioinformatics|]]"
+        );
     }
 }

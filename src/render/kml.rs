@@ -55,7 +55,7 @@ impl Render for RenderKML {
                     .as_str();
                 }
 
-                let full_title = match title.full_with_underscores(params.api()) {
+                let full_title = match params.ns().full_with_underscores(title) {
                     Some(ft) => ft,
                     None => format!("{title:?}"),
                 };

@@ -94,9 +94,9 @@ impl Render for RenderTSV {
     }
 
     fn render_cell_namespace(&self, entry: &PageListEntry, params: &RenderParams) -> String {
-        entry
-            .title()
-            .namespace_name(params.api())
+        params
+            .ns()
+            .local_namespace_name(entry.title().namespace_id())
             .unwrap_or("UNKNOWN_NAMESPACE")
             .to_string()
     }
@@ -220,5 +220,68 @@ mod tests {
         assert!(keys.contains(&"img_user_text"));
         assert!(keys.contains(&"img_timestamp"));
         assert!(keys.contains(&"img_sha1"));
+    }
+
+    // ── render_cell_* via NamespaceContext stub ─────────────────────────────
+    //
+    // These tests went unwritten before because `RenderParams` owned an
+    // `Api` that only had async network constructors. P5 #37 swapped the
+    // field for an `Arc<dyn NamespaceContext>`, letting us drive the
+    // renderer with the in-memory `StubNamespaceContext`.
+
+    use crate::pagelist_entry::PageListEntry;
+    use crate::render::params::RenderParams;
+    use crate::test_support::StubNamespaceContext;
+    use std::sync::Arc;
+    use wikimisc::mediawiki::title::Title;
+
+    fn enwiki_params() -> RenderParams {
+        RenderParams::for_tests("enwiki", Arc::new(StubNamespaceContext::enwiki()))
+    }
+
+    #[test]
+    fn test_render_cell_namespace_for_article() {
+        let r = tsv();
+        let entry = PageListEntry::new(Title::new("Magnus_Manske", 0));
+        // Article namespace (0) has an empty local name on enwiki.
+        assert_eq!(r.render_cell_namespace(&entry, &enwiki_params()), "");
+    }
+
+    #[test]
+    fn test_render_cell_namespace_for_user_talk() {
+        let r = tsv();
+        let entry = PageListEntry::new(Title::new("Foo", 3));
+        assert_eq!(r.render_cell_namespace(&entry, &enwiki_params()), "User talk");
+    }
+
+    #[test]
+    fn test_render_cell_namespace_for_category() {
+        let r = tsv();
+        let entry = PageListEntry::new(Title::new("Some_cat", 14));
+        assert_eq!(r.render_cell_namespace(&entry, &enwiki_params()), "Category");
+    }
+
+    #[test]
+    fn test_render_cell_namespace_unknown_namespace_falls_back() {
+        // Namespace 999 isn't in the enwiki stub; render_cell_namespace
+        // pins the fallback string `UNKNOWN_NAMESPACE`.
+        let r = tsv();
+        let entry = PageListEntry::new(Title::new("Whatever", 999));
+        assert_eq!(
+            r.render_cell_namespace(&entry, &enwiki_params()),
+            "UNKNOWN_NAMESPACE"
+        );
+    }
+
+    #[test]
+    fn test_render_cell_title_uses_with_underscores() {
+        // Default TSV `render_cell_title` just emits the title's
+        // with_underscores form — verify that for a non-trivial title.
+        let r = tsv();
+        let entry = PageListEntry::new(Title::new("Foo bar baz", 0));
+        assert_eq!(
+            r.render_cell_title(&entry, &enwiki_params()),
+            "Foo_bar_baz"
+        );
     }
 }
