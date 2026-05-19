@@ -14,12 +14,22 @@ use serde_json::Value;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use url::form_urlencoded;
 
 const MAX_POST_SIZE: u64 = 1024 * 1024 * 128; // MB
 static NOTFOUND: &[u8] = b"Not Found";
 static BODY_TOO_BIG: &[u8] = b"POST body too large";
+
+/// Server-side wall-clock budget for a single request. Long enough to cover
+/// legitimately heavy PetScan queries (category traversals across the
+/// English Wikipedia replica routinely take several minutes); short enough
+/// that nothing pins a worker indefinitely if the replica or an upstream
+/// API stalls. Note: orphaned `started_queries` rows whose corresponding
+/// request was cancelled mid-flight are not cleaned up here; operators
+/// should sweep them by `started` timestamp on a schedule.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Default)]
 pub struct WebServer {
@@ -150,7 +160,31 @@ impl WebServer {
     }
 
     async fn process_from_query(&self, query: &str) -> Result<Response<Full<Bytes>>, Infallible> {
-        let ret = self.process_form(query).await;
+        // Apply the per-request wall-clock budget. On timeout, drop the
+        // in-flight `process_form` future (its RAII guards clean up state)
+        // and return 504 directly without going through `MyResponse`.
+        let ret = match tokio::time::timeout(REQUEST_TIMEOUT, self.process_form(query)).await {
+            Ok(response) => response,
+            Err(_elapsed) => {
+                tracing::warn!(
+                    timeout_secs = REQUEST_TIMEOUT.as_secs(),
+                    "Request exceeded the server-side wall-clock budget; cancelling"
+                );
+                let body = format!(
+                    "Request exceeded the server-side time budget of {} seconds.",
+                    REQUEST_TIMEOUT.as_secs()
+                );
+                return Ok(Response::builder()
+                    .status(StatusCode::GATEWAY_TIMEOUT)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Full::from(body))
+                    .unwrap_or_else(|e| {
+                        tracing::error!("Failed to build timeout response: {e}");
+                        Response::new(Full::from(b"Gateway Timeout".as_ref()))
+                    }));
+            }
+        };
         let response = Response::builder()
             .header(header::CONTENT_TYPE, ret.content_type.as_str())
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
