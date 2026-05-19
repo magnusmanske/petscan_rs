@@ -14,6 +14,24 @@ use tracing::{instrument, trace};
 /// keep it as a constant and supply credentials separately.
 const TERMSTORE_SERVER: &str = "termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud";
 
+/// Retry policy for `max_user_connections` rejections. Wikimedia replicas
+/// enforce a per-user limit (typically 10 concurrent connections); a brief
+/// backoff lets other in-flight requests release their connection.
+const MAX_RETRY_ATTEMPTS: u32 = 10;
+const BASE_DELAY_MS: u64 = 100;
+const MAX_DELAY_MS: u64 = 5000;
+
+/// Deterministic exponential backoff (no jitter) capped at `MAX_DELAY_MS`.
+/// Pulled out as a free function so it is unit-testable; jitter is applied
+/// at the callsite.
+fn exponential_backoff_ms(attempt: u32) -> u64 {
+    // Saturating shift so attempt values up to u32::MAX cannot overflow.
+    let shift = attempt.min(20);
+    BASE_DELAY_MS
+        .saturating_mul(1u64 << shift)
+        .min(MAX_DELAY_MS)
+}
+
 // ---------------------------------------------------------------------------
 // Credential source – toolforge (replica.my.cnf) or config.json fallback
 // ---------------------------------------------------------------------------
@@ -223,6 +241,7 @@ impl DatabaseManager {
         let opts = self.get_mysql_opts_for_wiki(wiki, cluster)?;
 
         trace!(user = opts.user());
+        let mut attempt: u32 = 0;
         let mut conn;
         loop {
             conn = match my::Conn::new(opts.to_owned())
@@ -231,9 +250,23 @@ impl DatabaseManager {
             {
                 Ok(conn2) => conn2,
                 Err(s) => {
-                    // Retry when the per-user connection limit is momentarily exceeded.
-                    if s.contains("max_user_connections") {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    // Retry when the per-user connection limit is momentarily
+                    // exceeded, but bound the retries so a chronically-full
+                    // pool can't pin a worker forever.
+                    if s.contains("max_user_connections") && attempt < MAX_RETRY_ATTEMPTS {
+                        let base = exponential_backoff_ms(attempt);
+                        // ±25% jitter to avoid lockstep retries across workers.
+                        let jitter: f64 = rand::random_range(0.75..1.25);
+                        let delay_ms = ((base as f64) * jitter) as u64;
+                        tracing::warn!(
+                            wiki,
+                            attempt = attempt + 1,
+                            max_attempts = MAX_RETRY_ATTEMPTS,
+                            delay_ms,
+                            "max_user_connections hit; backing off"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        attempt += 1;
                         continue;
                     }
                     return Err(anyhow!(s));
@@ -409,5 +442,37 @@ impl DatabaseManager {
                 "get_or_create_psid_for_query: Could not insert new PSID"
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exponential_backoff_starts_at_base() {
+        assert_eq!(exponential_backoff_ms(0), BASE_DELAY_MS);
+    }
+
+    #[test]
+    fn exponential_backoff_doubles_each_step() {
+        assert_eq!(exponential_backoff_ms(1), 200);
+        assert_eq!(exponential_backoff_ms(2), 400);
+        assert_eq!(exponential_backoff_ms(3), 800);
+        assert_eq!(exponential_backoff_ms(4), 1600);
+        assert_eq!(exponential_backoff_ms(5), 3200);
+    }
+
+    #[test]
+    fn exponential_backoff_caps_at_max() {
+        // 100 * 2^6 = 6400 > 5000 cap.
+        assert_eq!(exponential_backoff_ms(6), MAX_DELAY_MS);
+        assert_eq!(exponential_backoff_ms(10), MAX_DELAY_MS);
+    }
+
+    #[test]
+    fn exponential_backoff_saturates_on_huge_attempt() {
+        // Must not overflow or panic for any u32 input.
+        assert_eq!(exponential_backoff_ms(u32::MAX), MAX_DELAY_MS);
     }
 }
