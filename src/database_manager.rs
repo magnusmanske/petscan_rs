@@ -21,6 +21,19 @@ const MAX_RETRY_ATTEMPTS: u32 = 10;
 const BASE_DELAY_MS: u64 = 100;
 const MAX_DELAY_MS: u64 = 5000;
 
+/// Hard upper bound on a single `Conn::new` attempt. mysql_async 0.36 does
+/// not expose a connect-level timeout on `OptsBuilder`, so we wrap the call
+/// with `tokio::time::timeout`. Wikimedia replicas should always answer the
+/// TCP+TLS+auth handshake within a few seconds; anything longer means the
+/// replica is unreachable and we should fail fast rather than pin a worker.
+const DB_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// TCP keepalive interval. Surfaces an OS-level error on dead sockets so a
+/// dropped connection cannot leave an `exec_*` call blocked forever.
+/// (True per-query read timeouts need `tokio::time::timeout` at each call
+/// site and belong with the request-level wall-clock budget — see P1 #7.)
+const TCP_KEEPALIVE_MS: u32 = 30_000;
+
 /// Deterministic exponential backoff (no jitter) capped at `MAX_DELAY_MS`.
 /// Pulled out as a free function so it is unit-testable; jitter is applied
 /// at the callsite.
@@ -220,6 +233,7 @@ impl DatabaseManager {
             .user(Some(creds.user))
             .pass(Some(creds.password))
             .tcp_port(port)
+            .tcp_keepalive(Some(TCP_KEEPALIVE_MS))
             .into())
     }
 
@@ -244,10 +258,15 @@ impl DatabaseManager {
         let mut attempt: u32 = 0;
         let mut conn;
         loop {
-            conn = match my::Conn::new(opts.to_owned())
-                .await
-                .map_err(|e| format!("{e:?}"))
-            {
+            let connect = tokio::time::timeout(DB_CONNECT_TIMEOUT, my::Conn::new(opts.to_owned()));
+            let result: Result<my::Conn, String> = match connect.await {
+                Ok(Ok(c)) => Ok(c),
+                Ok(Err(e)) => Err(format!("{e:?}")),
+                Err(_) => Err(format!(
+                    "Conn::new timed out after {DB_CONNECT_TIMEOUT:?} for wiki={wiki}"
+                )),
+            };
+            conn = match result {
                 Ok(conn2) => conn2,
                 Err(s) => {
                     // Retry when the per-user connection limit is momentarily
@@ -330,13 +349,19 @@ impl DatabaseManager {
             .db_name(Some(schema))
             .user(Some(user))
             .pass(Some(password))
-            .tcp_port(port);
+            .tcp_port(port)
+            .tcp_keepalive(Some(TCP_KEEPALIVE_MS));
 
-        my::Conn::new(opts).await.map_err(|e| {
-            anyhow!(
+        match tokio::time::timeout(DB_CONNECT_TIMEOUT, my::Conn::new(opts)).await {
+            Ok(Ok(conn)) => Ok(conn),
+            Ok(Err(e)) => Err(anyhow!(
                 "DatabaseManager::get_tool_db_connection cannot connect to {host}:{port}: '{e}'"
-            )
-        })
+            )),
+            Err(_) => Err(anyhow!(
+                "DatabaseManager::get_tool_db_connection timed out connecting to {host}:{port} after {:?}",
+                DB_CONNECT_TIMEOUT
+            )),
+        }
     }
 
     // ------------------------------------------------------------------
