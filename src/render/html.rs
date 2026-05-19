@@ -39,7 +39,7 @@ impl Render for RenderHTML {
 
         // Wikidata edit box?
         if params.do_output_redlinks() {
-            // Yeah no
+            // No autolist box for redlinks output.
         } else if wiki != "wikidatawiki" && platform.get_param_blank("wikidata_item") == "without" {
             rows.push("<div id='autolist_box' mode='creator'></div>".to_string());
             *params.use_autolist_mut() = true;
@@ -47,10 +47,6 @@ impl Render for RenderHTML {
         } else if wiki == "wikidatawiki" {
             rows.push("<div id='autolist_box' mode='autolist'></div>".to_string());
             *params.use_autolist_mut() = true;
-        } else if wiki != "wikidatawiki" && params.do_output_redlinks() {
-            rows.push("<div id='autolist_box' mode='creator'></div>".to_string());
-            *params.use_autolist_mut() = true;
-            *params.autolist_creator_mode_mut() = true;
         } else if wiki == "commonswiki" && entries.iter().all(|e| e.title().namespace_id() == 6) {
             // If it's Commons, and all results are files
             rows.push("<div id='autolist_box' mode='autolist'></div>".to_string());
