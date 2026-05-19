@@ -206,42 +206,21 @@ pub trait Render {
                 "incoming_links" => self.opt_linkcount(&entry.incoming_links()),
                 "sitelinks" => self.opt_linkcount(&entry.sitelink_count()),
 
-                "img_size" => match &entry.get_file_info() {
-                    Some(fi) => self.opt_usize(&fi.img_size),
-                    None => String::new(),
-                },
-                "img_width" => match &entry.get_file_info() {
-                    Some(fi) => self.opt_usize(&fi.img_width),
-                    None => String::new(),
-                },
-                "img_height" => match &entry.get_file_info() {
-                    Some(fi) => self.opt_usize(&fi.img_height),
-                    None => String::new(),
-                },
-                "img_media_type" => match &entry.get_file_info() {
-                    Some(fi) => self.opt_string(&fi.img_media_type),
-                    None => String::new(),
-                },
-                "img_major_mime" => match &entry.get_file_info() {
-                    Some(fi) => self.opt_string(&fi.img_major_mime),
-                    None => String::new(),
-                },
-                "img_minor_mime" => match &entry.get_file_info() {
-                    Some(fi) => self.opt_string(&fi.img_minor_mime),
-                    None => String::new(),
-                },
-                "img_user_text" => match &entry.get_file_info() {
-                    Some(fi) => self.render_user_name(&self.opt_string(&fi.img_user_text), params),
-                    None => String::new(),
-                },
-                "img_timestamp" => match &entry.get_file_info() {
-                    Some(fi) => self.opt_string(&fi.img_timestamp),
-                    None => String::new(),
-                },
-                "img_sha1" => match &entry.get_file_info() {
-                    Some(fi) => self.opt_string(&fi.img_sha1),
-                    None => String::new(),
-                },
+                // `img_user_text` routes through `render_user_name` so a
+                // tabular renderer can wrap it (e.g. HTML's [[User:…]]
+                // wikilink). All other img_* fields share a single helper.
+                "img_user_text" => entry
+                    .get_file_info()
+                    .as_ref()
+                    .and_then(|fi| fi.img_user_text.as_deref())
+                    .map(|user| self.render_user_name(user, params))
+                    .unwrap_or_default(),
+                "img_size" | "img_width" | "img_height" | "img_media_type"
+                | "img_major_mime" | "img_minor_mime" | "img_timestamp" | "img_sha1" => entry
+                    .get_file_info()
+                    .as_ref()
+                    .and_then(|fi| fi.field_as_str(k.as_str()))
+                    .unwrap_or_default(),
 
                 "checkbox" => self.render_cell_checkbox(entry, params, platform),
                 "linknumber" => match entry.link_count() {

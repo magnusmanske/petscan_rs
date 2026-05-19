@@ -221,24 +221,7 @@ impl RenderJSON {
     }
 
     fn get_file_info_value(entry: &PageListEntry, key: &str) -> Option<Value> {
-        match &entry.get_file_info() {
-            Some(fi) => match key {
-                "img_size" => fi.img_size.as_ref().map(|s| json!(s)),
-                "img_width" => fi.img_width.as_ref().map(|s| json!(s)),
-                "img_height" => fi.img_height.as_ref().map(|s| json!(s)),
-                "img_media_type" => fi.img_media_type.as_ref().map(|s| json!(s)),
-                "img_major_mime" => fi.img_major_mime.as_ref().map(|s| json!(s)),
-                "img_minor_mime" => fi.img_minor_mime.as_ref().map(|s| json!(s)),
-                "img_user_text" => fi.img_user_text.as_ref().map(|s| json!(s)),
-                "img_timestamp" => fi.img_timestamp.as_ref().map(|s| json!(s)),
-                "img_sha1" => fi.img_sha1.as_ref().map(|s| json!(s)),
-                _other => {
-                    // println!("KEY NOT FOUND:{}", &other);
-                    None
-                }
-            },
-            None => None,
-        }
+        entry.get_file_info().as_ref().and_then(|fi| fi.field_as_json(key))
     }
 
     fn get_file_usage(entry: &PageListEntry) -> Option<Value> {

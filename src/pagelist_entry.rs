@@ -1,6 +1,6 @@
 use rand::seq::SliceRandom;
 use rayon::slice::ParallelSliceMut;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use wikimisc::mediawiki::api::NamespaceID;
@@ -92,6 +92,42 @@ impl FileInfo {
     pub fn new() -> Self {
         Self {
             ..Default::default()
+        }
+    }
+
+    /// Stringified value for one of the `img_*` keys, or `None` if either
+    /// the key is unknown or the field is unset. Centralises the per-field
+    /// match that was previously duplicated across renderers.
+    pub fn field_as_str(&self, key: &str) -> Option<String> {
+        match key {
+            "img_size" => self.img_size.map(|v| v.to_string()),
+            "img_width" => self.img_width.map(|v| v.to_string()),
+            "img_height" => self.img_height.map(|v| v.to_string()),
+            "img_media_type" => self.img_media_type.clone(),
+            "img_major_mime" => self.img_major_mime.clone(),
+            "img_minor_mime" => self.img_minor_mime.clone(),
+            "img_user_text" => self.img_user_text.clone(),
+            "img_timestamp" => self.img_timestamp.clone(),
+            "img_sha1" => self.img_sha1.clone(),
+            _ => None,
+        }
+    }
+
+    /// Same as [`field_as_str`] but preserves JSON typing: numeric fields
+    /// (`img_size`, `img_width`, `img_height`) come back as JSON numbers
+    /// rather than strings.
+    pub fn field_as_json(&self, key: &str) -> Option<Value> {
+        match key {
+            "img_size" => self.img_size.as_ref().map(|v| json!(v)),
+            "img_width" => self.img_width.as_ref().map(|v| json!(v)),
+            "img_height" => self.img_height.as_ref().map(|v| json!(v)),
+            "img_media_type" => self.img_media_type.as_ref().map(|v| json!(v)),
+            "img_major_mime" => self.img_major_mime.as_ref().map(|v| json!(v)),
+            "img_minor_mime" => self.img_minor_mime.as_ref().map(|v| json!(v)),
+            "img_user_text" => self.img_user_text.as_ref().map(|v| json!(v)),
+            "img_timestamp" => self.img_timestamp.as_ref().map(|v| json!(v)),
+            "img_sha1" => self.img_sha1.as_ref().map(|v| json!(v)),
+            _ => None,
         }
     }
 }
@@ -755,6 +791,87 @@ mod tests {
             "|somesuch|the_wiki:7:12345:the_namespace_name:The:page|the_wiki:7:the_namespace_name",
         );
         assert_eq!(fi.file_usage, vec![fu]);
+    }
+
+    /// Build a FileInfo with all `img_*` fields populated.
+    fn populated_file_info() -> FileInfo {
+        let mut fi = FileInfo::new();
+        fi.img_size = Some(2048);
+        fi.img_width = Some(800);
+        fi.img_height = Some(600);
+        fi.img_media_type = Some("BITMAP".to_string());
+        fi.img_major_mime = Some("image".to_string());
+        fi.img_minor_mime = Some("jpeg".to_string());
+        fi.img_user_text = Some("Alice".to_string());
+        fi.img_timestamp = Some("20240101000000".to_string());
+        fi.img_sha1 = Some("abc123".to_string());
+        fi
+    }
+
+    const FILE_INFO_KEYS: &[&str] = &[
+        "img_size",
+        "img_width",
+        "img_height",
+        "img_media_type",
+        "img_major_mime",
+        "img_minor_mime",
+        "img_user_text",
+        "img_timestamp",
+        "img_sha1",
+    ];
+
+    #[test]
+    fn test_file_info_field_as_str_known_keys() {
+        let fi = populated_file_info();
+        assert_eq!(fi.field_as_str("img_size"), Some("2048".to_string()));
+        assert_eq!(fi.field_as_str("img_width"), Some("800".to_string()));
+        assert_eq!(fi.field_as_str("img_height"), Some("600".to_string()));
+        assert_eq!(fi.field_as_str("img_media_type"), Some("BITMAP".to_string()));
+        assert_eq!(fi.field_as_str("img_user_text"), Some("Alice".to_string()));
+        assert_eq!(fi.field_as_str("img_sha1"), Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn test_file_info_field_as_str_unset_fields() {
+        let fi = FileInfo::new();
+        for key in FILE_INFO_KEYS {
+            assert_eq!(fi.field_as_str(key), None, "unset field for key {key}");
+        }
+    }
+
+    #[test]
+    fn test_file_info_field_as_str_unknown_key() {
+        let fi = populated_file_info();
+        assert_eq!(fi.field_as_str("bogus"), None);
+        assert_eq!(fi.field_as_str(""), None);
+    }
+
+    #[test]
+    fn test_file_info_field_as_json_preserves_number_types() {
+        let fi = populated_file_info();
+        // Numeric fields come back as JSON numbers, not strings.
+        assert_eq!(fi.field_as_json("img_size"), Some(json!(2048u64)));
+        assert_eq!(fi.field_as_json("img_width"), Some(json!(800u64)));
+        // String fields come back as JSON strings.
+        assert_eq!(fi.field_as_json("img_sha1"), Some(json!("abc123")));
+    }
+
+    #[test]
+    fn test_file_info_field_helpers_share_key_set() {
+        // Drift guard: if a new img_* field is added, both helpers must
+        // learn about it. Each helper's `_ => None` path is the only way
+        // for a populated FileInfo to return None.
+        let fi = populated_file_info();
+        for key in FILE_INFO_KEYS {
+            assert!(
+                fi.field_as_str(key).is_some(),
+                "field_as_str missing key {key}"
+            );
+            assert!(
+                fi.field_as_json(key).is_some(),
+                "field_as_json missing key {key}"
+            );
+        }
     }
 
     fn make_entry(title: &str, ns: NamespaceID) -> PageListEntry {
