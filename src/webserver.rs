@@ -4,23 +4,22 @@ use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
 use crate::platform::{MyResponse, Platform};
 use anyhow::Result;
-use http_body_util::{BodyExt, Full, Limited};
-use hyper::body::Bytes;
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode, header};
-use hyper_util::rt::TokioIo;
+use axum::Router;
+use axum::body::Bytes;
+use axum::extract::{Request, State};
+use axum::http::{Method, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::any;
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tower_http::cors::CorsLayer;
 use url::form_urlencoded;
 
-const MAX_POST_SIZE: u64 = 1024 * 1024 * 128; // MB
+const MAX_POST_SIZE: usize = 1024 * 1024 * 128; // MB
 static NOTFOUND: &[u8] = b"Not Found";
-static BODY_TOO_BIG: &[u8] = b"POST body too large";
 
 /// Server-side wall-clock budget for a single request. Long enough to cover
 /// legitimately heavy PetScan queries (category traversals across the
@@ -63,41 +62,19 @@ impl WebServer {
             static_files: Arc::new(static_files),
         }
     }
+
     pub async fn run(&self) -> Result<()> {
         let listener = self.start_webserver().await?;
-
-        // We start a loop to continuously accept incoming connections
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!("web_server: Cannot accept request: {e}");
-                    continue;
-                }
-            };
-
-            // Use an adapter to access something implementing `tokio::io` traits as if they implement
-            // `hyper::rt` IO traits.
-            let io = TokioIo::new(stream);
-            let me = self.clone();
-
-            // Spawn a tokio task to serve multiple connections concurrently
-            tokio::task::spawn(async move {
-                // Finally, we bind the incoming connection to our `hello` service
-                if let Err(err) = http1::Builder::new()
-                    // `service_fn` converts our function in a `Service`
-                    .serve_connection(io, service_fn(|req| me.process_request(req)))
-                    .await
-                {
-                    tracing::error!("Error serving connection: {err}");
-                }
-            });
-        }
+        let app = Router::new()
+            .fallback(any(handle))
+            .layer(CorsLayer::permissive())
+            .with_state(self.clone());
+        axum::serve(listener, app).await?;
+        Ok(())
     }
 
     async fn start_webserver(&self) -> Result<TcpListener> {
         use anyhow::Context;
-        // Run on IP/port
         let port = self.petscan_config.http_port.unwrap_or(80);
         let ip_address = self
             .petscan_config
@@ -110,16 +87,12 @@ impl WebServer {
         let addr = SocketAddr::from((ip_address, port));
         tracing::info!("Listening on http://{addr}");
 
-        // We create a TcpListener and bind it to IP:port
         TcpListener::bind(addr)
             .await
             .with_context(|| format!("web_server: Cannot bind to {addr}"))
     }
 
-    async fn process_request(
-        &self,
-        req: Request<hyper::body::Incoming>,
-    ) -> Result<Response<Full<Bytes>>, Infallible> {
+    async fn process_request(&self, req: Request) -> Response {
         let (parts, body) = req.into_parts();
         let path = parts.uri.path().to_string();
 
@@ -127,76 +100,59 @@ impl WebServer {
         if let Some(query) = parts.uri.query()
             && !query.is_empty()
         {
-            return self.process_from_query(query).await;
+            return self.process_from_query(query).await.into_response();
         }
 
-        // POST – enforce body size limit during streaming via Limited
+        // POST – cap the body during streaming. `to_bytes` aborts once the
+        // limit is reached; we map a body-limit error to 413 and any other
+        // I/O failure to 500. The error type is opaque, so we walk the
+        // source chain looking for the textual signature emitted by
+        // http-body-util's `LengthLimitError` (transitively used by axum).
         if parts.method == Method::POST {
-            let limited = Limited::new(body, MAX_POST_SIZE as usize);
-            let collected = match limited.collect().await {
-                Ok(c) => c,
+            let collected = match axum::body::to_bytes(body, MAX_POST_SIZE).await {
+                Ok(b) => b,
                 Err(e) => {
-                    // Check whether the limit was exceeded or it is a genuine I/O error
-                    if (&*e as &dyn std::error::Error).is::<http_body_util::LengthLimitError>() {
+                    if error_chain_mentions(&e, "length limit exceeded") {
                         tracing::warn!("POST body exceeded {MAX_POST_SIZE} bytes – rejecting");
-                        let mut resp = Response::new(Full::from(BODY_TOO_BIG));
-                        *resp.status_mut() = hyper::StatusCode::PAYLOAD_TOO_LARGE;
-                        return Ok(resp);
+                        return (StatusCode::PAYLOAD_TOO_LARGE, "POST body too large")
+                            .into_response();
                     }
                     tracing::error!("Failed to read POST body: {e}");
-                    let mut resp = Response::new(Full::from(b"Internal Server Error".as_ref()));
-                    *resp.status_mut() = hyper::StatusCode::INTERNAL_SERVER_ERROR;
-                    return Ok(resp);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                        .into_response();
                 }
             };
-            let query = collected.to_bytes();
-            if !query.is_empty() {
-                let query = String::from_utf8_lossy(&query);
-                return self.process_from_query(&query).await;
+            if !collected.is_empty() {
+                let query = String::from_utf8_lossy(&collected);
+                return self.process_from_query(&query).await.into_response();
             }
         }
 
         // Fallback: Static file
-        self.serve_file_path(&path).await
+        self.serve_file_path(&path)
     }
 
-    async fn process_from_query(&self, query: &str) -> Result<Response<Full<Bytes>>, Infallible> {
+    async fn process_from_query(&self, query: &str) -> MyResponse {
         // Apply the per-request wall-clock budget. On timeout, drop the
         // in-flight `process_form` future (its RAII guards clean up state)
-        // and return 504 directly without going through `MyResponse`.
-        let ret = match tokio::time::timeout(REQUEST_TIMEOUT, self.process_form(query)).await {
+        // and return a 504 with a custom plaintext body.
+        match tokio::time::timeout(REQUEST_TIMEOUT, self.process_form(query)).await {
             Ok(response) => response,
             Err(_elapsed) => {
                 tracing::warn!(
                     timeout_secs = REQUEST_TIMEOUT.as_secs(),
                     "Request exceeded the server-side wall-clock budget; cancelling"
                 );
-                let body = format!(
-                    "Request exceeded the server-side time budget of {} seconds.",
-                    REQUEST_TIMEOUT.as_secs()
-                );
-                return Ok(Response::builder()
-                    .status(StatusCode::GATEWAY_TIMEOUT)
-                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .body(Full::from(body))
-                    .unwrap_or_else(|e| {
-                        tracing::error!("Failed to build timeout response: {e}");
-                        Response::new(Full::from(b"Gateway Timeout".as_ref()))
-                    }));
+                MyResponse {
+                    s: format!(
+                        "Request exceeded the server-side time budget of {} seconds.",
+                        REQUEST_TIMEOUT.as_secs()
+                    ),
+                    content_type: ContentType::Plain,
+                    status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                }
             }
-        };
-        let status = StatusCode::from_u16(ret.status).unwrap_or(StatusCode::OK);
-        let response = Response::builder()
-            .status(status)
-            .header(header::CONTENT_TYPE, ret.content_type.as_str())
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .body(Full::from(ret.s))
-            .unwrap_or_else(|e| {
-                tracing::error!("Failed to build HTTP response: {e}");
-                Response::new(Full::from(b"Internal Server Error".as_ref()))
-            });
-        Ok(response)
+        }
     }
 
     async fn process_form(&self, parameters: &str) -> MyResponse {
@@ -356,25 +312,85 @@ impl WebServer {
 
     /// Serve a static file from the in-memory cache populated at startup.
     /// "/" is an alias for "/index.html".
-    async fn serve_file_path(&self, path: &str) -> Result<Response<Full<Bytes>>, Infallible> {
+    fn serve_file_path(&self, path: &str) -> Response {
         let key = if path == "/" { "/index.html" } else { path };
         match self.static_files.get(key) {
-            Some((bytes, content_type)) => {
-                let response = Response::builder()
-                    .header(header::CONTENT_TYPE, *content_type)
-                    .body(Full::from(bytes.clone()))
-                    .unwrap_or_else(|_| Response::new(Full::from(NOTFOUND)));
-                Ok(response)
-            }
-            None => Self::not_found(),
+            Some((bytes, content_type)) => Response::builder()
+                .header(header::CONTENT_TYPE, *content_type)
+                .body(bytes.clone().into())
+                .unwrap_or_else(|_| (StatusCode::NOT_FOUND, NOTFOUND).into_response()),
+            None => (StatusCode::NOT_FOUND, NOTFOUND).into_response(),
         }
     }
+}
 
-    /// HTTP status code 404
-    fn not_found() -> Result<Response<Full<Bytes>>, Infallible> {
-        Ok(Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(NOTFOUND.into())
-            .unwrap_or_else(|_| Response::new(Full::from(NOTFOUND))))
+/// Axum entry point. Defers to [`WebServer::process_request`] so the handler
+/// body stays a method on `WebServer` rather than a free function juggling
+/// `State` everywhere.
+async fn handle(State(server): State<WebServer>, req: Request) -> Response {
+    server.process_request(req).await
+}
+
+/// Walks the `std::error::Error` source chain looking for a substring in any
+/// node's `Display` output. Used to identify a body-limit overflow inside
+/// the opaque `axum::Error` returned by `axum::body::to_bytes`.
+fn error_chain_mentions(err: &(dyn std::error::Error + 'static), needle: &str) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = cur {
+        if e.to_string().contains(needle) {
+            return true;
+        }
+        cur = e.source();
+    }
+    false
+}
+
+impl IntoResponse for MyResponse {
+    fn into_response(self) -> Response {
+        let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK);
+        let content_type = self.content_type.as_str();
+        Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, content_type)
+            .body(self.s.into())
+            .unwrap_or_else(|e| {
+                tracing::error!("Failed to build HTTP response: {e}");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn my_response_into_response_maps_status_content_type_and_body() {
+        let mr = MyResponse {
+            s: "hello".to_string(),
+            content_type: ContentType::JSON,
+            status: 201,
+        };
+        let resp = mr.into_response();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"hello");
+    }
+
+    #[tokio::test]
+    async fn my_response_into_response_falls_back_to_200_for_invalid_status() {
+        let mr = MyResponse {
+            s: String::new(),
+            content_type: ContentType::Plain,
+            status: 0,
+        };
+        let resp = mr.into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
