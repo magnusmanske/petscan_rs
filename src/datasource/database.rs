@@ -1120,6 +1120,13 @@ impl SourceDatabase {
             }
             _ => {}
         }
+        // `flaggedpages.fp_pending_since` stores the timestamp of the oldest
+        // unreviewed edit since the last reviewed revision, or NULL if there
+        // are no pending changes. "Latest edit is flagged" therefore means
+        // "no pending changes" — hence the double-negative NOT EXISTS /
+        // IS NOT NULL form. This intentionally treats pages that are not
+        // enrolled in FlaggedRevs at all (no row in `flaggedpages`) as
+        // `last_edit_flagged=yes`, matching the upstream PHP PetScan.
         match self.params.last_edit_flagged.as_str() {
             "yes" => {
                 sql.0 += " AND NOT EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)";
