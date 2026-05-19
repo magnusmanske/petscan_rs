@@ -12,10 +12,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let args = std::env::args();
     if args.len() > 1 {
-        let _ = command_line_usage(app_state).await;
+        command_line_usage(app_state).await?;
     } else {
         let webserver = WebServer::new(app_state, petscan_config);
-        let _ = webserver.run().await;
+        webserver.run().await?;
     }
     Ok(())
 }

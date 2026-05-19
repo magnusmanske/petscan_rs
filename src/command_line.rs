@@ -44,11 +44,14 @@ pub async fn command_line_usage(app_state: Arc<AppState>) -> Result<()> {
     }
 
     let mut platform = Platform::new_from_parameters(&form_parameters, app_state.clone());
-    let _ = platform.run().await;
-    // println!("{:?}",platform.result().as_ref().unwrap().entries().read());
 
-    let response = match platform.get_response().await {
-        Ok(response) => response,
+    // If `run()` fails, surface that error directly. Falling through to
+    // `get_response()` would mask the real cause with a generic "No result".
+    let response = match platform.run().await {
+        Ok(()) => match platform.get_response().await {
+            Ok(response) => response,
+            Err(error) => app_state.render_error(error.to_string(), &form_parameters),
+        },
         Err(error) => app_state.render_error(error.to_string(), &form_parameters),
     };
     println!("{}", json!(response.s).as_str().unwrap_or(&response.s));
