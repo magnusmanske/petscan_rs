@@ -20,6 +20,46 @@ use wikimisc::site_matrix::SiteMatrix;
 /// cannot fork-bomb the worker pool.
 const MAX_CONCURRENT_REQUESTS: usize = 50;
 
+/// Retry policy for startup network calls (Wikidata API + SiteMatrix).
+/// 5 attempts with 1s → 2s → 4s → 8s → 16s exponential backoff (total
+/// worst-case ~31s). Long enough to ride out a transient blip on
+/// systemd restart; short enough that a real outage surfaces quickly.
+const STARTUP_MAX_ATTEMPTS: u32 = 5;
+const STARTUP_BASE_DELAY_MS: u64 = 1_000;
+const STARTUP_MAX_DELAY_MS: u64 = 16_000;
+
+/// Retry an async operation that returns `Result<T, anyhow::Error>` with
+/// bounded exponential backoff. Logs each retry attempt at `warn` level.
+async fn retry_with_backoff<F, Fut, T>(label: &'static str, mut op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut attempt: u32 = 0;
+    loop {
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(e) if attempt + 1 < STARTUP_MAX_ATTEMPTS => {
+                let shift = attempt.min(20);
+                let delay = STARTUP_BASE_DELAY_MS
+                    .saturating_mul(1u64 << shift)
+                    .min(STARTUP_MAX_DELAY_MS);
+                tracing::warn!(
+                    label,
+                    attempt = attempt + 1,
+                    max_attempts = STARTUP_MAX_ATTEMPTS,
+                    delay_ms = delay,
+                    error = %e,
+                    "{label} startup failed; retrying"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AppState – top-level application state; delegates DB work to DatabaseManager
 // ---------------------------------------------------------------------------
@@ -51,9 +91,17 @@ impl Default for AppState {
 impl AppState {
     pub async fn new_from_config(config: &Value) -> Result<Self> {
         let main_page_path = "./html/index.html";
-        let wikidata_api = Api::new("https://www.wikidata.org/w/api.php")
-            .await
-            .map_err(|e| anyhow!("Can't talk to Wikidata API: {e}"))?;
+        // Both the Wikidata API handshake and the SiteMatrix fetch are
+        // network-dependent and previously hard-failed at startup if
+        // Wikidata was even briefly unreachable (e.g. during a systemd
+        // restart that races with the upstream). Retry with backoff so
+        // the service survives transient blips.
+        let wikidata_api = retry_with_backoff("Wikidata API", || async {
+            Api::new("https://www.wikidata.org/w/api.php")
+                .await
+                .map_err(|e| anyhow!("Can't talk to Wikidata API: {e}"))
+        })
+        .await?;
         let main_page_bytes = fs::read(main_page_path)
             .map_err(|e| anyhow!("Could not read index.html file from disk: {e}"))?;
         let main_page = String::from_utf8_lossy(&main_page_bytes)
@@ -62,13 +110,18 @@ impl AppState {
 
         let db_manager = DatabaseManager::new_from_config(config);
 
+        let site_matrix = retry_with_backoff("Wikidata SiteMatrix", || async {
+            SiteMatrix::new(&wikidata_api)
+                .await
+                .map_err(|e| anyhow!("Can't get site matrix: {e}"))
+        })
+        .await?;
+
         Ok(Self {
             db_manager,
             threads_running: Arc::new(RwLock::new(0)),
             shutting_down: Arc::new(RwLock::new(false)),
-            site_matrix: SiteMatrix::new(&wikidata_api)
-                .await
-                .map_err(|e| anyhow!("Can't get site matrix: {e}"))?,
+            site_matrix,
             main_page,
             request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
         })
@@ -554,6 +607,48 @@ mod tests {
         assert_eq!(state.threads_running(), 1);
         drop(g2);
         assert_eq!(state.threads_running(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_retry_with_backoff_eventual_success() {
+        // Fails 3 times, then succeeds — should return Ok on attempt 4.
+        let attempts = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_for_op = attempts.clone();
+        let result = retry_with_backoff("test", move || {
+            let attempts = attempts_for_op.clone();
+            async move {
+                let n = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n < 3 {
+                    Err(anyhow!("simulated transient failure {n}"))
+                } else {
+                    Ok::<_, anyhow::Error>(42)
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, 42);
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_retry_with_backoff_exhausts_attempts() {
+        // Always fails — should return Err after STARTUP_MAX_ATTEMPTS.
+        let attempts = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts_for_op = attempts.clone();
+        let result: Result<i32> = retry_with_backoff("test", move || {
+            let attempts = attempts_for_op.clone();
+            async move {
+                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(anyhow!("persistent failure"))
+            }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            STARTUP_MAX_ATTEMPTS
+        );
     }
 
     #[test]
