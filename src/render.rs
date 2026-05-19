@@ -241,3 +241,118 @@ pub trait Render {
         ret
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Security invariant: after `escape_attribute`, the output is safe to
+    /// drop into an HTML/XML attribute value without further escaping.
+    /// None of the four attribute-breaking characters may appear raw.
+    fn assert_no_unescaped_attr_specials(s: &str) {
+        for c in &['<', '>', '"', '\''] {
+            assert!(
+                !s.contains(*c),
+                "found unescaped {c:?} in escape_attribute output: {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn escape_attribute_handles_script_tag_injection() {
+        // Classic XSS attempt — the literal `<script>` must not survive.
+        let out = escape_attribute("<script>alert(1)</script>");
+        assert_no_unescaped_attr_specials(&out);
+        assert_eq!(out, "%3Cscript%3Ealert%281%29%3C%2Fscript%3E");
+    }
+
+    #[test]
+    fn escape_attribute_handles_attribute_breakout() {
+        // An attacker who can control a `value="..."` substring tries to
+        // close the attribute and inject an event handler. Both ' and "
+        // and the surrounding whitespace must be encoded so the injected
+        // characters cannot terminate the attribute. The identifier
+        // (`onmouseover`) itself remains visible — that is fine; it only
+        // becomes dangerous if accompanied by the unescaped specials.
+        let out = escape_attribute("\" onmouseover='x' \"");
+        assert_no_unescaped_attr_specials(&out);
+        assert!(out.contains("%22")); // "
+        assert!(out.contains("%27")); // '
+        assert!(out.contains("%20")); // space
+    }
+
+    #[test]
+    fn escape_attribute_encodes_ampersand() {
+        // Ampersand must be encoded so a downstream HTML parser cannot
+        // interpret the remainder as a character reference.
+        let out = escape_attribute("a&b");
+        assert_no_unescaped_attr_specials(&out);
+        assert!(!out.contains('&'));
+        assert_eq!(out, "a%26b");
+    }
+
+    #[test]
+    fn escape_attribute_encodes_javascript_url() {
+        // Even though we only use the output in attribute *values* (not
+        // href targets), pinning behavior here documents the contract: no
+        // executable URL scheme survives intact for an attacker to
+        // hand-decode and re-inject.
+        let out = escape_attribute("javascript:alert(1)");
+        assert_no_unescaped_attr_specials(&out);
+        assert_eq!(out, "javascript%3Aalert%281%29");
+    }
+
+    #[test]
+    fn escape_attribute_preserves_plain_alphanumeric() {
+        assert_eq!(escape_attribute("hello"), "hello");
+        assert_eq!(escape_attribute("HelloWorld42"), "HelloWorld42");
+    }
+
+    #[test]
+    fn escape_attribute_handles_empty_string() {
+        assert_eq!(escape_attribute(""), "");
+    }
+
+    #[test]
+    fn escape_attribute_handles_single_quote() {
+        let out = escape_attribute("O'Brien");
+        assert_no_unescaped_attr_specials(&out);
+        assert_eq!(out, "O%27Brien");
+    }
+
+    #[test]
+    fn escape_attribute_handles_unicode() {
+        // Non-ASCII characters get percent-encoded as their UTF-8 bytes;
+        // the invariant still holds.
+        let out = escape_attribute("名前");
+        assert_no_unescaped_attr_specials(&out);
+        assert!(out.starts_with('%'));
+        // 名 = E5 90 8D, 前 = E5 89 8D
+        assert_eq!(out, "%E5%90%8D%E5%89%8D");
+    }
+
+    #[test]
+    fn escape_attribute_invariant_holds_on_pathological_inputs() {
+        // Fuzz-style sweep of nasty characters. The invariant must hold
+        // regardless of input.
+        let payloads = [
+            "<>'\"&",
+            "</style><script>",
+            "\0\u{0001}\u{0002}",
+            "\\\"//><",
+            "\n\r\t",
+            ";--",
+            "data:text/html,<script>alert(1)</script>",
+        ];
+        for p in payloads {
+            let out = escape_attribute(p);
+            assert_no_unescaped_attr_specials(&out);
+            // No ampersand either — attribute parsers can interpret it
+            // as the start of a character reference.
+            assert!(
+                !out.contains('&'),
+                "found unescaped & in escape_attribute({p:?}) = {out:?}"
+            );
+        }
+    }
+}
