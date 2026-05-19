@@ -10,11 +10,31 @@ use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
 
-// Lots of unwrap() in here but it's OK, it's for PoisonError which should die immediately
+/// Acquire a read lock, transparently recovering from a poisoned lock.
+///
+/// The original code in this module called `.read().unwrap()` (and the
+/// matching `.write().unwrap()`) at ~33 sites with the rationale "die
+/// immediately on PoisonError". Combined with `panic = "abort"` that
+/// meant a stray panic anywhere in the request pipeline would crash the
+/// whole multi-tenant server. The audit (P1 #10) flagged this.
+///
+/// The locks here only protect a `HashSet<PageListEntry>` (owned data,
+/// no internal pointers) and a couple of `Option<String>`/`bool` cells.
+/// A previous holder that panicked mid-mutation can leave the contents
+/// in an unusual state, but never in an unsafe one. We trade "crash on
+/// poison" for "continue with whatever data is there", which is the
+/// right call for a long-running multi-tenant service.
+fn read_lock<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|p| p.into_inner())
+}
+
+fn write_lock<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(|p| p.into_inner())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DatabaseCluster {
@@ -47,25 +67,25 @@ impl PageList {
     }
 
     pub fn set_from(&self, other: Self) {
-        *self.wiki.write().unwrap() = other.wiki.read().unwrap().clone();
-        *self.entries.write().unwrap() = other.entries.read().unwrap().clone();
+        *write_lock(&self.wiki) = read_lock(&other.wiki).clone();
+        *write_lock(&self.entries) = read_lock(&other.entries).clone();
         self.set_has_sitelink_counts(other.has_sitelink_counts());
     }
 
     pub fn set_has_sitelink_counts(&self, new_state: bool) {
-        *self.has_sitelink_counts.write().unwrap() = new_state;
+        *write_lock(&self.has_sitelink_counts) = new_state;
     }
 
     pub fn has_sitelink_counts(&self) -> bool {
-        *self.has_sitelink_counts.read().unwrap()
+        *read_lock(&self.has_sitelink_counts)
     }
 
     pub fn set_entries(&self, entries: HashSet<PageListEntry>) {
-        *self.entries.write().unwrap() = entries;
+        *write_lock(&self.entries) = entries;
     }
 
     pub fn retain_entries(&self, f: &dyn Fn(&PageListEntry) -> bool) {
-        self.entries.write().unwrap().retain(f);
+        write_lock(&self.entries).retain(f);
     }
 
     pub fn get_entry(&self, entry: &PageListEntry) -> Option<PageListEntry> {
@@ -73,9 +93,7 @@ impl PageList {
     }
 
     pub fn to_titles_namespaces(&self) -> Vec<(String, NamespaceID)> {
-        self.entries
-            .read()
-            .unwrap()
+        read_lock(&self.entries)
             .par_iter()
             .map(|entry| {
                 (
@@ -87,9 +105,7 @@ impl PageList {
     }
 
     pub fn to_full_pretty_titles(&self, api: &Api) -> Vec<String> {
-        self.entries
-            .read()
-            .unwrap()
+        read_lock(&self.entries)
             .par_iter()
             .filter_map(|entry| entry.title().full_pretty(api))
             .collect()
@@ -97,10 +113,7 @@ impl PageList {
 
     pub fn change_namespaces(&self, to_talk: bool) {
         let add = to_talk as i64;
-        let tmp = self
-            .entries
-            .read()
-            .unwrap()
+        let tmp = read_lock(&self.entries)
             .par_iter()
             .map(|entry| {
                 let mut nsid = entry.title().namespace_id();
@@ -110,23 +123,23 @@ impl PageList {
                 PageListEntry::new(new_title)
             })
             .collect();
-        *(self.entries.write().unwrap()) = tmp;
+        *(write_lock(&self.entries)) = tmp;
     }
 
     pub fn as_vec(&self) -> Vec<PageListEntry> {
-        self.entries.read().unwrap().iter().cloned().collect()
+        read_lock(&self.entries).iter().cloned().collect()
     }
 
     pub fn set_wiki(&self, wiki: Option<String>) {
-        *self.wiki.write().unwrap() = wiki;
+        *write_lock(&self.wiki) = wiki;
     }
 
     pub fn wiki(&self) -> Option<String> {
-        self.wiki.read().unwrap().clone()
+        read_lock(&self.wiki).clone()
     }
 
     pub fn drain_into_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {
-        let mut ret: Vec<PageListEntry> = self.entries.write().unwrap().drain().collect();
+        let mut ret: Vec<PageListEntry> = write_lock(&self.entries).drain().collect();
         sort_or_shuffle(&mut ret, &sorter, self.is_wikidata());
         ret
     }
@@ -135,12 +148,12 @@ impl PageList {
     /// Prefer this over `drain_into_sorted_vec` in async contexts so the
     /// sort can be offloaded to a blocking thread via `spawn_blocking`.
     pub fn drain_into_vec(&self) -> Vec<PageListEntry> {
-        self.entries.write().unwrap().drain().collect()
+        write_lock(&self.entries).drain().collect()
     }
 
     pub fn group_by_namespace(&self) -> HashMap<NamespaceID, Vec<String>> {
         let mut ret: HashMap<NamespaceID, Vec<String>> = HashMap::new();
-        self.entries.read().unwrap().iter().for_each(|entry| {
+        read_lock(&self.entries).iter().for_each(|entry| {
             ret.entry(entry.title().namespace_id())
                 .or_default()
                 .push(entry.title().with_underscores());
@@ -149,15 +162,15 @@ impl PageList {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.read().unwrap().is_empty()
+        read_lock(&self.entries).is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.entries.read().unwrap().len()
+        read_lock(&self.entries).len()
     }
 
     pub fn add_entry(&self, entry: PageListEntry) {
-        self.entries.write().unwrap().replace(entry);
+        write_lock(&self.entries).replace(entry);
     }
 
     async fn check_before_merging(
@@ -191,14 +204,14 @@ impl PageList {
         self.check_before_merging(pagelist, platform).await?;
         Platform::profile("PageList::union START UNION/1", None);
         // Clone the other list's entries so they can be moved into the blocking task.
-        let other: HashSet<PageListEntry> = pagelist.entries.read().unwrap().clone();
+        let other: HashSet<PageListEntry> = read_lock(&pagelist.entries).clone();
         // Fast path: if self is empty just replace with the clone we already have.
-        let is_self_empty = self.entries.read().unwrap().is_empty();
+        let is_self_empty = read_lock(&self.entries).is_empty();
         let merged = if is_self_empty {
             other
         } else {
             Platform::profile("PageList::union START UNION/2", None);
-            let self_set: HashSet<PageListEntry> = self.entries.write().unwrap().drain().collect();
+            let self_set: HashSet<PageListEntry> = write_lock(&self.entries).drain().collect();
             tokio::task::spawn_blocking(move || {
                 let mut result = self_set;
                 result.extend(other);
@@ -208,7 +221,7 @@ impl PageList {
             .map_err(|e| anyhow!("{e}"))?
         };
         Platform::profile("PageList::union UNION DONE", None);
-        *self.entries.write().unwrap() = merged;
+        *write_lock(&self.entries) = merged;
         Ok(())
     }
 
@@ -219,8 +232,8 @@ impl PageList {
     ) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
         // Clone the other list's entries so they can be moved into the blocking task.
-        let other: HashSet<PageListEntry> = pagelist.entries.read().unwrap().clone();
-        let self_set: HashSet<PageListEntry> = self.entries.write().unwrap().drain().collect();
+        let other: HashSet<PageListEntry> = read_lock(&pagelist.entries).clone();
+        let self_set: HashSet<PageListEntry> = write_lock(&self.entries).drain().collect();
         let filtered = tokio::task::spawn_blocking(move || {
             self_set
                 .into_iter()
@@ -229,15 +242,15 @@ impl PageList {
         })
         .await
         .map_err(|e| anyhow!("{e}"))?;
-        *self.entries.write().unwrap() = filtered;
+        *write_lock(&self.entries) = filtered;
         Ok(())
     }
 
     pub async fn difference(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
         // Clone the other list's entries so they can be moved into the blocking task.
-        let other: HashSet<PageListEntry> = pagelist.entries.read().unwrap().clone();
-        let self_set: HashSet<PageListEntry> = self.entries.write().unwrap().drain().collect();
+        let other: HashSet<PageListEntry> = read_lock(&pagelist.entries).clone();
+        let self_set: HashSet<PageListEntry> = write_lock(&self.entries).drain().collect();
         let filtered = tokio::task::spawn_blocking(move || {
             self_set
                 .into_iter()
@@ -246,7 +259,7 @@ impl PageList {
         })
         .await
         .map_err(|e| anyhow!("{e}"))?;
-        *self.entries.write().unwrap() = filtered;
+        *write_lock(&self.entries) = filtered;
         Ok(())
     }
 
@@ -293,11 +306,11 @@ impl PageList {
     }
 
     pub fn clear_entries(&self) {
-        self.entries.write().unwrap().clear();
+        write_lock(&self.entries).clear();
     }
 
     pub fn replace_entries(&self, other: &PageList) {
-        let other_entries = other.entries.read().unwrap();
+        let other_entries = read_lock(&other.entries);
         if let Ok(mut entries) = self.entries.write() {
             for entry in other_entries.iter() {
                 entries.replace(entry.to_owned());
@@ -400,7 +413,7 @@ impl PageList {
     }
 
     async fn load_missing_page_metadata(&self, platform: &Platform) -> Result<()> {
-        if self.entries.read().unwrap().par_iter().any(|entry| {
+        if read_lock(&self.entries).par_iter().any(|entry| {
             entry.page_id().is_none()
                 || entry.page_bytes().is_none()
                 || entry.get_page_timestamp().is_none()
@@ -738,10 +751,7 @@ impl PageList {
             Some(wiki) => wiki,
             None => return Ok(()),
         };
-        let page_ids: Vec<u32> = self
-            .entries
-            .read()
-            .unwrap()
+        let page_ids: Vec<u32> = read_lock(&self.entries)
             .iter()
             .filter_map(|entry| entry.page_id())
             .collect();
