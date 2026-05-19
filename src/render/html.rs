@@ -142,32 +142,46 @@ impl Render for RenderHTML {
 
     fn render_cell_title(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         Self::render_wikilink(
-            entry.title(),
-            params.wiki(),
-            &entry.get_wikidata_label(),
+            WikilinkArgs {
+                title: entry.title(),
+                wiki: params.wiki(),
+                alt_label: &entry.get_wikidata_label(),
+                is_page_link: true,
+                wikidata_description: &entry.get_wikidata_description(),
+                is_redlink: entry.redlink_count().is_some(),
+            },
             params,
-            true,
-            &entry.get_wikidata_description(),
-            entry.redlink_count().is_some(),
         )
     }
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, params: &RenderParams) -> String {
         match entry.get_wikidata_item() {
             Some(q) => Self::render_wikilink(
-                &Title::new(&q, 0),
-                "wikidatawiki",
-                &None,
+                WikilinkArgs {
+                    title: &Title::new(&q, 0),
+                    wiki: "wikidatawiki",
+                    alt_label: &None,
+                    is_page_link: false,
+                    wikidata_description: &entry.get_wikidata_description(),
+                    is_redlink: entry.redlink_count().is_some(),
+                },
                 params,
-                false,
-                &entry.get_wikidata_description(),
-                entry.redlink_count().is_some(),
             ),
             None => String::new(),
         }
     }
     fn render_user_name(&self, user: &str, params: &RenderParams) -> String {
         let title = Title::new(user, 2);
-        Self::render_wikilink(&title, params.wiki(), &None, params, false, &None, false)
+        Self::render_wikilink(
+            WikilinkArgs {
+                title: &title,
+                wiki: params.wiki(),
+                alt_label: &None,
+                is_page_link: false,
+                wikidata_description: &None,
+                is_redlink: false,
+            },
+            params,
+        )
     }
     fn render_cell_image(&self, image: &Option<String>, params: &RenderParams) -> String {
         match image {
@@ -216,13 +230,15 @@ impl Render for RenderHTML {
                         + &fu.wiki().to_owned()
                         + ":"
                         + &Self::render_wikilink(
-                            fu.title(),
-                            fu.wiki(),
-                            &None,
+                            WikilinkArgs {
+                                title: fu.title(),
+                                wiki: fu.wiki(),
+                                alt_label: &None,
+                                is_page_link: false,
+                                wikidata_description: &entry.get_wikidata_description(),
+                                is_redlink: entry.redlink_count().is_some(),
+                            },
                             params,
-                            false,
-                            &entry.get_wikidata_description(),
-                            entry.redlink_count().is_some(),
                         )
                         + "</div>";
                     rows.push(html);
@@ -304,21 +320,33 @@ impl Render for RenderHTML {
     }
 }
 
+/// Bundles the six knobs `render_wikilink` used to take as positional
+/// arguments. Keeping them in one struct makes the call sites readable
+/// (named fields instead of a wall of positional values) and lets the
+/// function signature stay within clippy's `too_many_arguments` limit.
+struct WikilinkArgs<'a> {
+    title: &'a Title,
+    wiki: &'a str,
+    alt_label: &'a Option<String>,
+    is_page_link: bool,
+    wikidata_description: &'a Option<String>,
+    is_redlink: bool,
+}
+
 impl RenderHTML {
     pub fn new() -> Box<Self> {
         Box::new(Self {})
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn render_wikilink(
-        title: &Title,
-        wiki: &str,
-        alt_label: &Option<String>,
-        params: &RenderParams,
-        is_page_link: bool,
-        wikidata_description: &Option<String>,
-        is_redlink: bool,
-    ) -> String {
+    fn render_wikilink(link: WikilinkArgs<'_>, params: &RenderParams) -> String {
+        let WikilinkArgs {
+            title,
+            wiki,
+            alt_label,
+            is_page_link,
+            wikidata_description,
+            is_redlink,
+        } = link;
         let server = match params.state().site_matrix().get_server_url_for_wiki(wiki) {
             Ok(url) => url,
             Err(_e) => return String::new(),

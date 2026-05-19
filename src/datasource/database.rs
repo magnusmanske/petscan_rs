@@ -23,6 +23,18 @@ use wikimisc::mediawiki::title::Title;
 
 const MAX_CATEGORY_BATCH_SIZE: usize = 2500;
 const MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
+
+/// Bundles the four mostly-context arguments shared by
+/// `get_pages_for_primary` and `get_pages_for_primary_new_connection`.
+/// `sql` and `sql_before_after` stay as separate parameters because they
+/// are transformed mid-call and the two functions handle them slightly
+/// differently (mut borrow + clone vs. moved owned value).
+struct PrimaryQueryArgs<'a> {
+    primary: &'a String,
+    pages_sublist: &'a mut PageList,
+    is_before_after_done: &'a mut bool,
+    api: Api,
+}
 const PAGE_SELECT_PREFIX: &str = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len";
 
 type PrimaryResultRow = (u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount);
@@ -598,15 +610,19 @@ impl SourceDatabase {
             "DSDB::get_pages [primary:categories] START BATCH",
             Some(sql.1.len()),
         );
+        let primary = params.primary.to_string();
+        let mut is_before_after_done = params.is_before_after_done;
         self.get_pages_for_primary_new_connection(
             state,
             &params.wiki,
-            &params.primary.to_string(),
             sql,
             &mut params.sql_before_after.clone(),
-            &mut pl2,
-            &mut params.is_before_after_done.clone(),
-            api,
+            PrimaryQueryArgs {
+                primary: &primary,
+                pages_sublist: &mut pl2,
+                is_before_after_done: &mut is_before_after_done,
+                api,
+            },
         )
         .await?;
         Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH", None);
@@ -844,14 +860,17 @@ impl SourceDatabase {
         let mut is_before_after_done = params.is_before_after_done;
         let mut pl2 = PageList::new_from_wiki(&wiki.clone());
         let api = state.get_api_for_wiki(wiki.clone()).await?;
+        let primary = params.primary.to_string();
         self.get_pages_for_primary(
             &mut conn,
-            &params.primary.to_string(),
             sql,
             sql_before_after,
-            &mut pl2,
-            &mut is_before_after_done,
-            api,
+            PrimaryQueryArgs {
+                primary: &primary,
+                pages_sublist: &mut pl2,
+                is_before_after_done: &mut is_before_after_done,
+                api,
+            },
         )
         .await?;
         drop(conn);
@@ -907,30 +926,30 @@ impl SourceDatabase {
 
         let mut ret = PageList::new_from_wiki(&params.wiki);
         let mut conn = state.get_wiki_db_connection(&params.wiki).await?;
+        let api = state.get_api_for_wiki(params.wiki.clone()).await?;
+        let primary = params.primary.to_string();
         self.get_pages_for_primary(
             &mut conn,
-            &params.primary.to_string(),
             sql,
             params.sql_before_after,
-            &mut ret,
-            &mut params.is_before_after_done,
-            state.get_api_for_wiki(params.wiki.clone()).await?,
+            PrimaryQueryArgs {
+                primary: &primary,
+                pages_sublist: &mut ret,
+                is_before_after_done: &mut params.is_before_after_done,
+                api,
+            },
         )
         .await?;
         Ok(ret)
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn get_pages_for_primary_new_connection(
         &self,
         state: &AppState,
         wiki: &str,
-        primary: &String,
         sql: SQLtuple,
         sql_before_after: &mut SQLtuple,
-        pages_sublist: &mut PageList,
-        is_before_after_done: &mut bool,
-        api: Api,
+        args: PrimaryQueryArgs<'_>,
     ) -> Result<()> {
         let mut conn = state.get_wiki_db_connection(wiki).await?;
         Platform::profile(
@@ -938,30 +957,24 @@ impl SourceDatabase {
             Some(sql.1.len()),
         );
         let ret = self
-            .get_pages_for_primary(
-                &mut conn,
-                primary,
-                sql,
-                sql_before_after.clone(),
-                pages_sublist,
-                is_before_after_done,
-                api,
-            )
+            .get_pages_for_primary(&mut conn, sql, sql_before_after.clone(), args)
             .await;
         ret
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn get_pages_for_primary(
         &self,
         conn: &mut my::Conn,
-        primary: &String,
         mut sql: SQLtuple,
         sql_before_after: SQLtuple,
-        pages_sublist: &mut PageList,
-        is_before_after_done: &mut bool,
-        api: Api,
+        args: PrimaryQueryArgs<'_>,
     ) -> Result<()> {
+        let PrimaryQueryArgs {
+            primary,
+            pages_sublist,
+            is_before_after_done,
+            api,
+        } = args;
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
 
         self.get_pages_for_primary_namespaces(primary, &mut sql);
