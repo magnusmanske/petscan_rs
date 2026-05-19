@@ -1,7 +1,6 @@
 use crate::content_type::ContentType;
 use crate::platform::MyResponse;
 use crate::render::Render;
-use crate::render::params::RenderParams;
 use crate::{pagelist_entry::PageListEntry, platform::Platform};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -66,21 +65,6 @@ impl Render for RenderPagePile {
         })
     }
 
-    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        String::new()
-    }
-    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        String::new()
-    }
-    fn render_user_name(&self, _user: &str, _params: &RenderParams) -> String {
-        String::new()
-    }
-    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
-        String::new()
-    }
-    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        String::new()
-    }
 }
 
 impl RenderPagePile {

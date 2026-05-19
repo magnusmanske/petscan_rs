@@ -55,21 +55,6 @@ impl Render for RenderJSON {
         })
     }
 
-    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "N/A".to_string()
-    }
-    fn render_user_name(&self, _user: &str, _params: &RenderParams) -> String {
-        "N/A".to_string()
-    }
-    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
-        "N/A".to_string()
-    }
-    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "N/A".to_string()
-    }
-    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
-        "N/A".to_string()
-    }
 }
 
 impl RenderJSON {

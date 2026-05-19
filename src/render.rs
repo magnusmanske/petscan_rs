@@ -98,11 +98,27 @@ pub trait Render {
         columns
     }
 
-    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
-    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
-    fn render_user_name(&self, _user: &str, _params: &RenderParams) -> String;
-    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String;
-    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String;
+    // The five cell-render methods below are only invoked by the default
+    // `row_from_entry` implementation, which non-tabular renderers (JSON,
+    // JSONL, PagePile) bypass entirely. Each has a `String::new()` default
+    // so renderers that produce structured output don't have to carry
+    // stub impls. Tabular renderers (HTML, TSV, Wikitext) override every
+    // method they actually need.
+    fn render_cell_title(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        String::new()
+    }
+    fn render_cell_wikidata_item(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        String::new()
+    }
+    fn render_user_name(&self, _user: &str, _params: &RenderParams) -> String {
+        String::new()
+    }
+    fn render_cell_image(&self, _image: &Option<String>, _params: &RenderParams) -> String {
+        String::new()
+    }
+    fn render_cell_namespace(&self, _entry: &PageListEntry, _params: &RenderParams) -> String {
+        String::new()
+    }
     fn render_cell_checkbox(
         &self,
         _entry: &PageListEntry,
