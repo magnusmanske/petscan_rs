@@ -2,6 +2,7 @@ use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::pagelist_entry::{PageListEntry, PageListSort, sort_or_shuffle};
 use crate::platform::{MAX_CONCURRENT_DB_BATCHES, PAGE_BATCH_SIZE, Platform};
+use crate::query_context::QueryContext;
 use anyhow::{Result, anyhow};
 use futures::stream::{StreamExt, iter};
 use mysql_async as my;
@@ -214,7 +215,7 @@ impl PageList {
     async fn check_before_merging(
         &self,
         pagelist: &PageList,
-        platform: Option<&Platform>,
+        platform: Option<&dyn QueryContext>,
     ) -> Result<()> {
         let self_wiki = self
             .wiki()
@@ -238,7 +239,11 @@ impl PageList {
         Ok(())
     }
 
-    pub async fn union(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<()> {
+    pub async fn union(
+        &self,
+        pagelist: &PageList,
+        platform: Option<&dyn QueryContext>,
+    ) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
         Platform::profile("PageList::union START UNION/1", None);
         // Clone the other list's entries so they can be moved into the blocking task.
@@ -266,7 +271,7 @@ impl PageList {
     pub async fn intersection(
         &self,
         pagelist: &PageList,
-        platform: Option<&Platform>,
+        platform: Option<&dyn QueryContext>,
     ) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
         // Clone the other list's entries so they can be moved into the blocking task.
@@ -284,7 +289,11 @@ impl PageList {
         Ok(())
     }
 
-    pub async fn difference(&self, pagelist: &PageList, platform: Option<&Platform>) -> Result<()> {
+    pub async fn difference(
+        &self,
+        pagelist: &PageList,
+        platform: Option<&dyn QueryContext>,
+    ) -> Result<()> {
         self.check_before_merging(pagelist, platform).await?;
         // Clone the other list's entries so they can be moved into the blocking task.
         let other: HashSet<PageListEntry> = read_lock(&pagelist.entries).clone();
@@ -451,7 +460,7 @@ impl PageList {
         Some(PageListEntry::new(Title::new(&page_title, namespace_id)))
     }
 
-    async fn load_missing_page_metadata(&self, platform: &Platform) -> Result<()> {
+    async fn load_missing_page_metadata(&self, platform: &dyn QueryContext) -> Result<()> {
         if read_lock(&self.entries).par_iter().any(|entry| {
             entry.page_id().is_none()
                 || entry.page_bytes().is_none()
@@ -508,7 +517,7 @@ impl PageList {
     pub async fn load_missing_metadata(
         &self,
         wikidata_language: Option<String>,
-        platform: &Platform,
+        platform: &dyn QueryContext,
     ) -> Result<()> {
         Platform::profile("begin load_missing_metadata", None);
         Platform::profile("before load_missing_page_metadata", None);
@@ -550,7 +559,7 @@ impl PageList {
         namespace_id: NamespaceID,
         entity_type: WikidataEntityType,
         wikidata_language: &str,
-        platform: &Platform,
+        platform: &dyn QueryContext,
     ) -> Result<()> {
         // wbt_ done
         let prefix = entity_type.prefix();
@@ -632,7 +641,7 @@ impl PageList {
         Ok(())
     }
 
-    pub async fn convert_to_wiki(&self, wiki: &str, platform: &Platform) -> Result<()> {
+    pub async fn convert_to_wiki(&self, wiki: &str, platform: &dyn QueryContext) -> Result<()> {
         // Already that wiki?
         if self.wiki().is_none() || self.wiki() == Some(wiki.to_string()) {
             return Ok(());
@@ -644,7 +653,7 @@ impl PageList {
         Ok(())
     }
 
-    async fn convert_to_wikidata(&self, platform: &Platform) -> Result<()> {
+    async fn convert_to_wikidata(&self, platform: &dyn QueryContext) -> Result<()> {
         if self.wiki().is_none() || self.is_wikidata() {
             return Ok(());
         }
@@ -677,7 +686,7 @@ impl PageList {
         Ok(())
     }
 
-    async fn convert_from_wikidata(&self, wiki: &str, platform: &Platform) -> Result<()> {
+    async fn convert_from_wikidata(&self, wiki: &str, platform: &dyn QueryContext) -> Result<()> {
         if !self.is_wikidata() {
             return Ok(());
         }
@@ -771,7 +780,7 @@ impl PageList {
         Ok(!titles.is_empty())
     }
 
-    pub async fn search_filter(&self, platform: &Platform, search: &str) -> Result<()> {
+    pub async fn search_filter(&self, platform: &dyn QueryContext, search: &str) -> Result<()> {
         let max_page_number: usize = 10000;
         if self.len() > max_page_number {
             return Err(anyhow!(
@@ -967,6 +976,36 @@ mod tests {
 
         pl1.union(&pl2, None).await.unwrap();
         assert_eq!(pl1.len(), 3); // Foo, Bar, Baz
+    }
+
+    /// Same-wiki merges must not consult the [`QueryContext`] — the cross-wiki
+    /// conversion in `check_before_merging` is the only consumer, and it must
+    /// short-circuit before touching state when the wikis match. Proves the
+    /// dependency-inversion seam works (a stub flows through where a real
+    /// `Platform` used to be required).
+    #[tokio::test]
+    async fn test_union_same_wiki_does_not_consult_query_context() {
+        use crate::app_state::AppState;
+        use crate::query_context::QueryContext;
+        use std::sync::Arc;
+
+        struct PanickingStub;
+        impl QueryContext for PanickingStub {
+            fn state(&self) -> Arc<AppState> {
+                panic!("state() must not be called on the same-wiki union path");
+            }
+            fn has_param(&self, _: &str) -> bool {
+                panic!("has_param() must not be called on the same-wiki union path");
+            }
+        }
+
+        let pl1 = PageList::new_from_wiki("enwiki");
+        pl1.add_entry(make_entry("Foo", 0));
+        let pl2 = PageList::new_from_wiki("enwiki");
+        pl2.add_entry(make_entry("Bar", 0));
+
+        pl1.union(&pl2, Some(&PanickingStub)).await.unwrap();
+        assert_eq!(pl1.len(), 2);
     }
 
     #[tokio::test]

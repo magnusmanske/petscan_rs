@@ -327,6 +327,16 @@ impl Platform {
     }
 }
 
+impl crate::query_context::QueryContext for Platform {
+    fn state(&self) -> Arc<AppState> {
+        // UFCS to avoid recursing into the trait method.
+        Platform::state(self)
+    }
+    fn has_param(&self, key: &str) -> bool {
+        Platform::has_param(self, key)
+    }
+}
+
 // ─── tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
