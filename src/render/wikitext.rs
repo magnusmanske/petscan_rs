@@ -85,6 +85,7 @@ impl Render for RenderWiki {
         Ok(MyResponse {
             s: rows.join("\n"),
             content_type: ContentType::Plain,
+            status: 200,
         })
     }
 

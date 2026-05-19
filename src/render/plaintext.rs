@@ -27,6 +27,7 @@ impl Render for RenderPlainText {
         Ok(MyResponse {
             s: output,
             content_type: ContentType::Plain,
+            status: 200,
         })
     }
 

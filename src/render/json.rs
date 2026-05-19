@@ -51,6 +51,7 @@ impl Render for RenderJSON {
         Ok(MyResponse {
             s: out,
             content_type,
+            status: 200,
         })
     }
 

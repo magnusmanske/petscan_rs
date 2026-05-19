@@ -175,7 +175,12 @@ impl AppState {
     }
 
     pub fn render_error(&self, error: String, form_parameters: &FormParameters) -> MyResponse {
-        match form_parameters.params.get("format").map(|s| s.as_str()) {
+        let status = AppError::classify(&error).status();
+        // Server-side log so monitoring/alerting can detect failures without
+        // needing to scrape response bodies. The audit's P1 #9 noted that
+        // `render_error` was the silent path: HTTP 200 + no log.
+        tracing::error!(error = %error, http_status = status, "rendering error response");
+        let mut response = match form_parameters.params.get("format").map(|s| s.as_str()) {
             Some("") | Some("html") => {
                 let output = format!(
                     "<div class='alert alert-danger' role='alert'>{}</div>",
@@ -192,6 +197,7 @@ impl AppState {
                 MyResponse {
                     s: html.to_string(),
                     content_type: ContentType::HTML,
+                    status: 200,
                 }
             }
             Some("json") => {
@@ -201,8 +207,11 @@ impl AppState {
             _ => MyResponse {
                 s: error,
                 content_type: ContentType::Plain,
+                status: 200,
             },
-        }
+        };
+        response.status = status;
+        response
     }
 
     pub fn output_json(&self, value: &Value, callback: Option<&String>) -> MyResponse {
@@ -214,11 +223,13 @@ impl AppState {
                 MyResponse {
                     s: text,
                     content_type: ContentType::JSONP,
+                    status: 200,
                 }
             }
             None => MyResponse {
                 s: json_string,
                 content_type: ContentType::JSON,
+                status: 200,
             },
         }
     }
@@ -296,6 +307,66 @@ pub struct ThreadGuard {
 impl Drop for ThreadGuard {
     fn drop(&mut self) {
         self.app_state.modify_threads_running(-1);
+    }
+}
+
+/// HTTP-category classification of free-form error strings produced by
+/// the request pipeline. Used by [`AppState::render_error`] to pick the
+/// HTTP status code; previously every failure rendered as 200, which
+/// meant monitoring could not distinguish a DB outage from a successful
+/// zero-result query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppError {
+    /// 400 — user input was rejected.
+    BadRequest,
+    /// 502 — a replica or external API failed.
+    Upstream,
+    /// 500 — anything else (treat as a server bug).
+    Internal,
+}
+
+impl AppError {
+    pub const fn status(self) -> u16 {
+        match self {
+            AppError::BadRequest => 400,
+            AppError::Upstream => 502,
+            AppError::Internal => 500,
+        }
+    }
+
+    /// Heuristic classification by substring match. Errors arrive here as
+    /// `anyhow::Error::to_string()` so a perfect classifier would need
+    /// structured errors at every callsite (P4 #32). This catches the
+    /// common shapes so most user-visible failures get the right status.
+    pub fn classify(error: &str) -> Self {
+        let lc = error.to_lowercase();
+        // Upstream / infrastructure failures (502).
+        if lc.contains("max_user_connections")
+            || lc.contains("connection refused")
+            || lc.contains("connection reset")
+            || lc.contains("timed out")
+            || lc.contains("timeout")
+            || lc.contains("no route to host")
+            || lc.contains("os error 61")
+            || lc.contains("can't talk to wikidata api")
+            || lc.contains("cannot connect to")
+            || lc.contains("site matrix")
+            || lc.contains("sparql")
+            || lc.contains("pagepile")
+        {
+            AppError::Upstream
+        // Client-side input errors (400).
+        } else if lc.contains("invalid")
+            || lc.contains("no command line argument")
+            || lc.contains("missing parameter")
+            || lc.contains("not allowed")
+            || lc.contains("malformed")
+            || lc.contains("no wiki in result")
+        {
+            AppError::BadRequest
+        } else {
+            AppError::Internal
+        }
     }
 }
 
@@ -483,6 +554,89 @@ mod tests {
         assert_eq!(state.threads_running(), 1);
         drop(g2);
         assert_eq!(state.threads_running(), 0);
+    }
+
+    #[test]
+    fn test_app_error_status_codes() {
+        assert_eq!(AppError::BadRequest.status(), 400);
+        assert_eq!(AppError::Upstream.status(), 502);
+        assert_eq!(AppError::Internal.status(), 500);
+    }
+
+    #[test]
+    fn test_app_error_classify_upstream() {
+        for msg in [
+            "Too many connections: max_user_connections exceeded",
+            "Connection refused (os error 61)",
+            "Connection reset by peer",
+            "operation timed out",
+            "Timeout after 30 seconds",
+            "no route to host",
+            "Can't talk to Wikidata API: foo",
+            "DatabaseManager::get_tool_db_connection cannot connect to host:3306",
+            "Can't get site matrix",
+            "SPARQL endpoint returned 503",
+            "PagePile fetch failed",
+        ] {
+            assert_eq!(
+                AppError::classify(msg),
+                AppError::Upstream,
+                "expected Upstream for: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_app_error_classify_bad_request() {
+        for msg in [
+            "Invalid regex: foo",
+            "No command line argument provided",
+            "Missing parameter: psid",
+            "Operation not allowed for this user",
+            "Malformed PSID",
+            "No wiki in result",
+        ] {
+            assert_eq!(
+                AppError::classify(msg),
+                AppError::BadRequest,
+                "expected BadRequest for: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_app_error_classify_internal_default() {
+        for msg in [
+            "panicked at something",
+            "platform.run failed unexpectedly",
+            "Could not insert new PSID",
+            "JSON serialization failed",
+        ] {
+            assert_eq!(
+                AppError::classify(msg),
+                AppError::Internal,
+                "expected Internal for: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_render_error_sets_status_from_classification() {
+        let state = state_with_config(make_minimal_config());
+        let mut params = crate::form_parameters::FormParameters::new();
+        params.params.insert("format".to_string(), "json".to_string());
+
+        let resp_upstream =
+            state.render_error("Connection refused (os error 61)".to_string(), &params);
+        assert_eq!(resp_upstream.status, 502);
+
+        let resp_bad =
+            state.render_error("Invalid parameter foo".to_string(), &params);
+        assert_eq!(resp_bad.status, 400);
+
+        let resp_internal =
+            state.render_error("Could not insert new PSID".to_string(), &params);
+        assert_eq!(resp_internal.status, 500);
     }
 
     #[test]

@@ -62,6 +62,7 @@ impl Render for RenderPagePile {
         Ok(MyResponse {
             s: html,
             content_type: ContentType::HTML,
+            status: 200,
         })
     }
 

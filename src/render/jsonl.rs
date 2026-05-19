@@ -50,6 +50,7 @@ impl Render for RenderJSONL {
         Ok(MyResponse {
             s: out,
             content_type,
+            status: 200,
         })
     }
 

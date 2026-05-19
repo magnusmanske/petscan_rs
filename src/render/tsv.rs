@@ -70,6 +70,7 @@ impl Render for RenderTSV {
                 "\t" => ContentType::TSV,
                 _ => ContentType::Plain, // Fallback
             },
+            status: 200,
         })
     }
 

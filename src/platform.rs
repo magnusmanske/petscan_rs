@@ -53,6 +53,20 @@ mod process;
 pub struct MyResponse {
     pub s: String,
     pub content_type: ContentType,
+    /// Raw HTTP status code; defaults to 200 via `MyResponse::ok`. Use
+    /// `MyResponse::with_status` for error responses.
+    pub status: u16,
+}
+
+impl MyResponse {
+    /// Construct a 200 OK response.
+    pub fn ok(s: impl Into<String>, content_type: ContentType) -> Self {
+        Self {
+            s: s.into(),
+            content_type,
+            status: 200,
+        }
+    }
 }
 
 #[derive(Debug)]

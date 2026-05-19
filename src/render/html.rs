@@ -137,6 +137,7 @@ impl Render for RenderHTML {
         Ok(MyResponse {
             s: html,
             content_type: ContentType::HTML,
+            status: 200,
         })
     }
 

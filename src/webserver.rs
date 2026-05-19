@@ -185,7 +185,9 @@ impl WebServer {
                     }));
             }
         };
+        let status = StatusCode::from_u16(ret.status).unwrap_or(StatusCode::OK);
         let response = Response::builder()
+            .status(status)
             .header(header::CONTENT_TYPE, ret.content_type.as_str())
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
             .body(Full::from(ret.s))
@@ -218,6 +220,7 @@ impl WebServer {
             return MyResponse {
                 s: "Temporary maintenance".to_string(),
                 content_type: ContentType::Plain,
+                status: 200,
             };
         }
 
@@ -231,6 +234,7 @@ impl WebServer {
             return MyResponse {
                 s: self.app_state.get_main_page(interface_language),
                 content_type: ContentType::HTML,
+                status: 200,
             };
         }
 
@@ -275,6 +279,7 @@ impl WebServer {
             return MyResponse {
                 s: html,
                 content_type: ContentType::HTML,
+                status: 200,
             };
         }
 
