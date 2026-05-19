@@ -16,12 +16,14 @@ use mysql_async::Value as MyValue;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tracing::debug;
 use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
 
-const MAX_CATEGORY_BATCH_SIZE: usize = 2500;
+mod helpers;
+use helpers::MAX_CATEGORY_BATCH_SIZE;
+
 const MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
 
 /// Bundles the four mostly-context arguments shared by
@@ -227,34 +229,20 @@ impl SourceDatabaseParameters {
             template_namespace_is_case_insensitive: !ns10_case_sensitive,
             created_by: vec![],
         };
-        ret.templates_yes = Self::vec_to_ucfirst(
+        ret.templates_yes = helpers::vec_to_ucfirst(
             platform.get_param_as_vec("templates_yes", "\n"),
             ret.template_namespace_is_case_insensitive,
         );
-        ret.templates_any = Self::vec_to_ucfirst(
+        ret.templates_any = helpers::vec_to_ucfirst(
             platform.get_param_as_vec("templates_any", "\n"),
             ret.template_namespace_is_case_insensitive,
         );
-        ret.templates_no = Self::vec_to_ucfirst(
+        ret.templates_no = helpers::vec_to_ucfirst(
             platform.get_param_as_vec("templates_no", "\n"),
             ret.template_namespace_is_case_insensitive,
         );
         ret.created_by = platform.get_param_as_vec("created_by", "\n");
         ret
-    }
-
-    pub fn s2u_ucfirst(s: &str, is_case_insensitive: bool) -> String {
-        match is_case_insensitive {
-            true => Title::spaces_to_underscores(&Title::first_letter_uppercase(s)),
-            false => Title::spaces_to_underscores(s),
-        }
-    }
-
-    fn vec_to_ucfirst(input: Vec<String>, is_case_insensitive: bool) -> Vec<String> {
-        input
-            .iter()
-            .map(|s| Self::s2u_ucfirst(s, is_case_insensitive))
-            .collect()
     }
 
     pub fn set_wiki(&mut self, wiki: Option<String>) {
@@ -310,30 +298,6 @@ impl SourceDatabase {
         }
     }
 
-    fn parse_category_depth(cats: &[String], default_depth: u16) -> Vec<SourceDatabaseCatDepth> {
-        cats.iter()
-            .filter_map(|c| {
-                let mut parts = c.split('|');
-                let name = match parts.next() {
-                    Some(n) => n.to_string(),
-                    None => return None,
-                };
-                let depth = match parts.next() {
-                    Some(depth) => {
-                        let depth_signed = depth.parse::<i32>().ok()?;
-                        if depth_signed < 0 {
-                            999
-                        } else {
-                            depth_signed as u16
-                        }
-                    }
-                    None => default_depth,
-                };
-                Some(SourceDatabaseCatDepth { name, depth })
-            })
-            .collect()
-    }
-
     async fn get_categories_in_list(
         &self,
         state: &AppState,
@@ -372,7 +336,7 @@ impl SourceDatabase {
     ) -> Result<Vec<String>> {
         let is_cs = self.params.category_namespace_is_case_insensitive;
         let mut categories_done = HashSet::new();
-        let new_title = SourceDatabaseParameters::s2u_ucfirst(title, is_cs);
+        let new_title = helpers::s2u_ucfirst(title, is_cs);
         categories_done.insert(new_title.to_owned());
 
         let mut categories_todo = vec![];
@@ -395,7 +359,7 @@ impl SourceDatabase {
             let mut categories_new = HashSet::new();
             for result in results {
                 for category in result? {
-                    let title2 = SourceDatabaseParameters::s2u_ucfirst(&category, is_cs);
+                    let title2 = helpers::s2u_ucfirst(&category, is_cs);
                     if !categories_done.contains(&title2) {
                         categories_new.insert(category);
                         categories_done.insert(title2);
@@ -479,7 +443,7 @@ impl SourceDatabase {
             sql.0 += "(SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
         }
 
-        Self::sql_in(input, &mut sql);
+        helpers::sql_in(input, &mut sql);
 
         if !self.params.namespace_ids.is_empty() {
             let v: Vec<String> = self
@@ -490,91 +454,12 @@ impl SourceDatabase {
                 .map(|s| s.to_string())
                 .collect();
             sql.0 += " AND tl_from_namespace";
-            Self::sql_in(&v, &mut sql);
+            helpers::sql_in(&v, &mut sql);
         }
 
         sql.0 += ")";
 
         sql
-    }
-
-    fn sql_in(input: &[String], sql: &mut SQLtuple) {
-        if input.len() == 1 {
-            sql.0 += "=";
-            super::append_sql(sql, super::prep_quote(input));
-        } else {
-            sql.0 += " IN (";
-            super::append_sql(sql, super::prep_quote(input));
-            sql.0 += ")";
-        }
-    }
-
-    fn group_link_list_by_namespace(
-        input: &[String],
-        api: &Api,
-    ) -> HashMap<NamespaceID, Vec<String>> {
-        let mut ret: HashMap<NamespaceID, Vec<String>> = HashMap::new();
-        input.iter().for_each(|title| {
-            let title = Title::new_from_full(title, api);
-            ret.entry(title.namespace_id())
-                .or_default()
-                .push(title.with_underscores());
-        });
-        ret
-    }
-
-    fn links_from_subquery(input: &[String], api: &Api) -> SQLtuple {
-        let mut sql: SQLtuple = ("(".to_string(), vec![]);
-        let nslist = Self::group_link_list_by_namespace(input, api);
-        nslist.iter().for_each(|nsgroup| {
-            if !sql.1.is_empty() {
-                sql.0 += " ) OR ( ";
-            }
-            sql.0 += "( SELECT p_to.page_id FROM page p_to,page p_from,pagelinks,linktarget WHERE pl_target_id=lt_id AND p_from.page_namespace=";
-            sql.0 += &nsgroup.0.to_string();
-            sql.0 += "  AND p_from.page_id=pl_from AND lt_namespace=p_to.page_namespace AND lt_title=p_to.page_title AND p_from.page_title" ;
-            Self::sql_in(nsgroup.1,&mut sql);
-            sql.0 += " )";
-        });
-        sql.0 += ")";
-        sql
-    }
-
-    fn links_to_subquery(input: &[String], api: &Api) -> SQLtuple {
-        let mut sql: SQLtuple = ("(".to_string(), vec![]);
-        let nslist = Self::group_link_list_by_namespace(input, api);
-        nslist.iter().for_each(|nsgroup| {
-            if !sql.1.is_empty() {
-                sql.0 += " ) OR ( ";
-            }
-            sql.0 += "( SELECT DISTINCT pl_from FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND lt_namespace=";
-            sql.0 += &nsgroup.0.to_string();
-            sql.0 += " AND lt_title";
-            Self::sql_in(nsgroup.1, &mut sql);
-            sql.0 += " )";
-        });
-        sql.0 += ")";
-        sql
-    }
-
-    fn iterate_category_batches(categories: &[Vec<String>], start: usize) -> Vec<Vec<Vec<String>>> {
-        let mut ret: Vec<Vec<Vec<String>>> = vec![];
-        categories[start]
-            .chunks(MAX_CATEGORY_BATCH_SIZE * 10)
-            .for_each(|c| {
-                if start + 1 >= categories.len() {
-                    let to_add = vec![c.to_vec()];
-                    ret.push(to_add);
-                    return;
-                }
-                let tmp = Self::iterate_category_batches(categories, start + 1);
-                tmp.iter().for_each(|t| {
-                    let mut to_add = vec![c.to_vec()];
-                    to_add.append(&mut t.to_owned());
-                    ret.push(to_add);
-                });
-            });
-        ret
     }
 
     async fn get_pages_for_category_batch(
@@ -677,7 +562,7 @@ impl SourceDatabase {
             .parse_category_list(
                 state,
                 &wiki,
-                &Self::parse_category_depth(&self.params.cat_pos, self.params.depth),
+                &helpers::parse_category_depth(&self.params.cat_pos, self.params.depth),
             )
             .await?;
 
@@ -686,7 +571,7 @@ impl SourceDatabase {
             .parse_category_list(
                 state,
                 &wiki,
-                &Self::parse_category_depth(&self.params.cat_neg, self.params.depth),
+                &helpers::parse_category_depth(&self.params.cat_neg, self.params.depth),
             )
             .await?;
 
@@ -772,7 +657,7 @@ impl SourceDatabase {
         state: &AppState,
     ) -> Result<PageList> {
         let category_batches = if self.params.use_new_category_mode {
-            Self::iterate_category_batches(&self.cat_pos, 0)
+            helpers::iterate_category_batches(&self.cat_pos, 0)
         } else {
             vec![self.cat_pos.to_owned()]
         };
@@ -1237,7 +1122,7 @@ impl SourceDatabase {
         // Links to all
         self.params.links_to_all.iter().for_each(|l| {
             sql.0 += " AND p.page_id IN ";
-            super::append_sql(sql, Self::links_to_subquery(&[l.to_owned()], &api));
+            super::append_sql(sql, helpers::links_to_subquery(&[l.to_owned()], &api));
         });
 
         // Links to any
@@ -1245,7 +1130,7 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id IN ";
             super::append_sql(
                 sql,
-                Self::links_to_subquery(&self.params.links_to_any, &api),
+                helpers::links_to_subquery(&self.params.links_to_any, &api),
             );
         }
 
@@ -1254,7 +1139,7 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id NOT IN ";
             super::append_sql(
                 sql,
-                Self::links_to_subquery(&self.params.links_to_none, &api),
+                helpers::links_to_subquery(&self.params.links_to_none, &api),
             );
         }
     }
@@ -1263,7 +1148,7 @@ impl SourceDatabase {
         // Links from all
         self.params.linked_from_all.iter().for_each(|l| {
             sql.0 += " AND p.page_id IN ";
-            super::append_sql(sql, Self::links_from_subquery(&[l.to_owned()], api));
+            super::append_sql(sql, helpers::links_from_subquery(&[l.to_owned()], api));
         });
 
         // Links from any
@@ -1271,7 +1156,7 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id IN ";
             super::append_sql(
                 sql,
-                Self::links_from_subquery(&self.params.linked_from_any, api),
+                helpers::links_from_subquery(&self.params.linked_from_any, api),
             );
         }
 
@@ -1280,7 +1165,7 @@ impl SourceDatabase {
             sql.0 += " AND p.page_id NOT IN ";
             super::append_sql(
                 sql,
-                Self::links_from_subquery(&self.params.linked_from_none, api),
+                helpers::links_from_subquery(&self.params.linked_from_none, api),
             );
         }
     }
@@ -1328,7 +1213,7 @@ impl SourceDatabase {
             cats.sort_unstable();
             cats.dedup();
             sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
-            Self::sql_in(&cats, sql);
+            helpers::sql_in(&cats, sql);
             sql.0 += ")";
         }
     }
@@ -1342,7 +1227,7 @@ impl SourceDatabase {
                 .map(|ns| ns.to_string())
                 .collect::<Vec<String>>();
             sql.0 += " AND p.page_namespace";
-            Self::sql_in(namespace_ids, sql);
+            helpers::sql_in(namespace_ids, sql);
         }
     }
 
