@@ -217,6 +217,22 @@ impl AppState {
         self.try_shutdown();
     }
 
+    /// Read-only snapshot of the in-flight request counter.
+    pub fn threads_running(&self) -> i64 {
+        self.threads_running.read().map(|x| *x).unwrap_or(0)
+    }
+
+    /// Increment the in-flight request counter and return an RAII guard that
+    /// decrements on drop. Use this in preference to direct
+    /// `modify_threads_running` pairs so that a panic on the request path
+    /// cannot leave the counter inflated forever.
+    pub fn track_thread(&self) -> ThreadGuard {
+        self.modify_threads_running(1);
+        ThreadGuard {
+            app_state: self.clone(),
+        }
+    }
+
     pub fn is_shutting_down(&self) -> bool {
         self.shutting_down.read().is_ok_and(|x| *x)
     }
@@ -234,6 +250,20 @@ impl AppState {
     /// Expose the underlying [`DatabaseManager`] for callers that need direct access.
     pub const fn db_manager(&self) -> &DatabaseManager {
         &self.db_manager
+    }
+}
+
+/// RAII guard returned by [`AppState::track_thread`]. Decrements the
+/// in-flight request counter when dropped, including on unwind.
+#[must_use = "ThreadGuard decrements the counter when dropped; binding it to `_` drops it immediately"]
+#[derive(Debug)]
+pub struct ThreadGuard {
+    app_state: AppState,
+}
+
+impl Drop for ThreadGuard {
+    fn drop(&mut self) {
+        self.app_state.modify_threads_running(-1);
     }
 }
 
@@ -397,6 +427,44 @@ mod tests {
         assert!(!state.is_shutting_down());
         state.shut_down();
         assert!(state.is_shutting_down());
+    }
+
+    #[test]
+    fn test_track_thread_guard_increments_and_decrements() {
+        let state = AppState::default();
+        assert_eq!(state.threads_running(), 0);
+        {
+            let _guard = state.track_thread();
+            assert_eq!(state.threads_running(), 1);
+        }
+        assert_eq!(state.threads_running(), 0);
+    }
+
+    #[test]
+    fn test_track_thread_guards_stack() {
+        let state = AppState::default();
+        let g1 = state.track_thread();
+        let g2 = state.track_thread();
+        assert_eq!(state.threads_running(), 2);
+        drop(g1);
+        assert_eq!(state.threads_running(), 1);
+        drop(g2);
+        assert_eq!(state.threads_running(), 0);
+    }
+
+    #[test]
+    fn test_track_thread_guard_decrements_on_panic_unwind() {
+        // Even if a request panics, the guard's Drop must restore the
+        // counter. Verify via catch_unwind.
+        let state = AppState::default();
+        let state_for_closure = state.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = state_for_closure.track_thread();
+            assert_eq!(state_for_closure.threads_running(), 1);
+            panic!("simulated request failure");
+        }));
+        assert!(result.is_err());
+        assert_eq!(state.threads_running(), 0);
     }
 
     #[tokio::test]

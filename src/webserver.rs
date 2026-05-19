@@ -257,7 +257,10 @@ impl WebServer {
         };
 
         // Actually do something useful!
-        self.app_state.modify_threads_running(1);
+        // The guard increments the in-flight counter now and decrements on
+        // drop — including unwind — so a panic anywhere below cannot leave
+        // the counter permanently inflated.
+        let _thread_guard = self.app_state.track_thread();
         let mut platform = Platform::new_from_parameters(&form_parameters, self.app_state.clone());
         Platform::profile("platform initialized", None);
         let platform_result = platform.run().await;
@@ -267,7 +270,6 @@ impl WebServer {
                 tracing::warn!("Could not log query {started_query_id} end:{e}\n{form_parameters}");
             }
         }
-        self.app_state.modify_threads_running(-1);
         Platform::profile("platform run complete", None);
 
         // Successful run?
