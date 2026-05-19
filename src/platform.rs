@@ -664,21 +664,6 @@ mod tests {
         .await;
     }
 
-    // Deactivated: connection to frwiki_p required
-    // #[tokio::test]
-    // async fn test_en_categories_sparql_common_wiki_other() {
-    //     check_results_for_psid(15960820, "frwiki", vec![Title::new("Magnus Manske", 0)]).await;
-    // }
-
-    // Deactivated: connection to enwikiquote_p required
-    // #[tokio::test]
-    // async fn test_trim_extended_whitespace() {
-    //     let platform = run_psid(15015735).await; // The categories contain a left-to-right mark
-    //     let result = platform.result.unwrap();
-    //     let entries = entries_from_result(result);
-    //     assert!(entries.len() > 20);
-    // }
-
     #[tokio::test]
     #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_template_talk_pages() {

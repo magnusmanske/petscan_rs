@@ -934,40 +934,6 @@ mod tests {
         assert!(!wdfist.is_valid_filename("foobar.svg"));
     }
 
-    // Deactivated: connection to cewiki_p required
-    // #[tokio::test]
-    // async fn test_follow_language_links() {
-    //     let params: Vec<(&str, &str)> = vec![];
-    //     let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
-
-    //     // All files
-    //     wdfist.wdf_allow_svg = true;
-    //     wdfist.follow_language_links().await.unwrap();
-    //     assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
-    //     assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() > 90);
-
-    //     // No SVG
-    //     wdfist.item2files.clear();
-    //     wdfist.wdf_allow_svg = false;
-    //     wdfist.follow_language_links().await.unwrap();
-    //     assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
-    //     assert!(wdfist.item2files.get(&"Q1481".to_string()).unwrap().len() < 50);
-    //     assert!(wdfist
-    //         .item2files
-    //         .get(&"Q1481".to_string())
-    //         .unwrap()
-    //         .contains_key(&"Felsberg_bl_von_turm_zwei_wv_ds_09_2006.JPG".to_string()));
-
-    //     // Page images
-    //     let params: Vec<(&str, &str)> = vec![("wdf_only_page_images", "1")];
-    //     let mut wdfist = get_wdfist(params, vec!["Q1481"]).await;
-    //     wdfist.follow_language_links().await.unwrap();
-    //     assert!(wdfist.item2files.contains_key(&"Q1481".to_string()));
-    //     let x = wdfist.item2files.get(&"Q1481".to_string()).unwrap();
-    //     assert!(x.len() < 50);
-    //     assert!(x.contains_key(&"Felsberg_(Hessen).jpg".to_string()));
-    // }
-
     #[tokio::test]
     #[ignore = "requires live config.json + Wikimedia APIs (Wikidata/Commons); run with --ignored"]
     async fn test_follow_coords() {
