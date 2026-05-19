@@ -1,5 +1,4 @@
 use crate::content_type::ContentType;
-use crate::form_parameters::FormParameters;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::{MyResponse, Platform};
 use crate::render::params::RenderParams;
@@ -182,7 +181,7 @@ impl Render for RenderHTML {
                     Ok(url) => url,
                     _ => return String::new(),
                 };
-                let file = Self::escape_attribute(img);
+                let file = super::escape_attribute(img);
                 let url = format!("{}/wiki/File:{}", &server_url, &file);
                 let src = format!(
                     "{}/wiki/Special:Redirect/file/{}?width={}",
@@ -310,14 +309,6 @@ impl RenderHTML {
         Box::new(Self {})
     }
 
-    fn escape_attribute(s: &str) -> String {
-        FormParameters::percent_encode(s)
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&#39;")
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn render_wikilink(
         title: &Title,
@@ -340,7 +331,7 @@ impl RenderHTML {
             Some(ft) => ft,
             None => format!("{title:?}"),
         };
-        let url = server + "/wiki/" + &Self::escape_attribute(&full_title);
+        let url = server + "/wiki/" + &super::escape_attribute(&full_title);
         let label = match alt_label {
             Some(label) => label.to_string(),
             None => match is_page_link {

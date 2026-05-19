@@ -8,6 +8,7 @@ pub mod plaintext;
 pub mod tsv;
 pub mod wikitext;
 
+use crate::form_parameters::FormParameters;
 use crate::pagelist_entry::{LinkCount, PageListEntry};
 use crate::platform::{MyResponse, Platform};
 use crate::render::params::RenderParams;
@@ -16,6 +17,17 @@ use async_trait::async_trait;
 
 pub static AUTOLIST_WIKIDATA: &str = "www.wikidata.org";
 pub static AUTOLIST_COMMONS: &str = "commons.wikimedia.org";
+
+/// Percent-encode `s` and then escape the four XML/HTML attribute specials
+/// (`<`, `>`, `"`, `'`). Used by the HTML and KML renderers when building
+/// `href`/`src`/`name="..."`-style attributes.
+pub(crate) fn escape_attribute(s: &str) -> String {
+    FormParameters::percent_encode(s)
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
 
 #[async_trait]
 pub trait Render {

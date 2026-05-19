@@ -1,5 +1,4 @@
 use crate::content_type::ContentType;
-use crate::form_parameters::FormParameters;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::{MyResponse, Platform};
 use crate::render::Render;
@@ -60,7 +59,7 @@ impl Render for RenderKML {
                     Some(ft) => ft,
                     None => format!("{title:?}"),
                 };
-                let url = format!("{}/wiki/{}", &server, &Self::escape_attribute(&full_title));
+                let url = format!("{}/wiki/{}", &server, &super::escape_attribute(&full_title));
                 kml += format!(
                     "<Data name=\"url\"><value>{}</value></Data>",
                     Self::escape_xml(&url)
@@ -68,7 +67,7 @@ impl Render for RenderKML {
                 .as_str();
 
                 if let Some(img) = entry.get_page_image() {
-                    let file = Self::escape_attribute(&img);
+                    let file = super::escape_attribute(&img);
                     let src = format!(
                         "{}/wiki/Special:Redirect/file/{}?width={}",
                         &server, &file, 120
@@ -141,14 +140,6 @@ impl RenderKML {
             .replace('"', "&quot;")
             .replace('\'', "&apos;")
     }
-
-    fn escape_attribute(s: &str) -> String {
-        FormParameters::percent_encode(s)
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&#39;")
-    }
 }
 
 #[cfg(test)]
@@ -197,6 +188,6 @@ mod tests {
 
     #[test]
     fn test_escape_attribute() {
-        assert_eq!(RenderKML::escape_attribute("<>&\"'"), "%3C%3E%26%22%27");
+        assert_eq!(super::super::escape_attribute("<>&\"'"), "%3C%3E%26%22%27");
     }
 }
