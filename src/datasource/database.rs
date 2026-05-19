@@ -35,6 +35,29 @@ struct PrimaryQueryArgs<'a> {
     is_before_after_done: &'a mut bool,
     api: Api,
 }
+
+/// How multiple categories should be combined. Previously a free-form
+/// `String` field with `"subset"`/`"union"` magic values and an explicit
+/// `_ => Err(...)` fall-through; an enum makes the dispatch total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CombineMode {
+    /// Intersect category sets (default).
+    #[default]
+    Subset,
+    /// Take the union of category sets.
+    Union,
+}
+
+impl CombineMode {
+    /// Parse from the user-facing query-string value. Anything unrecognised
+    /// (including missing) falls back to [`CombineMode::Subset`].
+    pub fn from_param(s: Option<&str>) -> Self {
+        match s {
+            Some("union") => Self::Union,
+            _ => Self::Subset,
+        }
+    }
+}
 const PAGE_SELECT_PREFIX: &str = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len";
 
 type PrimaryResultRow = (u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount);
@@ -56,7 +79,7 @@ pub struct SourceDatabaseCatDepth {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceDatabaseParameters {
-    combine: String,
+    combine: CombineMode,
     namespace_ids: Vec<usize>,
     linked_from_all: Vec<String>,
     linked_from_any: Vec<String>,
@@ -106,7 +129,7 @@ pub struct SourceDatabaseParameters {
 impl SourceDatabaseParameters {
     pub fn new() -> Self {
         Self {
-            combine: "subset".to_string(),
+            combine: CombineMode::Subset,
             page_wikidata_item: "any".to_string(),
             page_image: "any".to_string(),
             ores_prediction: "any".to_string(),
@@ -132,19 +155,17 @@ impl SourceDatabaseParameters {
         } else {
             depth_signed as u16
         };
-        let mut combine = match platform.form_parameters().params.get("combination") {
-            Some(x) => {
-                if x == "union" {
-                    x.to_string()
-                } else {
-                    "subset".to_string()
-                }
-            }
-            None => "subset".to_string(),
-        };
+        let mut combine = CombineMode::from_param(
+            platform
+                .form_parameters()
+                .params
+                .get("combination")
+                .map(|s| s.as_str()),
+        );
         let cat_pos = platform.get_param_as_vec("categories", "\n");
-        if cat_pos.len() == 1 && combine == "subset" {
-            combine = "union".to_string(); // Easier to construct
+        if cat_pos.len() == 1 && combine == CombineMode::Subset {
+            // Single category — union is structurally equivalent and cheaper to construct.
+            combine = CombineMode::Union;
         }
         let ns10_case_sensitive = platform.get_namespace_case_sensitivity(10).await;
         let ns14_case_sensitive = platform.get_namespace_case_sensitivity(14).await;
@@ -565,8 +586,8 @@ impl SourceDatabase {
     ) -> Result<()> {
         let subquery = "SELECT cl_from,cl_target_id,lt_title from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
         let mut sql = super::sql_tuple();
-        match self.params.combine.as_str() {
-            "subset" => {
+        match self.params.combine {
+            CombineMode::Subset => {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,
                 	(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,
                  p.page_len".to_string() ;
@@ -581,7 +602,7 @@ impl SourceDatabase {
                     sql.0 += ")";
                 }
             }
-            "union" => {
+            CombineMode::Union => {
                 let mut tmp: HashSet<String> = HashSet::new();
                 category_batch.iter().for_each(|group| {
                     group.iter().for_each(|s| {
@@ -597,9 +618,6 @@ impl SourceDatabase {
                 sql.0 += &format!(" FROM ( {subquery} IN (");
                 super::append_sql(&mut sql, super::prep_quote(&tmp));
                 sql.0 += ")) cl0";
-            }
-            other => {
-                return Err(anyhow!("self.params.combine is '{other}'"));
             }
         }
         sql.0 += " INNER JOIN (page p";

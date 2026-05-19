@@ -42,6 +42,44 @@ pub enum DatabaseCluster {
     X3,
 }
 
+/// Distinguishes Wikidata item entities (Q-prefixed, namespace 0) from
+/// property entities (P-prefixed, namespace 120). The two flavours map to
+/// different `wbt_*` term-store tables and column names; keeping the
+/// per-variant lookup colocated makes `add_wikidata_labels_for_namespace`
+/// total over its inputs (no more `_ => return None` filter arms).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WikidataEntityType {
+    Item,
+    Property,
+}
+
+impl WikidataEntityType {
+    pub const fn prefix(self) -> &'static str {
+        match self {
+            Self::Item => "Q",
+            Self::Property => "P",
+        }
+    }
+    pub const fn terms_table(self) -> &'static str {
+        match self {
+            Self::Item => "wbt_item_terms",
+            Self::Property => "wbt_property_terms",
+        }
+    }
+    pub const fn id_field(self) -> &'static str {
+        match self {
+            Self::Item => "wbit_item_id",
+            Self::Property => "wbpt_property_id",
+        }
+    }
+    pub const fn term_in_lang_field(self) -> &'static str {
+        match self {
+            Self::Item => "wbit_term_in_lang_id",
+            Self::Property => "wbpt_term_in_lang_id",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PageList {
     wiki: RwLock<Option<String>>,
@@ -488,10 +526,20 @@ impl PageList {
         }
 
         if let Some(wikidata_language) = wikidata_language {
-            self.add_wikidata_labels_for_namespace(0, "item", &wikidata_language, platform)
-                .await?;
-            self.add_wikidata_labels_for_namespace(120, "property", &wikidata_language, platform)
-                .await?;
+            self.add_wikidata_labels_for_namespace(
+                0,
+                WikidataEntityType::Item,
+                &wikidata_language,
+                platform,
+            )
+            .await?;
+            self.add_wikidata_labels_for_namespace(
+                120,
+                WikidataEntityType::Property,
+                &wikidata_language,
+                platform,
+            )
+            .await?;
         }
         Platform::profile("end load_missing_metadata", None);
         Ok(())
@@ -500,36 +548,19 @@ impl PageList {
     async fn add_wikidata_labels_for_namespace(
         &self,
         namespace_id: NamespaceID,
-        entity_type: &str,
+        entity_type: WikidataEntityType,
         wikidata_language: &str,
         platform: &Platform,
     ) -> Result<()> {
         // wbt_ done
+        let prefix = entity_type.prefix();
+        let table = entity_type.terms_table();
+        let field_name = entity_type.id_field();
+        let term_in_lang_id = entity_type.term_in_lang_field();
         let batches: Vec<SQLtuple> = self
             .to_sql_batches_namespace(PAGE_BATCH_SIZE, namespace_id)
             .iter_mut()
             .filter_map(|sql_batch| {
-                // entity_type and namespace_id are "database safe"
-                let prefix = match entity_type {
-                    "item" => "Q",
-                    "property" => "P",
-                    _ => return None,
-                };
-                let table = match entity_type {
-                    "item" => "wbt_item_terms",
-                    "property" => "wbt_property_terms",
-                    _ => return None,
-                };
-                let field_name = match entity_type {
-                    "item" => "wbit_item_id",
-                    "property" => "wbpt_property_id",
-                    _ => return None,
-                };
-                let term_in_lang_id = match entity_type {
-                    "item" => "wbit_term_in_lang_id",
-                    "property" => "wbpt_term_in_lang_id",
-                    _ => return None,
-                };
                 let id_params: Vec<MyValue> = sql_batch
                     .1
                     .iter()
