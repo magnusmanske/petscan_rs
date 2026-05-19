@@ -45,6 +45,7 @@ extern crate serde_json;
 pub mod app_state;
 pub mod combination;
 pub mod command_line;
+pub mod config;
 pub mod content_type;
 pub mod database_manager;
 pub mod datasource;

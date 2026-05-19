@@ -1,16 +1,16 @@
 use crate::app_state::AppState;
+use crate::config::Config;
 use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
 use crate::platform::{MyResponse, Platform};
 use anyhow::Result;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
-use std::collections::HashMap;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, header};
 use hyper_util::rt::TokioIo;
-use serde_json::Value;
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,19 +34,19 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 #[derive(Debug, Clone, Default)]
 pub struct WebServer {
     app_state: Arc<AppState>,
-    petscan_config: Arc<Value>,
+    petscan_config: Arc<Config>,
     /// Static files cached at startup: URL path -> (bytes, content-type).
     static_files: Arc<HashMap<&'static str, (Bytes, &'static str)>>,
 }
 
 impl WebServer {
-    pub fn new(app_state: Arc<AppState>, petscan_config: Value) -> Self {
+    pub fn new(app_state: Arc<AppState>, petscan_config: Config) -> Self {
         const STATIC: &[(&str, &str)] = &[
-            ("/index.html",  "text/html; charset=utf-8"),
+            ("/index.html", "text/html; charset=utf-8"),
             ("/autolist.js", "application/javascript; charset=utf-8"),
-            ("/main.js",     "application/javascript; charset=utf-8"),
+            ("/main.js", "application/javascript; charset=utf-8"),
             ("/favicon.ico", "image/x-icon"),
-            ("/robots.txt",  "text/plain; charset=utf-8"),
+            ("/robots.txt", "text/plain; charset=utf-8"),
         ];
         let mut static_files = HashMap::with_capacity(STATIC.len());
         for (url_path, content_type) in STATIC {
@@ -98,11 +98,12 @@ impl WebServer {
     async fn start_webserver(&self) -> Result<TcpListener> {
         use anyhow::Context;
         // Run on IP/port
-        let port = self.petscan_config["http_port"].as_u64().unwrap_or(80) as u16;
-        let ip_address = self.petscan_config["http_server"]
-            .as_str()
-            .unwrap_or("0.0.0.0")
-            .to_string();
+        let port = self.petscan_config.http_port.unwrap_or(80);
+        let ip_address = self
+            .petscan_config
+            .http_server
+            .clone()
+            .unwrap_or_else(|| "0.0.0.0".to_string());
         let ip_address: std::net::Ipv4Addr = ip_address
             .parse()
             .with_context(|| format!("Invalid http_server IP address: '{ip_address}'"))?;

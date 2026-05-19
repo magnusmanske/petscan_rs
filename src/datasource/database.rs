@@ -1382,10 +1382,9 @@ impl SourceDatabase {
 mod tests {
     use super::*;
     use crate::app_state::AppState;
+    use crate::config::Config;
     use crate::form_parameters::FormParameters;
-    use serde_json::Value;
     use std::env;
-    use std::fs::File;
     use std::sync::Arc;
 
     async fn get_state() -> Arc<AppState> {
@@ -1395,9 +1394,7 @@ mod tests {
             .unwrap()
             .to_string();
         let path = basedir.to_owned() + "/config.json";
-        let file = File::open(path).expect("Can not open config file");
-        let petscan_config: Value =
-            serde_json::from_reader(file).expect("Can not parse JSON from config file");
+        let petscan_config = Config::from_file(&path).expect("config.json load failed in test");
         Arc::new(
             AppState::new_from_config(&petscan_config)
                 .await
@@ -1474,5 +1471,4 @@ mod tests {
         let result = simulate_category_query(params).await.unwrap();
         assert!(!result.is_empty());
     }
-
 }

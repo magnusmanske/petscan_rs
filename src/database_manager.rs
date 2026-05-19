@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::pagelist::DatabaseCluster;
 use anyhow::{Result, anyhow};
 use chrono::prelude::*;
@@ -5,7 +6,6 @@ use mysql_async as my;
 use mysql_async::Value as MyValue;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -74,12 +74,9 @@ struct Credentials {
 
 #[derive(Debug, Clone, Default)]
 pub struct DatabaseManager {
-    /// Full application config (used for feature flags, schema name, and the
-    /// local-dev fallback credentials / port-mapping).
-    config: Value,
-    /// Port overrides for local SSH-tunnel testing.  Only populated when the
-    /// config contains a `port_mapping` object.
-    port_mapping: HashMap<String, u16>,
+    /// Typed application config (feature flags, schema name, and local-dev
+    /// fallback credentials / port-mapping).
+    config: Config,
     /// Per-`(wiki, cluster)` connection pools, lazily created. Pools live
     /// for the lifetime of the manager and reuse TCP/TLS/auth handshakes.
     wiki_pools: Arc<Mutex<HashMap<(String, DatabaseCluster), my::Pool>>>,
@@ -88,25 +85,16 @@ pub struct DatabaseManager {
 }
 
 impl DatabaseManager {
-    /// Initialise from the application config JSON value.
+    /// Initialise from the application config.
     ///
     /// On Toolforge, database credentials are supplied by `~/replica.my.cnf`
     /// (read on-demand by the `toolforge` crate).  When that file is absent
-    /// (local development), the legacy `config["user"]` / `config["password"]`
-    /// fields and `config["port_mapping"]` are used as a fallback so that
-    /// existing SSH-tunnel workflows continue to work unchanged.
-    pub fn new_from_config(config: &Value) -> Self {
-        let port_mapping = config["port_mapping"]
-            .as_object()
-            .map(|x| x.to_owned())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.as_i64().unwrap_or_default() as u16))
-            .collect();
-
+    /// (local development), `config.user` / `config.password` and
+    /// `config.port_mapping` are used as a fallback so existing SSH-tunnel
+    /// workflows continue to work unchanged.
+    pub fn new_from_config(config: &Config) -> Self {
         Self {
-            config: config.to_owned(),
-            port_mapping,
+            config: config.clone(),
             wiki_pools: Arc::new(Mutex::new(HashMap::new())),
             tool_db_pool: Arc::new(Mutex::new(None)),
         }
@@ -120,10 +108,9 @@ impl DatabaseManager {
     /// Intended for unit tests that exercise config-derived logic without
     /// needing a real database connection.
     #[cfg(test)]
-    pub(crate) fn with_config(config: Value) -> Self {
+    pub(crate) fn with_config(config: Config) -> Self {
         Self {
             config,
-            port_mapping: HashMap::new(),
             wiki_pools: Arc::new(Mutex::new(HashMap::new())),
             tool_db_pool: Arc::new(Mutex::new(None)),
         }
@@ -133,12 +120,12 @@ impl DatabaseManager {
     // Config-based feature flags
     // ------------------------------------------------------------------
 
-    pub fn using_file_table(&self) -> bool {
-        self.config["use_file_table"].as_bool().unwrap_or(false)
+    pub const fn using_file_table(&self) -> bool {
+        self.config.use_file_table
     }
 
     pub fn get_restart_code(&self) -> Option<&str> {
-        self.config["restart-code"].as_str()
+        self.config.restart_code.as_deref()
     }
 
     // ------------------------------------------------------------------
@@ -160,20 +147,16 @@ impl DatabaseManager {
         }
 
         // Fall back to config.json (local dev).
-        let user = self.config["user"]
-            .as_str()
-            .ok_or_else(|| {
-                anyhow!(
-                    "No ~/replica.my.cnf found and no 'user' key in config – \
-                     cannot resolve database credentials"
-                )
-            })?
-            .to_string();
-        let password = self.config["password"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        Ok(Credentials { user, password })
+        if self.config.user.is_empty() {
+            return Err(anyhow!(
+                "No ~/replica.my.cnf found and no 'user' key in config – \
+                 cannot resolve database credentials"
+            ));
+        }
+        Ok(Credentials {
+            user: self.config.user.clone(),
+            password: self.config.password.clone(),
+        })
     }
 
     // ------------------------------------------------------------------
@@ -228,20 +211,21 @@ impl DatabaseManager {
         let (host, schema) = self.db_host_and_schema_for_wiki(wiki, cluster);
 
         // Port: prefer an explicit port_mapping entry (local SSH tunnels),
-        // then fall back to config["db_port"], then the default 3306.
+        // then fall back to config.db_port, then the default 3306.
         let port_key = match cluster {
             DatabaseCluster::X3 => "x3",
             _ => wiki,
         };
         let port: u16 = self
+            .config
             .port_mapping
             .get(port_key)
             .copied()
-            .unwrap_or_else(|| self.config["db_port"].as_u64().unwrap_or(3306) as u16);
+            .unwrap_or_else(|| self.config.db_port.unwrap_or(3306));
 
         // When running locally (host = 127.0.0.1 in config), always bind to
         // 127.0.0.1 regardless of what db_host_and_schema_for_wiki computed.
-        let effective_host = if self.config["host"].as_str() == Some("127.0.0.1") {
+        let effective_host = if self.config.host == "127.0.0.1" {
             "127.0.0.1".to_string()
         } else {
             host
@@ -349,10 +333,10 @@ impl DatabaseManager {
     /// the host is 127.0.0.1, matching the conventional local SSH-tunnel
     /// mapping).
     pub async fn get_tool_db_connection(&self) -> Result<my::Conn> {
-        let schema = self.config["schema"]
-            .as_str()
-            .ok_or_else(|| anyhow!("No schema key in config file"))?
-            .to_string();
+        if self.config.schema.is_empty() {
+            return Err(anyhow!("No schema key in config file"));
+        }
+        let schema = self.config.schema.clone();
 
         // Try toolforge (replica.my.cnf) first.
         let (host, user, password, port) = if let Ok(info) = toolforge::db::toolsdb(schema.clone())
@@ -361,24 +345,18 @@ impl DatabaseManager {
             (info.host, info.user, info.password, port)
         } else {
             // Local-dev fallback: use config.json credentials.
-            let host = self.config["host"]
-                .as_str()
-                .ok_or_else(|| anyhow!("No host key in config file"))?
-                .to_string();
-            let user = self.config["user"]
-                .as_str()
-                .ok_or_else(|| anyhow!("No user key in config file"))?
-                .to_string();
-            let password = self.config["password"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let port: u16 = if host == "127.0.0.1" {
-                // Conventional local SSH-tunnel port for tools-db.
-                self.config["db_port"].as_u64().unwrap_or(3308) as u16
-            } else {
-                self.config["db_port"].as_u64().unwrap_or(3306) as u16
-            };
+            if self.config.host.is_empty() {
+                return Err(anyhow!("No host key in config file"));
+            }
+            if self.config.user.is_empty() {
+                return Err(anyhow!("No user key in config file"));
+            }
+            let host = self.config.host.clone();
+            let user = self.config.user.clone();
+            let password = self.config.password.clone();
+            // Conventional local SSH-tunnel port for tools-db is 3308.
+            let default_port: u16 = if host == "127.0.0.1" { 3308 } else { 3306 };
+            let port = self.config.db_port.unwrap_or(default_port);
             (host, user, password, port)
         };
 
@@ -388,9 +366,7 @@ impl DatabaseManager {
                 p.clone()
             } else {
                 let pool_opts = my::PoolOpts::default()
-                    .with_constraints(
-                        my::PoolConstraints::new(0, TOOL_DB_POOL_MAX).expect("valid"),
-                    )
+                    .with_constraints(my::PoolConstraints::new(0, TOOL_DB_POOL_MAX).expect("valid"))
                     .with_inactive_connection_ttl(POOL_INACTIVE_TTL);
                 let opts = my::OptsBuilder::default()
                     .ip_or_hostname(host.clone())

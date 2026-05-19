@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::content_type::ContentType;
 use crate::database_manager::DatabaseManager;
 use crate::form_parameters::FormParameters;
@@ -89,7 +90,7 @@ impl Default for AppState {
 }
 
 impl AppState {
-    pub async fn new_from_config(config: &Value) -> Result<Self> {
+    pub async fn new_from_config(config: &Config) -> Result<Self> {
         let main_page_path = "./html/index.html";
         // Both the Wikidata API handshake and the SiteMatrix fetch are
         // network-dependent and previously hard-failed at startup if
@@ -426,9 +427,7 @@ impl AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
     use std::env;
-    use std::fs::File;
 
     async fn get_new_state() -> Arc<AppState> {
         let basedir = env::current_dir()
@@ -437,9 +436,7 @@ mod tests {
             .unwrap()
             .to_string();
         let path = basedir.to_owned() + "/config.json";
-        let file = File::open(path).expect("Can not open config file");
-        let petscan_config: Value =
-            serde_json::from_reader(file).expect("Can not parse JSON from config file");
+        let petscan_config = Config::from_file(&path).expect("config.json load failed in test");
         Arc::new(
             AppState::new_from_config(&petscan_config)
                 .await
@@ -452,14 +449,15 @@ mod tests {
     }
 
     /// Build a minimal config for unit tests that don't need a real DB connection.
-    fn make_minimal_config() -> Value {
-        serde_json::json!({
-            "schema": "test_schema",
-        })
+    fn make_minimal_config() -> Config {
+        Config {
+            schema: "test_schema".into(),
+            ..Default::default()
+        }
     }
 
     /// Helper: build an [`AppState`] whose [`DatabaseManager`] is seeded with the given config.
-    fn state_with_config(config: Value) -> AppState {
+    fn state_with_config(config: Config) -> AppState {
         AppState {
             db_manager: DatabaseManager::with_config(config),
             ..Default::default()
@@ -486,22 +484,31 @@ mod tests {
 
     #[test]
     fn test_using_file_table() {
-        let state_true = state_with_config(serde_json::json!({ "use_file_table": true }));
+        let state_true = state_with_config(Config {
+            use_file_table: true,
+            ..Default::default()
+        });
         assert!(state_true.using_file_table());
 
-        let state_false = state_with_config(serde_json::json!({ "use_file_table": false }));
+        let state_false = state_with_config(Config {
+            use_file_table: false,
+            ..Default::default()
+        });
         assert!(!state_false.using_file_table());
 
-        let state_missing = state_with_config(serde_json::json!({}));
+        let state_missing = state_with_config(Config::default());
         assert!(!state_missing.using_file_table());
     }
 
     #[test]
     fn test_get_restart_code() {
-        let state = state_with_config(serde_json::json!({ "restart-code": "abc123" }));
+        let state = state_with_config(Config {
+            restart_code: Some("abc123".into()),
+            ..Default::default()
+        });
         assert_eq!(state.get_restart_code(), Some("abc123"));
 
-        let state2 = state_with_config(serde_json::json!({}));
+        let state2 = state_with_config(Config::default());
         assert_eq!(state2.get_restart_code(), None);
     }
 
@@ -719,18 +726,18 @@ mod tests {
     fn test_render_error_sets_status_from_classification() {
         let state = state_with_config(make_minimal_config());
         let mut params = crate::form_parameters::FormParameters::new();
-        params.params.insert("format".to_string(), "json".to_string());
+        params
+            .params
+            .insert("format".to_string(), "json".to_string());
 
         let resp_upstream =
             state.render_error("Connection refused (os error 61)".to_string(), &params);
         assert_eq!(resp_upstream.status, 502);
 
-        let resp_bad =
-            state.render_error("Invalid parameter foo".to_string(), &params);
+        let resp_bad = state.render_error("Invalid parameter foo".to_string(), &params);
         assert_eq!(resp_bad.status, 400);
 
-        let resp_internal =
-            state.render_error("Could not insert new PSID".to_string(), &params);
+        let resp_internal = state.render_error("Could not insert new PSID".to_string(), &params);
         assert_eq!(resp_internal.status, 500);
     }
 

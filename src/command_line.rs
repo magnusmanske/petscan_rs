@@ -1,10 +1,9 @@
 use crate::app_state::AppState;
+use crate::config::Config;
 use crate::form_parameters::FormParameters;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
-use serde_json::Value;
 use std::env;
-use std::fs::File;
 use std::sync::Arc;
 use url::form_urlencoded;
 
@@ -61,16 +60,12 @@ pub async fn command_line_usage(app_state: Arc<AppState>) -> Result<()> {
 
 /// # Panics
 /// Panics if the config file can not be opened or parsed.
-pub fn get_petscan_config() -> Value {
+pub fn get_petscan_config() -> Config {
     let basedir = env::current_dir()
         .expect("Can't get CWD")
         .to_str()
         .expect("Can't convert CWD to_str")
         .to_string();
     let path = basedir.to_owned() + "/config.json";
-    let file =
-        File::open(&path).unwrap_or_else(|_| panic!("Can not open config file at {}", &path));
-    let petscan_config: Value =
-        serde_json::from_reader(file).expect("Can not parse JSON from config file");
-    petscan_config
+    Config::from_file(&path).expect("config.json load failed")
 }
