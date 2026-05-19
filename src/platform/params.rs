@@ -102,19 +102,7 @@ impl Platform {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::app_state::AppState;
-    use crate::form_parameters::FormParameters;
-    use std::sync::Arc;
-
-    fn make_platform(pairs: Vec<(&str, &str)>) -> Platform {
-        let mut params = std::collections::HashMap::new();
-        for (k, v) in pairs {
-            params.insert(k.to_string(), v.to_string());
-        }
-        let fp = FormParameters::new_from_pairs(params);
-        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
-    }
+    use crate::test_support::make_platform;
 
     #[test]
     fn test_has_param_present() {

@@ -410,14 +410,7 @@ mod tests {
         check_results_for_psid_ext(psid, "", wiki, expected).await;
     }
 
-    pub(super) fn make_platform_with_params(pairs: Vec<(&str, &str)>) -> Platform {
-        let mut params = std::collections::HashMap::new();
-        for (k, v) in pairs {
-            params.insert(k.to_string(), v.to_string());
-        }
-        let fp = FormParameters::new_from_pairs(params);
-        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
-    }
+    use crate::test_support::make_platform;
 
     fn entries_from_result(result: PageList) -> Vec<PageListEntry> {
         result.as_vec()
@@ -427,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_warnings() {
-        let p = make_platform_with_params(vec![]);
+        let p = make_platform(vec![]);
         assert!(p.warnings().unwrap().is_empty());
         p.warn("test warning".to_string()).unwrap();
         let warnings = p.warnings().unwrap();
@@ -437,19 +430,19 @@ mod tests {
 
     #[test]
     fn test_do_output_redlinks_default() {
-        let p = make_platform_with_params(vec![]);
+        let p = make_platform(vec![]);
         assert!(!p.do_output_redlinks());
     }
 
     #[test]
     fn test_label_exists_empty() {
-        let p = make_platform_with_params(vec![]);
+        let p = make_platform(vec![]);
         assert!(!p.label_exists("anything"));
     }
 
     #[test]
     fn test_label_exists_after_warn_does_not_add_label() {
-        let p = make_platform_with_params(vec![]);
+        let p = make_platform(vec![]);
         p.warn("foo".to_string()).unwrap();
         // warn() adds to warnings, not existing_labels
         assert!(!p.label_exists("foo"));
@@ -457,19 +450,19 @@ mod tests {
 
     #[test]
     fn test_combination_default_is_none() {
-        let p = make_platform_with_params(vec![]);
+        let p = make_platform(vec![]);
         assert_eq!(p.combination(), Combination::None);
     }
 
     #[test]
     fn test_query_time_default_is_none() {
-        let p = make_platform_with_params(vec![]);
+        let p = make_platform(vec![]);
         assert!(p.query_time().is_none());
     }
 
     #[test]
     fn test_result_default_is_none() {
-        let p = make_platform_with_params(vec![]);
+        let p = make_platform(vec![]);
         assert!(p.result().is_none());
     }
 

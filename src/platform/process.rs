@@ -1339,21 +1339,9 @@ impl Platform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_state::AppState;
-    use crate::form_parameters::FormParameters;
     use crate::pagelist_entry::PageListEntry;
-    use std::collections::HashMap;
-    use std::sync::Arc;
+    use crate::test_support::make_platform;
     use wikimisc::mediawiki::title::Title;
-
-    fn make_platform(pairs: Vec<(&str, &str)>) -> Platform {
-        let mut params = HashMap::new();
-        for (k, v) in pairs {
-            params.insert(k.to_string(), v.to_string());
-        }
-        let fp = FormParameters::new_from_pairs(params);
-        Platform::new_from_parameters(&fp, Arc::new(AppState::default()))
-    }
 
     // ─── entry_from_entity ────────────────────────────────────────────────────
 
