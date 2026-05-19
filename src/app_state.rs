@@ -8,20 +8,44 @@ use mysql_async as my;
 use serde_json::Value;
 use std::fs;
 use std::sync::{Arc, RwLock};
+use tokio::sync::Semaphore;
 use wikimisc::mediawiki::api::Api;
 use wikimisc::site_matrix::SiteMatrix;
+
+/// Inbound concurrency cap: at most this many `process_form` calls run at
+/// once. Excess requests queue on the semaphore (and the outer 30-minute
+/// wall-clock budget will reject them if they cannot start in time).
+/// 50 is roughly 5× the per-user MySQL connection budget, so the
+/// max_user_connections backoff still has headroom and a request burst
+/// cannot fork-bomb the worker pool.
+const MAX_CONCURRENT_REQUESTS: usize = 50;
 
 // ---------------------------------------------------------------------------
 // AppState – top-level application state; delegates DB work to DatabaseManager
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AppState {
     db_manager: DatabaseManager,
     threads_running: Arc<RwLock<i64>>,
     shutting_down: Arc<RwLock<bool>>,
     site_matrix: SiteMatrix,
     main_page: String,
+    /// Caps inbound request concurrency. See [`MAX_CONCURRENT_REQUESTS`].
+    request_semaphore: Arc<Semaphore>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            db_manager: DatabaseManager::default(),
+            threads_running: Arc::new(RwLock::new(0)),
+            shutting_down: Arc::new(RwLock::new(false)),
+            site_matrix: SiteMatrix::default(),
+            main_page: String::default(),
+            request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
+        }
+    }
 }
 
 impl AppState {
@@ -46,7 +70,15 @@ impl AppState {
                 .await
                 .map_err(|e| anyhow!("Can't get site matrix: {e}"))?,
             main_page,
+            request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
         })
+    }
+
+    /// Acquire a permit before doing heavy per-request work. The permit is
+    /// released when the returned guard is dropped. Returns `None` if the
+    /// semaphore was closed (the runtime is shutting down).
+    pub async fn acquire_request_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        self.request_semaphore.clone().acquire_owned().await.ok()
     }
 
     // ------------------------------------------------------------------

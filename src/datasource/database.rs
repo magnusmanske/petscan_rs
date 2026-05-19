@@ -4,13 +4,13 @@ use crate::datasource::SQLtuple;
 use crate::pagelist::PageList;
 use crate::pagelist_entry::LinkCount;
 use crate::pagelist_entry::PageListEntry;
-use crate::platform::{PAGE_BATCH_SIZE, Platform};
+use crate::platform::{MAX_CONCURRENT_DB_BATCHES, PAGE_BATCH_SIZE, Platform};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use chrono::Duration;
 use chrono::prelude::*;
 use core::ops::Sub;
-use futures::future::join_all;
+use futures::stream::{StreamExt, iter};
 use mysql_async as my;
 use mysql_async::Value as MyValue;
 use mysql_async::from_row;
@@ -353,7 +353,10 @@ impl SourceDatabase {
                 let future = self.get_categories_in_list(state, wiki, chunk);
                 futures.push(future);
             }
-            let results = join_all(futures).await;
+            let results: Vec<_> = iter(futures)
+                .buffered(MAX_CONCURRENT_DB_BATCHES)
+                .collect()
+                .await;
             categories_todo.clear();
             categories_todo.shrink_to_fit();
             let mut categories_new = HashSet::new();
@@ -394,7 +397,11 @@ impl SourceDatabase {
         }
 
         let mut ret = vec![];
-        for result in join_all(futures).await {
+        let results: Vec<_> = iter(futures)
+            .buffered(MAX_CONCURRENT_DB_BATCHES)
+            .collect()
+            .await;
+        for result in results {
             let result = result?;
             if !result.is_empty() {
                 ret.push(result);
@@ -750,7 +757,10 @@ impl SourceDatabase {
             })
             .collect();
 
-        let results = join_all(futures).await;
+        let results: Vec<_> = iter(futures)
+            .buffered(MAX_CONCURRENT_DB_BATCHES)
+            .collect()
+            .await;
 
         // Check for errors
         for result in results {
@@ -811,7 +821,10 @@ impl SourceDatabase {
             let future = self.get_pages_pagelist_batch(wiki.clone(), sql, state, &params);
             futures.push(future);
         }
-        let results = join_all(futures).await;
+        let results: Vec<_> = iter(futures)
+            .buffered(MAX_CONCURRENT_DB_BATCHES)
+            .collect()
+            .await;
 
         for pl2 in results {
             ret.union(&pl2?, None).await?;

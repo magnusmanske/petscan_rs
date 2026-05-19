@@ -1,9 +1,9 @@
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
 use crate::pagelist_entry::{PageListEntry, PageListSort, sort_or_shuffle};
-use crate::platform::{PAGE_BATCH_SIZE, Platform};
+use crate::platform::{MAX_CONCURRENT_DB_BATCHES, PAGE_BATCH_SIZE, Platform};
 use anyhow::{Result, anyhow};
-use futures::future::join_all;
+use futures::stream::{StreamExt, iter};
 use mysql_async as my;
 use mysql_async::Value as MyValue;
 use mysql_async::prelude::Queryable;
@@ -367,7 +367,10 @@ impl PageList {
         for sql in batches {
             futures.push(self.run_batch_query(state, sql, &wiki, cluster));
         }
-        let results = join_all(futures).await;
+        let results: Vec<_> = iter(futures)
+            .buffered(MAX_CONCURRENT_DB_BATCHES)
+            .collect()
+            .await;
         let mut ret = vec![];
         for x in results {
             ret.append(&mut x?);
@@ -673,8 +676,11 @@ impl PageList {
             )))
         };
 
-        join_all(futures)
-            .await
+        let results: Vec<_> = iter(futures)
+            .buffered(MAX_CONCURRENT_DB_BATCHES)
+            .collect()
+            .await;
+        results
             .into_par_iter()
             .filter_map(|r| r.ok())
             .flatten()
@@ -749,7 +755,13 @@ impl PageList {
             let fut = self.search_entry(&api, search, page_id.to_owned());
             futures.push(fut);
         });
-        let results = join_all(futures).await;
+        // This fans over per-page API calls rather than DB batches, but the
+        // same upper bound applies — unbounded parallelism here would hammer
+        // the upstream search API.
+        let results: Vec<_> = iter(futures)
+            .buffered(MAX_CONCURRENT_DB_BATCHES)
+            .collect()
+            .await;
 
         let mut searches_failed = false;
         let retain_page_ids: Vec<u32> = page_ids

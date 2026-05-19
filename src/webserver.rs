@@ -291,6 +291,10 @@ impl WebServer {
         };
 
         // Actually do something useful!
+        // Cap the number of requests doing real work at once. If 50 are
+        // already running, additional callers wait here until one finishes
+        // (or the outer 30-minute wall-clock budget aborts them).
+        let _request_permit = self.app_state.acquire_request_permit().await;
         // The guard increments the in-flight counter now and decrements on
         // drop — including unwind — so a panic anywhere below cannot leave
         // the counter permanently inflated.

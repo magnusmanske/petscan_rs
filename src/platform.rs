@@ -24,7 +24,7 @@ use crate::render::tsv::RenderTSV;
 use crate::render::wikitext::RenderWiki;
 use crate::wdfist::WDfist;
 use anyhow::{Result, anyhow};
-use futures::future::join_all;
+use futures::stream::{StreamExt, iter};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
@@ -32,6 +32,17 @@ use tracing::{debug, instrument};
 use wikimisc::mediawiki::api::NamespaceID;
 
 pub static PAGE_BATCH_SIZE: usize = 15000;
+
+/// Cap on how many heterogeneous data sources we fan out in parallel.
+/// Sources hit different upstreams (DB, Commons, SPARQL, …), so the cap
+/// can be wider than the per-wiki batched-query cap.
+pub const MAX_CONCURRENT_SOURCES: usize = 8;
+
+/// Cap on how many same-wiki batched DB queries we run concurrently.
+/// Wikimedia replicas allow ~10 connections per user; 5 keeps the
+/// `max_user_connections` retry loop on the happy path even when several
+/// requests are in flight simultaneously.
+pub const MAX_CONCURRENT_DB_BATCHES: usize = 5;
 
 mod combine;
 
@@ -201,10 +212,14 @@ impl Platform {
 
         Platform::profile("begin futures 1", None);
 
+        let source_results: Vec<_> = iter(futures)
+            .buffered(MAX_CONCURRENT_SOURCES)
+            .collect()
+            .await;
         let mut results: HashMap<String, PageList> = available_sources
             .iter()
             .cloned()
-            .zip(join_all(futures).await)
+            .zip(source_results)
             .map(|(name, result)| result.map(|pl| (name, pl)))
             .collect::<Result<_, _>>()?;
 
