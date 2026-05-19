@@ -179,42 +179,35 @@ impl Platform {
         let start_time = SystemTime::now();
         self.output_redlinks = self.has_param("show_redlinks");
 
-        let mut s_db = SourceDatabase::new(SourceDatabaseParameters::db_params(self).await);
-        let mut s_sparql = SourceSparql::default();
-        let mut s_manual = SourceManual::default();
-        let mut s_pagepile = SourcePagePile::default();
-        let mut s_search = SourceSearch::default();
-        let mut s_wikidata = SourceWikidata::default();
-
+        // Primary data sources, evaluated in order. Each is tried via its
+        // `can_run` gate; the ones whose gates pass contribute a name and
+        // a future to the parallel batch below. Order matters because the
+        // names line up with `source_results` for `combine_results`.
+        let mut sources: Vec<Box<dyn DataSource + Send>> = vec![
+            Box::new(SourceDatabase::new(
+                SourceDatabaseParameters::db_params(self).await,
+            )),
+            Box::new(SourceSparql::default()),
+            Box::new(SourceManual::default()),
+            Box::new(SourcePagePile::default()),
+            Box::new(SourceSearch::default()),
+            Box::new(SourceWikidata::default()),
+        ];
+        // Sitelinks is a fallback that only runs when no other source applies.
+        // It is declared up here (before `futures`) so its drop order is
+        // strictly after `futures` — a future returned by its `.run(self)`
+        // borrows it for the duration of the await.
         let mut s_sitelinks = SourceSitelinks::new();
 
-        let mut futures = vec![];
         let mut available_sources = vec![];
+        let mut futures = vec![];
+        for source in sources.iter_mut() {
+            if source.can_run(self) {
+                available_sources.push(source.name());
+                futures.push(source.run(self));
+            }
+        }
 
-        if s_db.can_run(self) {
-            available_sources.push(s_db.name());
-            futures.push(s_db.run(self));
-        }
-        if s_sparql.can_run(self) {
-            available_sources.push(s_sparql.name());
-            futures.push(s_sparql.run(self));
-        }
-        if s_manual.can_run(self) {
-            available_sources.push(s_manual.name());
-            futures.push(s_manual.run(self));
-        }
-        if s_pagepile.can_run(self) {
-            available_sources.push(s_pagepile.name());
-            futures.push(s_pagepile.run(self));
-        }
-        if s_search.can_run(self) {
-            available_sources.push(s_search.name());
-            futures.push(s_search.run(self));
-        }
-        if s_wikidata.can_run(self) {
-            available_sources.push(s_wikidata.name());
-            futures.push(s_wikidata.run(self));
-        }
         if futures.is_empty() && s_sitelinks.can_run(self) {
             available_sources.push(s_sitelinks.name());
             futures.push(s_sitelinks.run(self));
