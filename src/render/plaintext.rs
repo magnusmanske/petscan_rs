@@ -35,19 +35,16 @@ impl Render for RenderPlainText {
     }
 
     fn render_cell_wikidata_item(&self, entry: &PageListEntry, _params: &RenderParams) -> String {
-        match entry.get_wikidata_item() {
-            Some(q) => format!("[[:d:{q}|]]"),
-            None => String::new(),
-        }
+        entry.get_wikidata_item().unwrap_or_default()
     }
 
     fn render_user_name(&self, user: &str, _params: &RenderParams) -> String {
-        format!("[[User:{user}|]]")
+        user.to_string()
     }
 
     fn render_cell_image(&self, image: &Option<String>, _params: &RenderParams) -> String {
         match image {
-            Some(img) => format!("[[File:{img}|120px|]]"),
+            Some(img) => img.to_string(),
             None => String::new(),
         }
     }
