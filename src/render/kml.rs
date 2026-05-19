@@ -132,11 +132,13 @@ impl RenderKML {
     }
 
     fn escape_xml(s: &str) -> String {
-        s.replace('<', "&lt;")
+        // `&` must be replaced first; otherwise the ampersands introduced by
+        // the other replacements get re-escaped on the final pass.
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('"', "&quot;")
             .replace('\'', "&apos;")
-            .replace('&', "&amp;")
     }
 
     fn escape_attribute(s: &str) -> String {
@@ -153,10 +155,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_escape_xml() {
+    fn test_escape_xml_all_specials() {
         assert_eq!(
             RenderKML::escape_xml("<>&\"'"),
-            "&amp;lt;&amp;gt;&amp;&amp;quot;&amp;apos;"
+            "&lt;&gt;&amp;&quot;&apos;"
+        );
+    }
+
+    #[test]
+    fn test_escape_xml_ampersand_only() {
+        // Regression: previously this produced "&amp;amp;" because `&` was
+        // replaced last, re-escaping the `&` introduced by earlier replacements.
+        assert_eq!(RenderKML::escape_xml("&"), "&amp;");
+    }
+
+    #[test]
+    fn test_escape_xml_already_escaped_entity() {
+        // If the input already contains an entity, the leading `&` must be
+        // escaped exactly once — not turned into `&amp;amp;`.
+        assert_eq!(RenderKML::escape_xml("&amp;"), "&amp;amp;");
+    }
+
+    #[test]
+    fn test_escape_xml_plain_text_unchanged() {
+        assert_eq!(RenderKML::escape_xml("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_escape_xml_empty() {
+        assert_eq!(RenderKML::escape_xml(""), "");
+    }
+
+    #[test]
+    fn test_escape_xml_mixed() {
+        assert_eq!(
+            RenderKML::escape_xml("<a href=\"x\">&amp;</a>"),
+            "&lt;a href=&quot;x&quot;&gt;&amp;amp;&lt;/a&gt;"
         );
     }
 
