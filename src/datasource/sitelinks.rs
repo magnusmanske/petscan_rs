@@ -226,6 +226,24 @@ mod tests {
     }
 
     // ── generate_sql_query ───────────────────────────────────────────────────
+    //
+    // These tests assert the *exact* generated SQL string rather than
+    // substring matches. The audit (P2 #18) flagged the old `contains(...)`
+    // assertions as too weak: they pin spelling but would still pass for
+    // structurally malformed queries (missing `WHERE`, wrong table joins,
+    // duplicated clauses). Exact matches catch any unintended drift in
+    // the builder. Parameter values are also verified.
+
+    /// Helper: extract `MyValue::Bytes` → String for ergonomic assertions.
+    fn params_as_strings(params: &[mysql_async::Value]) -> Vec<String> {
+        params
+            .iter()
+            .map(|v| match v {
+                mysql_async::Value::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    }
 
     #[test]
     fn test_generate_sql_query_sitelinks_yes() {
@@ -233,8 +251,12 @@ mod tests {
         // enwiki becomes the main wiki (first); frwiki generates the ll_lang=? condition
         let p = make_platform(vec![("sitelinks_yes", "enwiki\nfrwiki")]);
         let (sql, params) = src.generate_sql_query(&p).unwrap();
-        assert!(sql.contains("ll_lang=?"), "Expected ll_lang=? in: {sql}");
-        assert_eq!(params.len(), 1); // only "fr"; enwiki is the main wiki
+        assert_eq!(
+            sql,
+            "SELECT DISTINCT page_title,0 FROM page WHERE page_namespace=0 \
+             AND page_id IN (SELECT ll_from FROM langlinks WHERE ll_lang=?)"
+        );
+        assert_eq!(params_as_strings(&params), vec!["fr"]);
         assert_eq!(src.main_wiki, "enwiki");
     }
 
@@ -244,8 +266,34 @@ mod tests {
         // enwiki is main wiki; fr and de generate the IN (?,?) condition
         let p = make_platform(vec![("sitelinks_any", "enwiki\nfrwiki\ndewiki")]);
         let (sql, params) = src.generate_sql_query(&p).unwrap();
-        assert!(sql.contains("ll_lang IN ("), "Expected ll_lang IN in: {sql}");
-        assert_eq!(params.len(), 2); // "fr" and "de"; enwiki filtered out as main wiki
+        assert_eq!(
+            sql,
+            "SELECT DISTINCT page_title,0 FROM page WHERE page_namespace=0 \
+             AND page_id IN (SELECT ll_from FROM langlinks WHERE ll_lang IN (?,?))"
+        );
+        let param_strs = params_as_strings(&params);
+        assert_eq!(param_strs.len(), 2);
+        assert!(param_strs.contains(&"fr".to_string()));
+        assert!(param_strs.contains(&"de".to_string()));
+    }
+
+    #[test]
+    fn test_generate_sql_query_sitelinks_no_emits_not_in() {
+        let mut src = SourceSitelinks::new();
+        let p = make_platform(vec![
+            ("sitelinks_yes", "enwiki"),
+            ("sitelinks_no", "frwiki\ndewiki"),
+        ]);
+        let (sql, params) = src.generate_sql_query(&p).unwrap();
+        assert_eq!(
+            sql,
+            "SELECT DISTINCT page_title,0 FROM page WHERE page_namespace=0 \
+             AND page_id NOT IN (SELECT ll_from FROM langlinks WHERE ll_lang IN (?,?))"
+        );
+        let param_strs = params_as_strings(&params);
+        assert_eq!(param_strs.len(), 2);
+        assert!(param_strs.contains(&"fr".to_string()));
+        assert!(param_strs.contains(&"de".to_string()));
     }
 
     #[test]
@@ -263,9 +311,40 @@ mod tests {
             ("min_sitelink_count", "10"),
             ("max_sitelink_count", "100"),
         ]);
+        let (sql, params) = src.generate_sql_query(&p).unwrap();
+        // min/max only flip use_min_max because no non-main wiki was given;
+        // the SELECT column list switches to include sitelink_count, no
+        // langlinks join is added, and HAVING is appended.
+        assert_eq!(
+            sql,
+            "SELECT page_title,(SELECT count(*) FROM langlinks WHERE ll_from=page_id) AS sitelink_count \
+             FROM page WHERE page_namespace=0 \
+             GROUP BY page_title HAVING sitelink_count>=10 AND sitelink_count<=100"
+        );
+        assert!(params.is_empty());
+    }
+
+    /// Defense in depth: min/max numeric values currently format-string into
+    /// SQL rather than going through a placeholder. They are parsed as
+    /// `usize` first, so non-numeric inputs are silently dropped and never
+    /// reach the SQL. Pin that behavior so a future refactor can't relax it
+    /// without us noticing.
+    #[test]
+    fn test_generate_sql_query_drops_invalid_min_max_silently() {
+        let mut src = SourceSitelinks::new();
+        let p = make_platform(vec![
+            ("sitelinks_yes", "enwiki"),
+            ("min_sitelink_count", "DROP TABLE page;--"),
+            ("max_sitelink_count", "-5"),
+        ]);
         let (sql, _) = src.generate_sql_query(&p).unwrap();
-        assert!(sql.contains("HAVING"), "Expected HAVING in: {sql}");
-        assert!(sql.contains("sitelink_count>=10"), "Expected sitelink_count>=10 in: {sql}");
-        assert!(sql.contains("sitelink_count<=100"), "Expected sitelink_count<=100 in: {sql}");
+        assert!(
+            !sql.contains("DROP"),
+            "invalid min_sitelink_count must not reach SQL: {sql}"
+        );
+        assert!(
+            !sql.contains("HAVING"),
+            "no HAVING clause when both bounds invalid: {sql}"
+        );
     }
 }
