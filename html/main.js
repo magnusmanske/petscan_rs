@@ -35,6 +35,51 @@ var namespaces_loading = false;
 var last_namespaces = {};
 var last_namespace_project = "";
 var interface_language = "";
+var INTERFACE_LANGUAGE_STORAGE_KEY = "petscan_interface_language";
+var INTERFACE_LANGUAGE_PATTERN = /^[A-Za-z][A-Za-z0-9-]{1,11}$/;
+
+function getStoredInterfaceLanguage() {
+	var v = null;
+	try {
+		v = window.localStorage.getItem(INTERFACE_LANGUAGE_STORAGE_KEY);
+	} catch (e) {
+		v = null;
+	}
+	if (v === null) {
+		var prefix = INTERFACE_LANGUAGE_STORAGE_KEY + "=";
+		var parts = (document.cookie || "").split(";");
+		for (var i = 0; i < parts.length; i++) {
+			var c = parts[i].replace(/^\s+/, "");
+			if (c.indexOf(prefix) === 0) {
+				v = decodeURIComponent(c.substring(prefix.length));
+				break;
+			}
+		}
+	}
+	if (v && INTERFACE_LANGUAGE_PATTERN.test(v)) return v;
+	return null;
+}
+
+function saveInterfaceLanguage(l) {
+	if (!l || !INTERFACE_LANGUAGE_PATTERN.test(l)) return;
+	try {
+		window.localStorage.setItem(INTERFACE_LANGUAGE_STORAGE_KEY, l);
+	} catch (e) {
+		// localStorage unavailable (private mode, disabled): fall through to cookie
+	}
+	try {
+		var oneYear = 365 * 24 * 60 * 60;
+		document.cookie =
+			INTERFACE_LANGUAGE_STORAGE_KEY +
+			"=" +
+			encodeURIComponent(l) +
+			"; max-age=" +
+			oneYear +
+			"; path=/; SameSite=Lax";
+	} catch (e) {
+		// ignore
+	}
+}
 
 var load_thumbnails_ahead = 2; // 1 to not load ahead
 $.fn.is_on_screen = function () {
@@ -189,6 +234,7 @@ function applyParameters() {
 function setInterfaceLanguage(l) {
 	if (interface_language == l) return false;
 	interface_language = l;
+	saveInterfaceLanguage(l);
 
 	function specialUpdates() {
 		// Misc special updates
@@ -585,8 +631,12 @@ function initializeInterface() {
 	});
 
 	var l = "en";
-	if (typeof params.interface_language != "undefined")
+	if (typeof params.interface_language != "undefined") {
 		l = params.interface_language;
+	} else {
+		var stored = getStoredInterfaceLanguage();
+		if (stored !== null) l = stored;
+	}
 
 	loadInterface(l, function () {
 		if (typeof window.AutoList != "undefined") autolist = new AutoList();
