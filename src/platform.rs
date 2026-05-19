@@ -3,7 +3,6 @@ use crate::combination::Combination;
 use crate::content_type::ContentType;
 use crate::datasource::DataSource;
 use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
-use rayon::prelude::*;
 
 use crate::datasource::manual::SourceManual;
 use crate::datasource::pagepile::SourcePagePile;
@@ -277,7 +276,7 @@ impl Platform {
         let entries = result.drain_into_vec();
         let mut pages = tokio::task::spawn_blocking(move || {
             let mut ret = entries;
-            ret.par_sort_by(|a, b| a.compare(b, &sorter, is_wikidata));
+            crate::pagelist_entry::sort_or_shuffle(&mut ret, &sorter, is_wikidata);
             ret
         })
         .await

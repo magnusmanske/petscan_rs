@@ -1,8 +1,30 @@
+use rand::seq::SliceRandom;
+use rayon::slice::ParallelSliceMut;
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use wikimisc::mediawiki::api::NamespaceID;
 use wikimisc::mediawiki::title::Title;
+
+/// Sort `entries` in place according to `sorter`. For `PageListSort::Random`
+/// this performs a uniform shuffle; for all other variants it parallel-sorts
+/// using `PageListEntry::compare`. The shuffle path must not go through a
+/// comparator: a random comparator violates strict-weak-ordering and yields
+/// biased — and potentially incorrect — results.
+pub fn sort_or_shuffle(
+    entries: &mut Vec<PageListEntry>,
+    sorter: &PageListSort,
+    is_wikidata: bool,
+) {
+    match sorter {
+        PageListSort::Random(_) => {
+            entries.shuffle(&mut rand::rng());
+        }
+        _ => {
+            entries.par_sort_by(|a, b| a.compare(b, sorter, is_wikidata));
+        }
+    }
+}
 
 //________________________________________________________________________________________________________________________
 
@@ -307,7 +329,11 @@ impl PageListEntry {
             PageListSort::FileSize(d) => self.compare_by_file_size(other, *d),
             PageListSort::RedlinksCount(d) => self.compare_by_redlinks(other, *d),
             PageListSort::Sitelinks(d) => self.compare_by_sitelinks(other, *d),
-            PageListSort::Random(d) => Self::compare_by_random(other, *d),
+            // Random "sort" is a shuffle; it is performed in `sort_or_shuffle`,
+            // not here. The comparator must obey strict-weak-ordering, so
+            // we report Equal — this leaves the input order intact under
+            // any sort algorithm that may still invoke the comparator.
+            PageListSort::Random(_) => Ordering::Equal,
         }
     }
 
@@ -325,14 +351,6 @@ impl PageListEntry {
         descending: bool,
     ) -> Ordering {
         Self::compare_by_opt(&self.redlink_count, &other.redlink_count, descending)
-    }
-
-    fn compare_by_random(_other: &PageListEntry, _descending: bool) -> Ordering {
-        if rand::random() {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        }
     }
 
     fn compare_by_size(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
@@ -927,5 +945,68 @@ mod tests {
         assert_eq!(entry_with.compare(&entry_without, &sorter, false), Ordering::Less);
         assert_eq!(entry_without.compare(&entry_with, &sorter, false), Ordering::Greater);
         assert_eq!(entry_without.compare(&entry_without, &sorter, false), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_compare_random_is_stable_equal() {
+        // `compare` must satisfy strict-weak-ordering for any sort to be
+        // well-defined. Random shuffling is therefore handled by
+        // `sort_or_shuffle`, not by the comparator. The comparator must
+        // report Equal for the Random variant — both directions, and for
+        // self-comparison.
+        let entry_a = make_entry("Apple", 0);
+        let entry_b = make_entry("Banana", 0);
+        for descending in [false, true] {
+            let sorter = PageListSort::Random(descending);
+            assert_eq!(entry_a.compare(&entry_b, &sorter, false), Ordering::Equal);
+            assert_eq!(entry_b.compare(&entry_a, &sorter, false), Ordering::Equal);
+            assert_eq!(entry_a.compare(&entry_a, &sorter, false), Ordering::Equal);
+        }
+    }
+
+    #[test]
+    fn test_sort_or_shuffle_random_preserves_entries() {
+        // Random "sort" must shuffle without losing or duplicating entries.
+        let mut entries: Vec<PageListEntry> =
+            (0..50).map(|i| make_entry(&format!("P{i}"), 0)).collect();
+        let original_titles: std::collections::BTreeSet<String> =
+            entries.iter().map(|e| e.title().pretty().to_string()).collect();
+
+        sort_or_shuffle(&mut entries, &PageListSort::Random(false), false);
+
+        let after_titles: std::collections::BTreeSet<String> =
+            entries.iter().map(|e| e.title().pretty().to_string()).collect();
+        assert_eq!(original_titles, after_titles);
+        assert_eq!(entries.len(), 50);
+    }
+
+    #[test]
+    fn test_sort_or_shuffle_non_random_sorts() {
+        let mut entries = vec![
+            make_entry("Charlie", 0),
+            make_entry("Alpha", 0),
+            make_entry("Bravo", 0),
+        ];
+        sort_or_shuffle(&mut entries, &PageListSort::Title(false), false);
+        let titles: Vec<String> = entries
+            .iter()
+            .map(|e| e.title().pretty().to_string())
+            .collect();
+        assert_eq!(titles, vec!["Alpha", "Bravo", "Charlie"]);
+    }
+
+    #[test]
+    fn test_sort_or_shuffle_non_random_sorts_descending() {
+        let mut entries = vec![
+            make_entry("Alpha", 0),
+            make_entry("Charlie", 0),
+            make_entry("Bravo", 0),
+        ];
+        sort_or_shuffle(&mut entries, &PageListSort::Title(true), false);
+        let titles: Vec<String> = entries
+            .iter()
+            .map(|e| e.title().pretty().to_string())
+            .collect();
+        assert_eq!(titles, vec!["Charlie", "Bravo", "Alpha"]);
     }
 }

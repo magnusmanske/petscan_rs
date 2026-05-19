@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::datasource::SQLtuple;
-use crate::pagelist_entry::{PageListEntry, PageListSort};
+use crate::pagelist_entry::{PageListEntry, PageListSort, sort_or_shuffle};
 use crate::platform::{PAGE_BATCH_SIZE, Platform};
 use anyhow::{Result, anyhow};
 use futures::future::join_all;
@@ -127,7 +127,7 @@ impl PageList {
 
     pub fn drain_into_sorted_vec(&self, sorter: PageListSort) -> Vec<PageListEntry> {
         let mut ret: Vec<PageListEntry> = self.entries.write().unwrap().drain().collect();
-        ret.par_sort_by(|a, b| a.compare(b, &sorter, self.is_wikidata()));
+        sort_or_shuffle(&mut ret, &sorter, self.is_wikidata());
         ret
     }
 
