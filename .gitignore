@@ -2,3 +2,7 @@ target/
 config.json
 .DS_Store
 .claude
+audits/
+CLAUDE.md
+oauth.ini
+flickr.key
