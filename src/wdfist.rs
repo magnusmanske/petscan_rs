@@ -863,6 +863,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live config.json + Wikimedia APIs (Wikidata/Commons); run with --ignored"]
     async fn test_wdfist_filter_items() {
         let params: Vec<(&str, &str)> = vec![("wdf_only_items_without_p18", "1")];
         let items: Vec<&str> = vec![
@@ -878,6 +879,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live config.json + Wikimedia APIs (Wikidata/Commons); run with --ignored"]
     async fn test_filter_files_five_or_is_used() {
         let params: Vec<(&str, &str)> = vec![
             ("wdf_max_five_results", "1"),
@@ -912,6 +914,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live config.json (constructor loads config); run with --ignored"]
     async fn test_is_valid_filename() {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec![]).await;
@@ -966,6 +969,7 @@ mod tests {
     // }
 
     #[tokio::test]
+    #[ignore = "requires live config.json + Wikimedia APIs (Wikidata/Commons); run with --ignored"]
     async fn test_follow_coords() {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec!["Q350"]).await;
@@ -977,6 +981,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live config.json + Wikimedia APIs (Wikidata/Commons); run with --ignored"]
     async fn test_follow_search_commons() {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec!["Q66711783"]).await;
@@ -992,6 +997,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live config.json + Wikimedia APIs (Wikidata/Commons); run with --ignored"]
     async fn test_seed_ignore_files() {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec![]).await;

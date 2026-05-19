@@ -1378,6 +1378,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
     async fn test_category_subset() {
         let params = vec![
             ("categories", "1974_births\nGerman bioinformaticians"),
@@ -1396,6 +1397,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
     async fn test_category_union() {
         let params1 = vec![
             ("categories", "1974_births"),
@@ -1433,6 +1435,7 @@ mod tests {
     // }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
     async fn test_category_case_insensitive() {
         let params = vec![
             ("categories", "biology"),

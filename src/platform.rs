@@ -452,19 +452,27 @@ mod tests {
     }
 
     // ─── integration tests ───────────────────────────────────────────────────
+    // All tests below this point require a live MySQL replica + the live
+    // Wikidata API (they call `run_psid` / `check_results_for_psid*`, which
+    // load `config.json` and run real platform queries). They are gated
+    // with `#[ignore]` so `cargo test` stays fast; run them with
+    // `cargo test -- --ignored`.
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_use_props() {
         check_results_for_psid(10087995, "enwiki", vec![Title::new("Magnus_Manske", 0)]).await;
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_sitelinks() {
         // This assumes [[en:Count von Count]] has no lvwiki article
         check_results_for_psid(10123257, "wikidatawiki", vec![Title::new("Q13520818", 0)]).await;
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_min_max_sitelinks() {
         // [[Count von Count]] vs. [[Magnus Manske]]
         check_results_for_psid(10123897, "wikidatawiki", vec![Title::new("Q13520818", 0)]).await; // Min 15
@@ -473,6 +481,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_label_filter() {
         // [[Count von Count]] vs. [[Magnus Manske]]
         check_results_for_psid(10125089, "wikidatawiki", vec![Title::new("Q12345", 0)]).await;
@@ -480,6 +489,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_neg_cat_filter() {
         // [[Count von Count]] vs. [[Magnus Manske]]
         // Manual list on enwiki, minus [[Category:Fictional vampires]]
@@ -487,6 +497,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_commons_file_info() {
         // Manual list [[File:KingsCollegeChapelWest.jpg]] on commons
         let platform = run_psid(10137125).await;
@@ -510,6 +521,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_page_info() {
         // Manual list [[Cambridge]] on enwiki
         let platform = run_psid(10136716).await;
@@ -530,6 +542,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_annotate_wikidata_item() {
         // Manual list [[Count von Count]] on enwiki
         let platform = run_psid(10137767).await;
@@ -542,6 +555,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_subpages() {
         // Manual list [[User:Magnus Manske]] on enwiki, subpages, not "root page"
         let platform = run_psid(10138030).await;
@@ -557,6 +571,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_wikidata_labels() {
         // Manual list [[Q12345]], nl label/desc
         let platform = run_psid(10138979).await;
@@ -573,6 +588,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_regexp_filter_fallback() {
         // Old parameter
         check_results_for_psid_ext(
@@ -594,6 +610,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_wikidata_regexp() {
         check_results_for_psid_ext(
             10140344,
@@ -641,6 +658,7 @@ mod tests {
     // }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_template_talk_pages() {
         let platform = run_psid(43089908).await;
         let result = platform.result.unwrap();
@@ -652,6 +670,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_sort_by_defaultsort() {
         check_results_for_psid(
             18604332,

@@ -377,6 +377,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live network/DB (loads config.json + Wikidata SiteMatrix); run with --ignored"]
     async fn test_render_error_html() {
         // HTML render_error requires a fully initialized AppState (SiteMatrix),
         // so we use the full state loaded from config.
@@ -468,6 +469,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires live network/DB (loads config.json + Wikidata SiteMatrix); run with --ignored"]
     async fn test_get_wiki_for_server_url() {
         let state = get_state().await;
         assert_eq!(
