@@ -1744,6 +1744,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "toolforge",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",

@@ -65,12 +65,18 @@ impl WebServer {
 
     pub async fn run(&self) -> Result<()> {
         let listener = self.start_webserver().await?;
-        let app = Router::new()
+        axum::serve(listener, self.router()).await?;
+        Ok(())
+    }
+
+    /// Build the axum `Router` for this `WebServer`. Extracted from [`Self::run`]
+    /// so integration tests can drive it via `tower::ServiceExt::oneshot`
+    /// without binding a real TCP listener.
+    pub fn router(&self) -> Router {
+        Router::new()
             .fallback(any(handle))
             .layer(CorsLayer::permissive())
-            .with_state(self.clone());
-        axum::serve(listener, app).await?;
-        Ok(())
+            .with_state(self.clone())
     }
 
     async fn start_webserver(&self) -> Result<TcpListener> {
@@ -392,5 +398,157 @@ mod tests {
         };
         let resp = mr.into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // -----------------------------------------------------------------------
+    // End-to-end Router tests via `tower::ServiceExt::oneshot`.
+    //
+    // These exercise the full axum dispatch pipeline (method-agnostic
+    // routing, query-string vs body decoding, body size limit, CORS layer,
+    // static-file fallback) without binding a real TCP listener.
+    //
+    // None of these need a populated `SiteMatrix`: the paths under test
+    // either don't consult one (shutdown, restart, 404), or only touch
+    // `is_language_rtl(lang)` which returns `false` on the default empty
+    // matrix — correct LTR for these test inputs. Decoupling `SiteMatrix`
+    // is deferred until a test actually asserts on its behaviour.
+    // -----------------------------------------------------------------------
+
+    use axum::body::Body;
+    use axum::http::Request as AxumRequest;
+    use tower::ServiceExt;
+
+    /// Build a `WebServer` whose `main_page` body is a known marker, so
+    /// assertions can pin the response body exactly.
+    fn test_server(main_page: &str) -> WebServer {
+        WebServer::new(
+            Arc::new(AppState::for_test_with_main_page(main_page)),
+            Config::default(),
+        )
+    }
+
+    /// Convenience: send a request through the Router and return
+    /// `(status, content-type header, body string)`. Body limit is
+    /// generous so test assertions don't accidentally truncate.
+    async fn send(server: &WebServer, req: AxumRequest<Body>) -> (StatusCode, String, String) {
+        let resp = server.router().oneshot(req).await.expect("router dispatch");
+        let status = resp.status();
+        let ct = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .expect("collect body");
+        (status, ct, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    #[tokio::test]
+    async fn show_main_page_returns_html_with_configured_body() {
+        let server = test_server("<html>HELLO-WORLD</html>");
+        let req = AxumRequest::builder()
+            .uri("/?show_main_page=1")
+            .body(Body::empty())
+            .unwrap();
+        let (status, ct, body) = send(&server, req).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(ct.starts_with("text/html"), "content-type was {ct:?}");
+        // The `<html>` tag is rewritten with `dir` + `lang` attributes; the
+        // body content survives. Default `SiteMatrix` means LTR.
+        assert!(
+            body.contains("dir='ltr'"),
+            "body missing dir attribute: {body}"
+        );
+        assert!(
+            body.contains("lang='en'"),
+            "body missing lang attribute: {body}"
+        );
+        assert!(body.contains("HELLO-WORLD"), "body missing marker: {body}");
+    }
+
+    #[tokio::test]
+    async fn no_doit_param_falls_back_to_form_display() {
+        let server = test_server("<html><!--querystring--></html>");
+        // No `doit`, default format=html → form-display path. The
+        // `<!--querystring-->` marker should be replaced with the current
+        // querystring (here: `categories=Foo`).
+        let req = AxumRequest::builder()
+            .uri("/?categories=Foo")
+            .body(Body::empty())
+            .unwrap();
+        let (status, _ct, body) = send(&server, req).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body.contains("categories=Foo"),
+            "querystring not threaded into body: {body}"
+        );
+    }
+
+    // NB: the `is_shutting_down() → "Temporary maintenance"` branch in
+    // `process_form` cannot be exercised in-process. Once `shut_down()`
+    // is called, the very next `try_shutdown()` (invoked from the
+    // shutdown branch itself, or from any `ThreadGuard::drop`) will
+    // `process::exit(0)` as soon as `threads_running` reaches zero —
+    // killing the test runner. This exit is preserved by design (audit
+    // P1 #12: the `/?restart=CODE` flow needs it to actually terminate).
+    // The shutdown branch is short and self-contained; a dedicated
+    // out-of-process test would be the only way to cover it.
+
+    #[tokio::test]
+    async fn unknown_static_path_returns_404() {
+        let server = test_server("<html></html>");
+        // No query string, GET, path not in the static cache → 404.
+        let req = AxumRequest::builder()
+            .uri("/this-path-does-not-exist")
+            .body(Body::empty())
+            .unwrap();
+        let (status, _ct, body) = send(&server, req).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, "Not Found");
+    }
+
+    #[tokio::test]
+    async fn oversized_post_body_is_rejected_with_413() {
+        let server = test_server("<html></html>");
+        // POST a body larger than `MAX_POST_SIZE` (128 MiB). Constructing
+        // 128+ MiB in memory is wasteful, so we cheat: send `Content-Length`
+        // beyond the limit. axum's `to_bytes` aborts as soon as the limit
+        // is exceeded by streamed bytes — we ensure that by sending exactly
+        // one byte past it.
+        let oversized = vec![b'x'; MAX_POST_SIZE + 1];
+        let req = AxumRequest::builder()
+            .method(Method::POST)
+            .uri("/")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(oversized))
+            .unwrap();
+        let (status, _ct, body) = send(&server, req).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(body, "POST body too large");
+    }
+
+    #[tokio::test]
+    async fn cors_layer_advertises_permissive_origin() {
+        // The `CorsLayer::permissive()` wrap should add
+        // `Access-Control-Allow-Origin` to every response.
+        let server = test_server("<html></html>");
+        let req = AxumRequest::builder()
+            .uri("/?show_main_page=1")
+            .header("origin", "https://example.test")
+            .body(Body::empty())
+            .unwrap();
+        let resp = server.router().oneshot(req).await.unwrap();
+        let allow_origin = resp
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        // `permissive()` echoes back the request's `origin` or sends `*`.
+        assert!(
+            allow_origin == "*" || allow_origin == "https://example.test",
+            "unexpected ACAO header: {allow_origin:?}"
+        );
     }
 }

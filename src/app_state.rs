@@ -135,6 +135,17 @@ impl AppState {
         self.request_semaphore.clone().acquire_owned().await.ok()
     }
 
+    /// Test-only constructor: builds an `AppState` over a default
+    /// `DatabaseManager` / empty `SiteMatrix`, but with a chosen `main_page`
+    /// body. Used by `webserver::tests` to pin assertions on response bodies.
+    #[cfg(test)]
+    pub(crate) fn for_test_with_main_page(main_page: impl Into<String>) -> Self {
+        Self {
+            main_page: main_page.into(),
+            ..Self::default()
+        }
+    }
+
     // ------------------------------------------------------------------
     // Delegating accessors – config feature flags
     // ------------------------------------------------------------------

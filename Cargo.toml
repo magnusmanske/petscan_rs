@@ -28,6 +28,9 @@ futures = "0.3"
 tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
 tracing = "0.1.40"
 
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
