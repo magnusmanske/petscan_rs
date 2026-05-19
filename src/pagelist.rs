@@ -1015,7 +1015,9 @@ mod tests {
     }
 
     #[test]
-    fn test_replace_entries() {
+    fn test_replace_entries_unions_disjoint_sets() {
+        // replace_entries inserts each entry from `other` into `self`,
+        // overwriting any existing entry with the same title.
         let pl1 = PageList::new_from_wiki("enwiki");
         pl1.add_entry(make_entry("Foo", 0));
 
@@ -1024,9 +1026,40 @@ mod tests {
         pl2.add_entry(make_entry("Baz", 0));
 
         pl1.replace_entries(&pl2);
-        // pl1 should now have Bar, Baz (plus Foo that was already there if replace adds)
-        // replace_entries inserts pl2's entries into pl1
-        assert!(pl1.len() >= 2);
+
+        let titles: std::collections::BTreeSet<String> = pl1
+            .as_vec()
+            .iter()
+            .map(|e| e.title().pretty().to_string())
+            .collect();
+        assert_eq!(titles.len(), 3);
+        assert!(titles.contains("Foo"));
+        assert!(titles.contains("Bar"));
+        assert!(titles.contains("Baz"));
+    }
+
+    #[test]
+    fn test_replace_entries_overwrites_same_title() {
+        // PageListEntry equality is by title only, so replace_entries on
+        // a same-title entry must overwrite the existing one rather than
+        // duplicate it. Pin that semantic: inject distinct field values
+        // and check which one survives.
+        let pl1 = PageList::new_from_wiki("enwiki");
+        let mut original = make_entry("Foo", 0);
+        original.set_page_bytes(Some(100));
+        pl1.add_entry(original);
+
+        let pl2 = PageList::new_from_wiki("enwiki");
+        let mut replacement = make_entry("Foo", 0);
+        replacement.set_page_bytes(Some(999));
+        pl2.add_entry(replacement);
+
+        pl1.replace_entries(&pl2);
+
+        assert_eq!(pl1.len(), 1);
+        let entry = pl1.as_vec().into_iter().next().unwrap();
+        assert_eq!(entry.title().pretty(), "Foo");
+        assert_eq!(entry.page_bytes(), Some(999));
     }
 
     #[test]
