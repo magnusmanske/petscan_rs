@@ -1506,9 +1506,13 @@ mod tests {
             add_sitelinks: false,
             is_wikidata: false,
         };
-        let sql = f.build_select_columns();
-        assert!(sql.contains("page_image"));
-        assert!(sql.contains("FROM page WHERE"));
+        assert_eq!(
+            f.build_select_columns(),
+            "SELECT page_title,page_namespace,\
+             (SELECT pp_value FROM page_props WHERE pp_page=page_id \
+              AND pp_propname IN ('page_image','page_image_free') LIMIT 1) AS image \
+             FROM page WHERE "
+        );
     }
 
     #[test]
@@ -1522,8 +1526,13 @@ mod tests {
             add_sitelinks: true,
             is_wikidata: true,
         };
-        let sql = f.build_select_columns();
-        assert!(sql.contains("wb_items_per_site"));
+        assert_eq!(
+            f.build_select_columns(),
+            "SELECT page_title,page_namespace,\
+             (SELECT count(*) FROM wb_items_per_site \
+              WHERE page_namespace IN (0,120) AND ips_item_id=substr(page_title,2)) AS sitelinks \
+             FROM page WHERE "
+        );
     }
 
     #[test]
@@ -1537,8 +1546,31 @@ mod tests {
             add_sitelinks: true,
             is_wikidata: false,
         };
-        let sql = f.build_select_columns();
-        assert!(sql.contains("langlinks"));
+        assert_eq!(
+            f.build_select_columns(),
+            "SELECT page_title,page_namespace,\
+             (SELECT count(*) FROM langlinks WHERE ll_from=page_id) AS sitelinks \
+             FROM page WHERE "
+        );
+    }
+
+    #[test]
+    fn test_page_fields_build_select_columns_only_base_when_all_off() {
+        // Defense in depth: with every optional column off, only the
+        // base `page_title,page_namespace` columns are selected.
+        let f = PageFields {
+            add_image: false,
+            add_coordinates: false,
+            add_defaultsort: false,
+            add_disambiguation: false,
+            add_incoming_links: false,
+            add_sitelinks: false,
+            is_wikidata: false,
+        };
+        assert_eq!(
+            f.build_select_columns(),
+            "SELECT page_title,page_namespace FROM page WHERE "
+        );
     }
 
     // ─── resolve_common_wiki_target ───────────────────────────────────────────
@@ -1584,34 +1616,59 @@ mod tests {
 
     // ─── build_sitelinks_sql ──────────────────────────────────────────────────
 
+    // Note: `build_sitelinks_sql` always returns a SQL prefix ending in
+    // ` AND ` — callers concatenate this with a per-batch `page_id IN (...)`
+    // clause inside `process_sitelinks`. Pinning that trailing ` AND `
+    // catches any change that would silently break the concatenation.
+
     #[test]
     fn test_build_sitelinks_sql_no_filters_distinct() {
         let (sql, post) = Platform::build_sitelinks_sql(&[], &[], &[], "", "");
-        assert!(sql.0.contains("DISTINCT page_title,0"));
-        assert!(post.is_empty());
+        assert_eq!(
+            sql.0,
+            "SELECT DISTINCT page_title,0 FROM page WHERE page_namespace=0 AND "
+        );
+        assert!(sql.1.is_empty());
+        assert_eq!(post, "");
     }
 
     #[test]
     fn test_build_sitelinks_sql_with_min() {
         let (sql, post) = Platform::build_sitelinks_sql(&[], &[], &[], "5", "");
-        assert!(sql.0.contains("sitelink_count"));
-        assert!(post.contains("HAVING"));
-        assert!(post.contains("sitelink_count>=5"));
+        assert_eq!(
+            sql.0,
+            "SELECT page_title,(SELECT count(*) FROM wb_items_per_site \
+             WHERE ips_item_id=substr(page_title,2)*1) AS sitelink_count \
+             FROM page WHERE page_namespace=0 AND "
+        );
+        assert!(sql.1.is_empty());
+        assert_eq!(post, " GROUP BY page_title HAVING sitelink_count>=5");
     }
 
     #[test]
     fn test_build_sitelinks_sql_yes_adds_exists() {
         let yes = vec!["enwiki".to_string()];
-        let (sql, _) = Platform::build_sitelinks_sql(&yes, &[], &[], "", "");
-        assert!(sql.0.contains("AND EXISTS"));
+        let (sql, post) = Platform::build_sitelinks_sql(&yes, &[], &[], "", "");
+        assert_eq!(
+            sql.0,
+            "SELECT DISTINCT page_title,0 FROM page WHERE page_namespace=0 \
+             AND EXISTS (SELECT * FROM wb_items_per_site \
+             WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id=? LIMIT 1) AND "
+        );
         assert_eq!(sql.1.len(), 1);
+        assert_eq!(post, "");
     }
 
     #[test]
     fn test_build_sitelinks_sql_no_adds_not_exists() {
         let no = vec!["dewiki".to_string()];
         let (sql, _) = Platform::build_sitelinks_sql(&[], &[], &no, "", "");
-        assert!(sql.0.contains("AND NOT EXISTS"));
+        assert_eq!(
+            sql.0,
+            "SELECT DISTINCT page_title,0 FROM page WHERE page_namespace=0 \
+             AND NOT EXISTS (SELECT * FROM wb_items_per_site \
+             WHERE ips_item_id=substr(page_title,2)*1 AND ips_site_id=? LIMIT 1) AND "
+        );
         assert_eq!(sql.1.len(), 1);
     }
 
@@ -1645,8 +1702,34 @@ mod tests {
             None,
             "any",
         );
-        assert!(sql.0.contains("wb-claims"));
-        assert!(sql.0.contains("3"));
+        assert_eq!(
+            sql.0,
+            " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page \
+             AND pp_propname='wb-claims' AND pp_value*1>=3)"
+        );
+        assert!(sql.1.is_empty());
+    }
+
+    #[test]
+    fn test_build_filter_wikidata_sql_post_max_identifiers() {
+        // Defense in depth for the third format-string interpolation site:
+        // confirm that the max_identifiers branch produces the wb-identifiers
+        // table and the correct comparison direction.
+        let sql = Platform::build_filter_wikidata_sql_post(
+            &[],
+            false,
+            false,
+            None,
+            None,
+            None,
+            Some(7),
+            "any",
+        );
+        assert_eq!(
+            sql.0,
+            " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page \
+             AND pp_propname='wb-identifiers' AND pp_value*1<=7)"
+        );
     }
 
     #[test]
@@ -1661,7 +1744,19 @@ mod tests {
             None,
             "any",
         );
-        assert!(sql.0.contains("pp_sortkey=0"));
+        // `no_statements=true` adds the canonical NOT-EXISTS clause that
+        // checks for `pp_sortkey=0` on the `wb-claims` row. Pin both the
+        // table reference and the sortkey check.
+        assert!(
+            sql.0.contains("pp_sortkey=0"),
+            "expected pp_sortkey=0 clause in: {}",
+            sql.0
+        );
+        assert!(
+            sql.0.contains("wb-claims"),
+            "expected wb-claims reference in: {}",
+            sql.0
+        );
     }
 
     // ─── build_creator_sql_batch ──────────────────────────────────────────────
