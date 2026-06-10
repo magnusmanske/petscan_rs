@@ -47,10 +47,10 @@ impl SparqlServer {
         Self::parse_response_standard(response, api)
     }
 
-    fn parse_response_standard(response: &str, api: &Api) -> Result<PageList> {
-        // println!("Sanitize before: {}", response.len());
-        // println!("End of response: {}", &response[response.len() - 20..]);
-        let sanitized: String = response
+    /// Replace stray control characters (the endpoints occasionally emit them)
+    /// with spaces, keeping the JSON-significant whitespace intact.
+    fn sanitize_control_chars(response: &str) -> String {
+        response
             .chars()
             .map(|c| {
                 if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
@@ -59,10 +59,25 @@ impl SparqlServer {
                     c
                 }
             })
-            .collect();
-        // println!("Sanitize after: {}", sanitized.len());
-        let result: Value = serde_json::from_str(&sanitized)?;
-        // println!("JSON parsing complete");
+            .collect()
+    }
+
+    /// Parse the SPARQL endpoint's body as JSON, turning the opaque serde error
+    /// (`expected value at line 1 column 1`, issue #209) into an actionable
+    /// message: a non-JSON body almost always means a transient endpoint
+    /// problem (timeout, throttling, maintenance, or an HTML error page).
+    fn parse_sparql_json(response: &str) -> Result<Value> {
+        let sanitized = Self::sanitize_control_chars(response);
+        serde_json::from_str(&sanitized).map_err(|e| {
+            let snippet: String = sanitized.trim().chars().take(200).collect();
+            anyhow!(
+                "SPARQL endpoint did not return valid JSON ({e}). This is usually a transient endpoint error (timeout, rate limit, or maintenance); please retry. Response began: {snippet:?}"
+            )
+        })
+    }
+
+    fn parse_response_standard(response: &str, api: &Api) -> Result<PageList> {
+        let result = Self::parse_sparql_json(response)?;
         let first_var = result["head"]["vars"][0]
             .as_str()
             .ok_or_else(|| anyhow!("No variables found in SPARQL result"))?;
@@ -202,5 +217,44 @@ mod tests {
     fn test_can_run_without_sparql_param() {
         let p = make_platform(vec![]);
         assert!(!SourceSparql.can_run(&p));
+    }
+
+    // ── sanitize_control_chars ───────────────────────────────────────────────
+
+    #[test]
+    fn test_sanitize_replaces_control_chars_but_keeps_whitespace() {
+        let input = "a\u{0}b\tc\nd\re";
+        // NUL becomes a space; tab/newline/carriage-return are preserved.
+        assert_eq!(SparqlServer::sanitize_control_chars(input), "a b\tc\nd\re");
+    }
+
+    // ── parse_sparql_json (issue #209) ───────────────────────────────────────
+
+    #[test]
+    fn test_parse_sparql_json_valid() {
+        let json = r#"{"head":{"vars":["item"]},"results":{"bindings":[]}}"#;
+        let value = SparqlServer::parse_sparql_json(json).expect("valid JSON should parse");
+        assert_eq!(value["head"]["vars"][0], "item");
+    }
+
+    #[test]
+    fn test_parse_sparql_json_non_json_gives_actionable_error() {
+        // An HTML error page (e.g. WDQS 429/503) — the exact failure behind #209.
+        let html = "<html><body>429 Too Many Requests</body></html>";
+        let err = SparqlServer::parse_sparql_json(html)
+            .expect_err("non-JSON must be an error")
+            .to_string();
+        assert!(err.contains("did not return valid JSON"), "got: {err}");
+        assert!(err.contains("retry"), "got: {err}");
+        // The original response is surfaced to aid diagnosis.
+        assert!(err.contains("429 Too Many Requests"), "got: {err}");
+    }
+
+    #[test]
+    fn test_parse_sparql_json_empty_body_is_error() {
+        let err = SparqlServer::parse_sparql_json("")
+            .expect_err("empty body must be an error")
+            .to_string();
+        assert!(err.contains("did not return valid JSON"), "got: {err}");
     }
 }
