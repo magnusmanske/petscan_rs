@@ -156,10 +156,11 @@ function AutoList(callback) {
 
       if (me.mode == "creator") {
         var cmd = { q: q, status: "waiting", mode: "create" };
-        var a = $($(tr.find("td").get(2)).find("a").get(0));
+        var a = tr.find("a.pagelink").first();
+        if (a.length === 0) return;
         if (a.hasClass("redlink")) cmd.from_redlink = true;
         cmd.page = decodeURIComponent(
-          a.attr("href").replace(/^.+?\/wiki\//, ""),
+          (a.attr("href") || "").replace(/^.+?\/wiki\//, ""),
         );
         remove_q = me.commands_todo.length;
         me.commands_todo.push(cmd);
@@ -597,9 +598,10 @@ function AutoList(callback) {
     if (me.mode != "creator") return;
     $("#main_table tbody tr").each(function () {
       var tr = $(this);
-      var td = $(tr.find("td").get(2));
-      var page = $(td.find("a").get(0))
-        .attr("href")
+      var a = tr.find("a.pagelink").first();
+      if (a.length === 0) return;
+      var td = a.closest("td");
+      var page = (a.attr("href") || "")
         .replace(/^.+?\/wiki\//, "")
         .replace(/_/, " ");
       td.append(
