@@ -785,6 +785,91 @@ impl SourceDatabase {
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList> {
+        let result = self.get_pages_inner(state, primary_pagelist).await?;
+        // Exclude pages in the negative categories. Done here as an in-memory
+        // set difference rather than an inline SQL `NOT IN (...)` so a deep
+        // excluded-category tree can't blow past MySQL's 65 535 placeholder
+        // limit (issue #206).
+        self.subtract_negative_categories(state, &result).await?;
+        Ok(result)
+    }
+
+    /// Resolve the negative ("exclude") categories to their member pages and
+    /// remove those pages from `result`.
+    ///
+    /// The excluded title list is chunked and queried in parallel batches; each
+    /// batch carries only its own placeholders, so no single statement can hit
+    /// the placeholder limit regardless of how deep the category tree is.
+    async fn subtract_negative_categories(
+        &self,
+        state: &AppState,
+        result: &PageList,
+    ) -> Result<()> {
+        if self.cat_neg.is_empty() || result.is_empty() {
+            return Ok(());
+        }
+        let wiki = result.wiki().ok_or_else(|| {
+            anyhow!("SourceDatabase::subtract_negative_categories: result has no wiki")
+        })?;
+
+        let mut cats: Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
+        cats.sort_unstable();
+        cats.dedup();
+
+        let excluded = PageList::new_from_wiki(&wiki);
+        let futures: Vec<_> = cats
+            .chunks(MAX_CATEGORY_BATCH_SIZE * 10)
+            .map(|chunk| self.fetch_category_members(state, &wiki, chunk, &excluded))
+            .collect();
+        let results: Vec<_> = iter(futures)
+            .buffered(MAX_CONCURRENT_DB_BATCHES)
+            .collect()
+            .await;
+        for r in results {
+            r?;
+        }
+
+        result.difference(&excluded, None).await?;
+        Ok(())
+    }
+
+    /// Fetch all member pages of `cats` and append them (id + title + namespace)
+    /// to `out`. Matches the old negative-category subquery exactly: every page
+    /// directly in any of the categories, regardless of the member's namespace.
+    async fn fetch_category_members(
+        &self,
+        state: &AppState,
+        wiki: &str,
+        cats: &[String],
+        out: &PageList,
+    ) -> Result<()> {
+        let sql = helpers::category_members_query(cats);
+        if sql.1.is_empty() {
+            return Ok(()); // No real titles in this chunk; nothing to fetch.
+        }
+        let rows = state
+            .get_wiki_db_connection(wiki)
+            .await?
+            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .await
+            .map_err(|e| anyhow!(e))?
+            .map_and_drop(from_row::<(u32, Vec<u8>, NamespaceID)>)
+            .await
+            .map_err(|e| anyhow!(e))?;
+        for (page_id, page_title, page_namespace) in rows {
+            let page_title = String::from_utf8_lossy(&page_title).into_owned();
+            let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
+            entry.set_page_id(Some(page_id));
+            out.add_entry(entry);
+        }
+        Ok(())
+    }
+
+    async fn get_pages_inner(
+        &mut self,
+        state: &AppState,
+        primary_pagelist: Option<&PageList>,
+    ) -> Result<PageList> {
         let mut params = self
             .get_pages_initialize_query(state, primary_pagelist)
             .await?;
@@ -881,7 +966,10 @@ impl SourceDatabase {
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
 
         self.get_pages_for_primary_namespaces(primary, &mut sql);
-        self.get_pages_for_primary_negative_categories(&mut sql);
+        // Negative categories are applied *after* the primary query as an
+        // in-memory set difference (see `subtract_negative_categories`), not
+        // inlined here: a deep excluded-category tree can expand to more titles
+        // than MySQL's 65 535 placeholder limit allows in one statement (#206).
         self.get_pages_for_primary_templates_as_secondary(&mut sql);
         self.get_pages_for_primary_negative_templates(&mut sql);
         self.get_pages_for_primary_links_from(&mut sql, &api);
@@ -1207,17 +1295,6 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_negative_categories(&self, sql: &mut (String, Vec<MyValue>)) {
-        if !self.cat_neg.is_empty() {
-            let mut cats: Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
-            cats.sort_unstable();
-            cats.dedup();
-            sql.0 += " AND p.page_id NOT IN (SELECT DISTINCT cl_from FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
-            helpers::sql_in(&cats, sql);
-            sql.0 += ")";
-        }
-    }
-
     fn get_pages_for_primary_namespaces(&self, primary: &String, sql: &mut (String, Vec<MyValue>)) {
         if !self.params.namespace_ids.is_empty() && primary != "pagelist" {
             let namespace_ids = &self
@@ -1355,5 +1432,39 @@ mod tests {
         ];
         let result = simulate_category_query(params).await.unwrap();
         assert!(!result.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
+    async fn test_negative_category_excludes_members() {
+        // "Magnus Manske" is in both "1974 births" and "German bioinformaticians".
+        // Without exclusion he appears; excluding the latter must drop him, and
+        // the query must not error out (the #206 placeholder regression).
+        let has_magnus = |result: &PageList| {
+            result
+                .as_vec()
+                .iter()
+                .any(|entry| entry.title().pretty() == "Magnus Manske")
+        };
+
+        let without_negcats = simulate_category_query(vec![
+            ("categories", "1974_births"),
+            ("language", "en"),
+            ("project", "wikipedia"),
+        ])
+        .await
+        .unwrap();
+        assert!(has_magnus(&without_negcats), "baseline should include Magnus");
+
+        let with_negcats = simulate_category_query(vec![
+            ("categories", "1974_births"),
+            ("negcats", "German bioinformaticians"),
+            ("language", "en"),
+            ("project", "wikipedia"),
+        ])
+        .await
+        .unwrap();
+        assert!(!has_magnus(&with_negcats), "excluded member must be removed");
+        assert!(with_negcats.len() < without_negcats.len(), "exclusion must shrink the result");
     }
 }

@@ -126,6 +126,29 @@ pub(super) fn links_to_subquery(input: &[String], api: &Api) -> SQLtuple {
     sql
 }
 
+/// Build the query that fetches all member pages (`page_id`, `page_title`,
+/// `page_namespace`) of the given categories.
+///
+/// Used to apply *negative* categories as a post-query set difference instead
+/// of an inline `… NOT IN (SELECT … IN (?,?,…))` subquery. A deep category
+/// tree can expand to far more titles than `MySQL`'s 65 535 prepared-statement
+/// placeholder limit allows in a single statement (issue #206), so the caller
+/// chunks the title list and runs this query once per chunk, then subtracts
+/// the resulting pages from the result list in memory.
+///
+/// Titles are bound as positional parameters (no string interpolation), so
+/// this is not an SQL-injection vector.
+pub(super) fn category_members_query(cats: &[String]) -> SQLtuple {
+    let mut sql: SQLtuple = (
+        "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace FROM page p,categorylinks,linktarget WHERE p.page_id=cl_from AND lt_id=cl_target_id AND lt_namespace=14 AND lt_title IN ("
+            .to_string(),
+        vec![],
+    );
+    append_sql(&mut sql, prep_quote(cats));
+    sql.0 += ")";
+    sql
+}
+
 /// Build a cross-product of category batches, chunked by
 /// [`MAX_CATEGORY_BATCH_SIZE`] × 10 to stay under `MySQL`'s packet limit.
 /// Recursive: each call peels one positional slot off `categories` and
@@ -241,6 +264,33 @@ mod tests {
         );
         assert_eq!(sql.0, "WHERE x IN (?,?,?)");
         assert_eq!(sql.1.len(), 3);
+    }
+
+    #[test]
+    fn category_members_query_binds_each_title_as_placeholder() {
+        let cats = vec![
+            "Geografia".to_string(),
+            "Biografie".to_string(),
+            "Kinematografia".to_string(),
+        ];
+        let (sql, params) = category_members_query(&cats);
+        // One placeholder per title; titles are bound, never interpolated.
+        assert_eq!(params.len(), 3);
+        assert!(sql.ends_with("lt_title IN (?,?,?)"), "got: {sql}");
+        assert!(sql.contains("p.page_id,p.page_title,p.page_namespace"), "got: {sql}");
+        assert!(sql.contains("lt_namespace=14"), "got: {sql}");
+        // No raw title text leaks into the SQL string.
+        assert!(!sql.contains("Geografia"), "titles must not be interpolated: {sql}");
+    }
+
+    #[test]
+    fn category_members_query_drops_empty_titles() {
+        // prep_quote trims and drops empty entries, so the placeholder count
+        // tracks only the real titles — keeping us well under the 65 535 limit.
+        let cats = vec!["A".to_string(), "  ".to_string(), String::new(), "B".to_string()];
+        let (sql, params) = category_members_query(&cats);
+        assert_eq!(params.len(), 2);
+        assert!(sql.ends_with("IN (?,?)"), "got: {sql}");
     }
 
     #[test]
