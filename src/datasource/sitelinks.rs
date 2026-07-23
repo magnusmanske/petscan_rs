@@ -90,7 +90,7 @@ impl SourceSitelinks {
             .filter_map(|site| self.site2lang(site))
             .collect();
 
-        let mut sql: SQLtuple = (String::new(), vec![]);
+        let mut sql: SQLtuple = SQLtuple(String::new(), vec![]);
         sql.0 += "SELECT ";
         if self.use_min_max {
             sql.0 += "page_title,(SELECT count(*) FROM langlinks WHERE ll_from=page_id) AS sitelink_count" ;
@@ -238,7 +238,7 @@ mod tests {
         let mut src = SourceSitelinks::new();
         // enwiki becomes the main wiki (first); frwiki generates the ll_lang=? condition
         let p = make_platform(vec![("sitelinks_yes", "enwiki\nfrwiki")]);
-        let (sql, params) = src.generate_sql_query(&p).unwrap();
+        let SQLtuple(sql, params) = src.generate_sql_query(&p).unwrap();
         assert_eq!(
             sql,
             "SELECT DISTINCT page_title,0 FROM page WHERE page_namespace=0 \
@@ -253,7 +253,7 @@ mod tests {
         let mut src = SourceSitelinks::new();
         // enwiki is main wiki; fr and de generate the IN (?,?) condition
         let p = make_platform(vec![("sitelinks_any", "enwiki\nfrwiki\ndewiki")]);
-        let (sql, params) = src.generate_sql_query(&p).unwrap();
+        let SQLtuple(sql, params) = src.generate_sql_query(&p).unwrap();
         assert_eq!(
             sql,
             "SELECT DISTINCT page_title,0 FROM page WHERE page_namespace=0 \
@@ -272,7 +272,7 @@ mod tests {
             ("sitelinks_yes", "enwiki"),
             ("sitelinks_no", "frwiki\ndewiki"),
         ]);
-        let (sql, params) = src.generate_sql_query(&p).unwrap();
+        let SQLtuple(sql, params) = src.generate_sql_query(&p).unwrap();
         assert_eq!(
             sql,
             "SELECT DISTINCT page_title,0 FROM page WHERE page_namespace=0 \
@@ -299,7 +299,7 @@ mod tests {
             ("min_sitelink_count", "10"),
             ("max_sitelink_count", "100"),
         ]);
-        let (sql, params) = src.generate_sql_query(&p).unwrap();
+        let SQLtuple(sql, params) = src.generate_sql_query(&p).unwrap();
         // min/max only flip use_min_max because no non-main wiki was given;
         // the SELECT column list switches to include sitelink_count, no
         // langlinks join is added, and HAVING is appended.
@@ -325,7 +325,7 @@ mod tests {
             ("min_sitelink_count", "DROP TABLE page;--"),
             ("max_sitelink_count", "-5"),
         ]);
-        let (sql, _) = src.generate_sql_query(&p).unwrap();
+        let SQLtuple(sql, _) = src.generate_sql_query(&p).unwrap();
         assert!(
             !sql.contains("DROP"),
             "invalid min_sitelink_count must not reach SQL: {sql}"

@@ -356,7 +356,7 @@ impl WDfist {
         Ok(())
     }
 
-    fn follow_search_commons_prepare_batches(&mut self) -> Vec<(String, Vec<MyValue>)> {
+    fn follow_search_commons_prepare_batches(&mut self) -> Vec<SQLtuple> {
         // Prepare batches
         // TODO uses X3 cluster, but fix wbt_type
         let mut batches: Vec<SQLtuple> = vec![];
@@ -559,7 +559,7 @@ impl WDfist {
             .map_err(|e| anyhow!("{e}"))
     }
 
-    fn filter_files_from_ignore_database_prepare_batches(&mut self) -> Vec<(String, Vec<MyValue>)> {
+    fn filter_files_from_ignore_database_prepare_batches(&mut self) -> Vec<SQLtuple> {
         // Prepare batches
         let mut batches: Vec<SQLtuple> = vec![];
         let items: Vec<String> = self
@@ -581,7 +581,7 @@ impl WDfist {
     async fn filter_files_from_ignore_database_run_batch(
         &mut self,
         conn: &mut my::Conn,
-        sql: (String, Vec<MyValue>),
+        sql: SQLtuple,
     ) -> Result<()> {
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))

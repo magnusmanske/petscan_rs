@@ -94,7 +94,7 @@ pub(super) fn group_link_list_by_namespace(
 }
 
 pub(super) fn links_from_subquery(input: &[String], api: &Api) -> SQLtuple {
-    let mut sql: SQLtuple = ("(".to_string(), vec![]);
+    let mut sql: SQLtuple = SQLtuple("(".to_string(), vec![]);
     let nslist = group_link_list_by_namespace(input, api);
     for nsgroup in &nslist {
         if !sql.1.is_empty() {
@@ -111,7 +111,7 @@ pub(super) fn links_from_subquery(input: &[String], api: &Api) -> SQLtuple {
 }
 
 pub(super) fn links_to_subquery(input: &[String], api: &Api) -> SQLtuple {
-    let mut sql: SQLtuple = ("(".to_string(), vec![]);
+    let mut sql: SQLtuple = SQLtuple("(".to_string(), vec![]);
     let nslist = group_link_list_by_namespace(input, api);
     for nsgroup in &nslist {
         if !sql.1.is_empty() {
@@ -140,7 +140,7 @@ pub(super) fn links_to_subquery(input: &[String], api: &Api) -> SQLtuple {
 /// Titles are bound as positional parameters (no string interpolation), so
 /// this is not an SQL-injection vector.
 pub(super) fn category_members_query(cats: &[String]) -> SQLtuple {
-    let mut sql: SQLtuple = (
+    let mut sql: SQLtuple = SQLtuple(
         "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace FROM page p,categorylinks,linktarget WHERE p.page_id=cl_from AND lt_id=cl_target_id AND lt_namespace=14 AND lt_title IN ("
             .to_string(),
         vec![],
@@ -170,7 +170,7 @@ pub(super) fn subcategories_query(
     skip_hidden_categories: bool,
     tracking_category: Option<&str>,
 ) -> SQLtuple {
-    let mut sql: SQLtuple = (
+    let mut sql: SQLtuple = SQLtuple(
         "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN ("
             .to_string(),
         vec![],
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn sql_in_single_value_uses_equality() {
-        let mut sql: SQLtuple = ("WHERE x".to_string(), vec![]);
+        let mut sql: SQLtuple = SQLtuple("WHERE x".to_string(), vec![]);
         sql_in(&["alpha".to_string()], &mut sql);
         assert_eq!(sql.0, "WHERE x=?");
         assert_eq!(sql.1.len(), 1);
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn sql_in_multiple_values_uses_in_list() {
-        let mut sql: SQLtuple = ("WHERE x".to_string(), vec![]);
+        let mut sql: SQLtuple = SQLtuple("WHERE x".to_string(), vec![]);
         sql_in(
             &["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
             &mut sql,
@@ -311,7 +311,7 @@ mod tests {
             "Biografie".to_string(),
             "Kinematografia".to_string(),
         ];
-        let (sql, params) = category_members_query(&cats);
+        let SQLtuple(sql, params) = category_members_query(&cats);
         // One placeholder per title; titles are bound, never interpolated.
         assert_eq!(params.len(), 3);
         assert!(sql.ends_with("lt_title IN (?,?,?)"), "got: {sql}");
@@ -326,7 +326,7 @@ mod tests {
         // prep_quote trims and drops empty entries, so the placeholder count
         // tracks only the real titles — keeping us well under the 65 535 limit.
         let cats = vec!["A".to_string(), "  ".to_string(), String::new(), "B".to_string()];
-        let (sql, params) = category_members_query(&cats);
+        let SQLtuple(sql, params) = category_members_query(&cats);
         assert_eq!(params.len(), 2);
         assert!(sql.ends_with("IN (?,?)"), "got: {sql}");
     }
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn subcategories_query_no_filters_matches_plain_traversal() {
         let cats = vec!["Foo".to_string(), "Bar".to_string()];
-        let (sql, params) = subcategories_query(&cats, false, None);
+        let SQLtuple(sql, params) = subcategories_query(&cats, false, None);
         assert_eq!(sql, SUBCAT_BASE);
         assert_eq!(params.len(), 2);
     }
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn subcategories_query_skip_hidden_adds_hiddencat_anti_join() {
         let cats = vec!["Foo".to_string(), "Bar".to_string()];
-        let (sql, params) = subcategories_query(&cats, true, None);
+        let SQLtuple(sql, params) = subcategories_query(&cats, true, None);
         assert_eq!(
             sql,
             format!(
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn subcategories_query_tracking_category_adds_bound_anti_join() {
         let cats = vec!["Foo".to_string(), "Bar".to_string()];
-        let (sql, params) = subcategories_query(&cats, false, Some("Tracking_categories"));
+        let SQLtuple(sql, params) = subcategories_query(&cats, false, Some("Tracking_categories"));
         assert_eq!(
             sql,
             format!(
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn subcategories_query_both_filters_combine() {
         let cats = vec!["Foo".to_string()];
-        let (sql, params) = subcategories_query(&cats, true, Some("Wartungskategorie"));
+        let SQLtuple(sql, params) = subcategories_query(&cats, true, Some("Wartungskategorie"));
         assert!(sql.contains("pp_propname='hiddencat'"), "got: {sql}");
         assert!(sql.contains("lttc.lt_title=?"), "got: {sql}");
         assert_eq!(params.len(), 2);

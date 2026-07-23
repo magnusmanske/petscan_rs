@@ -189,7 +189,7 @@ impl Platform {
     }
 
     fn get_label_sql_new(&self, namespace_id: &NamespaceID) -> Option<SQLtuple> {
-        let mut ret: SQLtuple = (String::new(), vec![]);
+        let mut ret: SQLtuple = SQLtuple(String::new(), vec![]);
         let yes = self.get_param_as_vec("labels_yes", "\n");
         let any = self.get_param_as_vec("labels_any", "\n");
         let no = self.get_param_as_vec("labels_no", "\n");
@@ -569,7 +569,7 @@ impl Platform {
         let mut conn = self.state.get_wiki_db_connection(&wiki).await?;
 
         for (title, namespace_id) in title_ns {
-            let sql: SQLtuple = (
+            let sql: SQLtuple = SQLtuple(
                 "SELECT page_title,page_namespace FROM page WHERE page_namespace=? AND page_title LIKE ?"
                     .to_string(),
                 vec![
@@ -946,7 +946,7 @@ impl Platform {
                 "SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='{}' and ips_site_page IN ({})",
                 &wiki, &placeholders
             );
-            batches.push((query, escaped));
+            batches.push(SQLtuple(query, escaped));
         });
 
         let rows: TokioMutex<Vec<my::Row>> = TokioMutex::new(vec![]);
@@ -1062,7 +1062,7 @@ impl Platform {
     ) -> (SQLtuple, String) {
         let use_min_max = !sitelinks_min.is_empty() || !sitelinks_max.is_empty();
 
-        let mut sql: SQLtuple = (String::new(), vec![]);
+        let mut sql: SQLtuple = SQLtuple(String::new(), vec![]);
         sql.0 += "SELECT ";
         if use_min_max {
             sql.0 += "page_title,(SELECT count(*) FROM wb_items_per_site WHERE ips_item_id=substr(page_title,2)*1) AS sitelink_count";
@@ -1182,7 +1182,7 @@ impl Platform {
         max_identifiers: Option<usize>,
         wpiu: &str,
     ) -> SQLtuple {
-        let mut sql_post: SQLtuple = (String::new(), vec![]);
+        let mut sql_post: SQLtuple = SQLtuple(String::new(), vec![]);
 
         if let Some(m) = min_statements {
             sql_post.0 += &format!(
@@ -1280,11 +1280,11 @@ impl Platform {
         let parts = list
             .split_terminator(',')
             .filter_map(|s| match s.chars().next() {
-                Some('Q') => Some((
+                Some('Q') => Some(SQLtuple(
                     "(SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title=?)".to_string(),
                     vec![s.into()],
                 )),
-                Some('P') => Some((
+                Some('P') => Some(SQLtuple(
                     "(SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=120 AND lt_title=?)".to_string(),
                     vec![s.into()],
                 )),
@@ -1751,7 +1751,7 @@ mod tests {
 
     #[test]
     fn test_build_creator_sql_batch_sets_sql_string() {
-        let mut batch: SQLtuple = (String::new(), vec![MyValue::Bytes("Some_Page".into())]);
+        let mut batch: SQLtuple = SQLtuple(String::new(), vec![MyValue::Bytes("Some_Page".into())]);
         Platform::build_creator_sql_batch(&mut batch);
         assert!(batch.0.contains("wbt_text"));
         assert!(batch.0.contains("wbx_text IN ("));
@@ -1767,7 +1767,7 @@ mod tests {
 
     #[test]
     fn test_build_redlinks_sql_ns0_only() {
-        let mut batch: SQLtuple = ("page_title=?".to_string(), vec![]);
+        let mut batch: SQLtuple = SQLtuple("page_title=?".to_string(), vec![]);
         Platform::build_redlinks_sql(&mut batch, true, false);
         assert!(batch.0.contains("lt0.lt_namespace=0"));
         assert!(!batch.0.contains("lt0.lt_namespace>=0"));
@@ -1775,14 +1775,14 @@ mod tests {
 
     #[test]
     fn test_build_redlinks_sql_all_ns() {
-        let mut batch: SQLtuple = ("page_title=?".to_string(), vec![]);
+        let mut batch: SQLtuple = SQLtuple("page_title=?".to_string(), vec![]);
         Platform::build_redlinks_sql(&mut batch, false, false);
         assert!(batch.0.contains("lt0.lt_namespace>=0"));
     }
 
     #[test]
     fn test_build_redlinks_sql_remove_template() {
-        let mut batch: SQLtuple = ("page_title=?".to_string(), vec![]);
+        let mut batch: SQLtuple = SQLtuple("page_title=?".to_string(), vec![]);
         Platform::build_redlinks_sql(&mut batch, false, true);
         assert!(batch.0.contains("pl_from_namespace=10"));
     }

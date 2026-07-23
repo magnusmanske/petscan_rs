@@ -1098,7 +1098,7 @@ impl SourceDatabase {
     fn get_pages_for_primary_wikidata_item_speedup(
         &self,
         primary: Primary,
-        sql: &mut (String, Vec<MyValue>),
+        sql: &mut SQLtuple,
     ) {
         // Speed up "Only pages without Wikidata items"
         if primary != Primary::NoWikidata && self.params.page_wikidata_item == "without" {
@@ -1127,7 +1127,7 @@ impl SourceDatabase {
         );
     }
 
-    fn get_pages_for_primary_having(&self, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_having(&self, sql: &mut SQLtuple) {
         // Link count
         let mut having: Vec<String> = vec![];
         if let Some(l) = self.params.minlinks {
@@ -1144,7 +1144,7 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_page_size(&self, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_page_size(&self, sql: &mut SQLtuple) {
         // Size
         if let Some(i) = self.params.larger {
             sql.0 += " AND p.page_len>=";
@@ -1160,7 +1160,7 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_page_types(&self, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_page_types(&self, sql: &mut SQLtuple) {
         // Misc page types
         // TODO FIXME get local "Soft_redirect" page title from Wikidata Q4844001
         let soft_redirects_page = "Soft_redirect";
@@ -1193,7 +1193,7 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_last_edit(&self, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_last_edit(&self, sql: &mut SQLtuple) {
         // Last edit
         match self.params.last_edit_anon.as_str() {
             "yes" => {
@@ -1241,7 +1241,7 @@ impl SourceDatabase {
         sql.0 += "))";
     }
 
-    fn get_pages_for_primary_ores(&self, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_ores(&self, sql: &mut SQLtuple) {
         // ORES
         if self.params.ores_type != "any"
             && (self.params.ores_prediction != "any"
@@ -1266,7 +1266,7 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_lead_image(&self, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_lead_image(&self, sql: &mut SQLtuple) {
         // Lead image
         match self.params.page_image.as_str() {
             "yes" => {
@@ -1285,7 +1285,7 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_links_to(&self, sql: &mut (String, Vec<MyValue>), api: Api) {
+    fn get_pages_for_primary_links_to(&self, sql: &mut SQLtuple, api: Api) {
         // Links to all
         self.params.links_to_all.iter().for_each(|l| {
             sql.0 += " AND p.page_id IN ";
@@ -1311,7 +1311,7 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_links_from(&self, sql: &mut (String, Vec<MyValue>), api: &Api) {
+    fn get_pages_for_primary_links_from(&self, sql: &mut SQLtuple, api: &Api) {
         // Links from all
         self.params.linked_from_all.iter().for_each(|l| {
             sql.0 += " AND p.page_id IN ";
@@ -1337,7 +1337,7 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_negative_templates(&self, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_negative_templates(&self, sql: &mut SQLtuple) {
         // Negative templates
         if !self.params.templates_no.is_empty() {
             let tmp = self.template_subquery(
@@ -1350,7 +1350,7 @@ impl SourceDatabase {
     }
 
     /// Templates as secondary; template namespace only!
-    fn get_pages_for_primary_templates_as_secondary(&self, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_templates_as_secondary(&self, sql: &mut SQLtuple) {
         if self.has_pos_templates {
             // All
             self.params.templates_yes.iter().for_each(|t| {
@@ -1374,7 +1374,7 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_namespaces(&self, primary: Primary, sql: &mut (String, Vec<MyValue>)) {
+    fn get_pages_for_primary_namespaces(&self, primary: Primary, sql: &mut SQLtuple) {
         if !self.params.namespace_ids.is_empty() && primary != Primary::Pagelist {
             let namespace_ids = &self
                 .params
@@ -1389,8 +1389,8 @@ impl SourceDatabase {
 
     fn get_pages_for_primary_last_edited(
         is_before_after_done: &mut bool,
-        sql: &mut (String, Vec<MyValue>),
-        sql_before_after: (String, Vec<MyValue>),
+        sql: &mut SQLtuple,
+        sql_before_after: SQLtuple,
     ) {
         // Last edit/created before/after
         if !*is_before_after_done {
@@ -1401,9 +1401,10 @@ impl SourceDatabase {
 
     async fn get_pages_for_primary_run_query(
         &self,
-        sql: (String, Vec<MyValue>),
+        sql: SQLtuple,
         conn: &mut my::Conn,
     ) -> Result<Vec<PrimaryResultRow>> {
+        debug_assert!(sql.placeholders_balanced(), "unbalanced placeholders: {}", sql.0);
         Platform::profile(
             "DSDB::get_pages_for_primary STARTING RUN",
             Some(sql.1.len()),
@@ -1602,10 +1603,12 @@ mod tests {
     }
 
     /// Run one clause builder against an empty SQL tuple and return the
-    /// generated SQL plus the number of bound values.
+    /// generated SQL plus the number of bound values. Every complete
+    /// fragment must have one bound value per `?` placeholder.
     fn built(apply: impl FnOnce(&mut SQLtuple)) -> (String, usize) {
         let mut sql = crate::datasource::sql_tuple();
         apply(&mut sql);
+        assert!(sql.placeholders_balanced(), "unbalanced placeholders: {}", sql.0);
         (sql.0, sql.1.len())
     }
 
@@ -1823,7 +1826,7 @@ mod tests {
 
     #[test]
     fn sql_last_edited_appends_once_and_flips_flag() {
-        let before_after = (
+        let before_after = SQLtuple(
             " INNER JOIN (revision r) ON r.rev_page=p.page_id AND r.rev_id=p.page_latest AND r.rev_timestamp<=? ".to_string(),
             vec![MyValue::Bytes("20240101000000".into())],
         );
