@@ -6,6 +6,7 @@
 //! unit-testable without a database.
 
 use crate::datasource::{SQLtuple, append_sql, prep_quote};
+use mysql_async::Value as MyValue;
 use std::collections::HashMap;
 use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
@@ -146,6 +147,43 @@ pub(super) fn category_members_query(cats: &[String]) -> SQLtuple {
     );
     append_sql(&mut sql, prep_quote(cats));
     sql.0 += ")";
+    sql
+}
+
+/// Build the query that fetches the direct subcategories of the given
+/// categories — one level of the breadth-first tree traversal.
+///
+/// Two optional filters keep deep traversals from drifting into
+/// housekeeping parts of the category graph (issue #197):
+/// - `skip_hidden_categories` drops subcategories marked `__HIDDENCAT__`
+///   (a primary-key `page_props` lookup per candidate row).
+/// - `tracking_category` drops subcategories that are themselves members of
+///   the wiki's "tracking categories" container category (the local sitelink
+///   of Wikidata Q6964088), via an indexed anti-join on `categorylinks`.
+///
+/// Both filters act on *discovered* subcategories only; the root categories
+/// a user explicitly listed are never filtered. Note the deliberate absence
+/// of any page-level filter: most articles sit in *some* tracking category
+/// ("CS1 errors" etc.), so filtering result pages would gut the results.
+pub(super) fn subcategories_query(
+    categories: &[String],
+    skip_hidden_categories: bool,
+    tracking_category: Option<&str>,
+) -> SQLtuple {
+    let mut sql: SQLtuple = (
+        "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN ("
+            .to_string(),
+        vec![],
+    );
+    append_sql(&mut sql, prep_quote(categories));
+    sql.0 += ")";
+    if skip_hidden_categories {
+        sql.0 += " AND NOT EXISTS (SELECT 1 FROM page_props WHERE pp_page=page_id AND pp_propname='hiddencat')";
+    }
+    if let Some(tracking_category) = tracking_category {
+        sql.0 += " AND NOT EXISTS (SELECT 1 FROM categorylinks cltc,linktarget lttc WHERE cltc.cl_from=page_id AND lttc.lt_id=cltc.cl_target_id AND lttc.lt_namespace=14 AND lttc.lt_title=?)";
+        sql.1.push(MyValue::Bytes(tracking_category.into()));
+    }
     sql
 }
 
@@ -291,6 +329,56 @@ mod tests {
         let (sql, params) = category_members_query(&cats);
         assert_eq!(params.len(), 2);
         assert!(sql.ends_with("IN (?,?)"), "got: {sql}");
+    }
+
+    const SUBCAT_BASE: &str = "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN (?,?)";
+
+    #[test]
+    fn subcategories_query_no_filters_matches_plain_traversal() {
+        let cats = vec!["Foo".to_string(), "Bar".to_string()];
+        let (sql, params) = subcategories_query(&cats, false, None);
+        assert_eq!(sql, SUBCAT_BASE);
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn subcategories_query_skip_hidden_adds_hiddencat_anti_join() {
+        let cats = vec!["Foo".to_string(), "Bar".to_string()];
+        let (sql, params) = subcategories_query(&cats, true, None);
+        assert_eq!(
+            sql,
+            format!(
+                "{SUBCAT_BASE} AND NOT EXISTS (SELECT 1 FROM page_props WHERE pp_page=page_id AND pp_propname='hiddencat')"
+            )
+        );
+        assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn subcategories_query_tracking_category_adds_bound_anti_join() {
+        let cats = vec!["Foo".to_string(), "Bar".to_string()];
+        let (sql, params) = subcategories_query(&cats, false, Some("Tracking_categories"));
+        assert_eq!(
+            sql,
+            format!(
+                "{SUBCAT_BASE} AND NOT EXISTS (SELECT 1 FROM categorylinks cltc,linktarget lttc WHERE cltc.cl_from=page_id AND lttc.lt_id=cltc.cl_target_id AND lttc.lt_namespace=14 AND lttc.lt_title=?)"
+            )
+        );
+        // Two category titles + the tracking-category title, all bound.
+        assert_eq!(params.len(), 3);
+        assert!(
+            !sql.contains("Tracking_categories"),
+            "tracking category must be a bound parameter, not interpolated: {sql}"
+        );
+    }
+
+    #[test]
+    fn subcategories_query_both_filters_combine() {
+        let cats = vec!["Foo".to_string()];
+        let (sql, params) = subcategories_query(&cats, true, Some("Wartungskategorie"));
+        assert!(sql.contains("pp_propname='hiddencat'"), "got: {sql}");
+        assert!(sql.contains("lttc.lt_title=?"), "got: {sql}");
+        assert_eq!(params.len(), 2);
     }
 
     #[test]

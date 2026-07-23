@@ -42,6 +42,23 @@ paths:
             type: array
             items:
               type: string
+        - name: skip_tracking_categories
+          in: query
+          description: >-
+            When traversing category trees, skip subcategories that are members
+            of the wiki's tracking-categories container category (the local
+            sitelink of Wikidata Q6964088). Root categories are never skipped.
+            Any non-empty value enables this.
+          schema:
+            type: string
+        - name: skip_hidden_categories
+          in: query
+          description: >-
+            When traversing category trees, skip subcategories marked as hidden
+            (__HIDDENCAT__). Root categories are never skipped. Any non-empty
+            value enables this.
+          schema:
+            type: string
         - name: 'ns[0]'
           in: query
           schema:

@@ -26,6 +26,11 @@ use helpers::MAX_CATEGORY_BATCH_SIZE;
 
 const MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
 
+/// Wikidata item Q6964088 ("Category:Tracking categories"). Its sitelinks
+/// give the authoritative, wiki-local name of the container category that
+/// holds each wiki's tracking categories (issue #197).
+const TRACKING_CATEGORIES_ITEM: u64 = 6964088;
+
 /// Bundles the four mostly-context arguments shared by
 /// `get_pages_for_primary` and `get_pages_for_primary_new_connection`.
 /// `sql` and `sql_before_after` stay as separate parameters because they
@@ -126,6 +131,8 @@ pub struct SourceDatabaseParameters {
     category_namespace_is_case_insensitive: bool,
     template_namespace_is_case_insensitive: bool,
     created_by: Vec<String>,
+    skip_tracking_categories: bool,
+    skip_hidden_categories: bool,
 }
 
 impl SourceDatabaseParameters {
@@ -228,6 +235,8 @@ impl SourceDatabaseParameters {
             category_namespace_is_case_insensitive: !ns14_case_sensitive,
             template_namespace_is_case_insensitive: !ns10_case_sensitive,
             created_by: vec![],
+            skip_tracking_categories: platform.has_param("skip_tracking_categories"),
+            skip_hidden_categories: platform.has_param("skip_hidden_categories"),
         };
         ret.templates_yes = helpers::vec_to_ucfirst(
             platform.get_param_as_vec("templates_yes", "\n"),
@@ -258,6 +267,10 @@ pub struct SourceDatabase {
     has_pos_linked_from: bool,
     params: SourceDatabaseParameters,
     talk_namespace_ids: String,
+    /// Wiki-local name of the tracking-categories container category
+    /// (namespace stripped, underscores), resolved from Q6964088 when
+    /// `skip_tracking_categories` is requested. `None` = no filtering.
+    tracking_category_local: Option<String>,
 }
 
 #[async_trait]
@@ -295,7 +308,46 @@ impl SourceDatabase {
             has_pos_linked_from: false,
             params,
             talk_namespace_ids: String::new(),
+            tracking_category_local: None,
         }
+    }
+
+    /// Resolve the wiki-local name of the "tracking categories" container
+    /// category via its Q6964088 sitelink on the wikidatawiki replica,
+    /// e.g. `enwiki` → `Tracking_categories`. Returned without namespace
+    /// prefix and with underscores, ready for `lt_title` comparison.
+    ///
+    /// Errors if the wiki has no such sitelink: silently ignoring the
+    /// user's explicit filter request would produce misleading results.
+    async fn resolve_tracking_category(state: &AppState, wiki: &str) -> Result<String> {
+        let rows = state
+            .get_wiki_db_connection("wikidatawiki")
+            .await?
+            .exec_iter(
+                "SELECT ips_site_page FROM wb_items_per_site WHERE ips_item_id=? AND ips_site_id=?",
+                (TRACKING_CATEGORIES_ITEM, wiki),
+            )
+            .await
+            .map_err(|e| anyhow!(e))?
+            .map_and_drop(from_row::<Vec<u8>>)
+            .await
+            .map_err(|e| anyhow!(e))?;
+        let full_title = rows
+            .first()
+            .map(|row| String::from_utf8_lossy(row).into_owned())
+            .ok_or_else(|| {
+                anyhow!(
+                    "Cannot skip tracking categories on {wiki}: no local category is linked to wikidata:Q6964088"
+                )
+            })?;
+        let api = state.get_api_for_wiki(wiki.to_string()).await?;
+        let title = Title::new_from_full(&full_title, &api);
+        if title.namespace_id() != 14 {
+            return Err(anyhow!(
+                "Cannot skip tracking categories on {wiki}: the wikidata:Q6964088 sitelink '{full_title}' is not a category"
+            ));
+        }
+        Ok(title.with_underscores())
     }
 
     async fn get_categories_in_list(
@@ -304,10 +356,11 @@ impl SourceDatabase {
         wiki: &str,
         categories: &[String],
     ) -> Result<Vec<String>> {
-        let sql = "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN (";
-        let mut sql: SQLtuple = (sql.to_string(), vec![]);
-        super::append_sql(&mut sql, super::prep_quote(categories));
-        sql.0 += ")";
+        let sql = helpers::subcategories_query(
+            categories,
+            self.params.skip_hidden_categories,
+            self.tracking_category_local.as_deref(),
+        );
         let result = state
             .get_wiki_db_connection(wiki)
             .await?
@@ -556,6 +609,16 @@ impl SourceDatabase {
             Some(wiki) => wiki.to_owned(),
             None => return Err(anyhow!("SourceDatabase::get_pages: No wiki in params")),
         };
+
+        // Resolve the local tracking-categories category before any tree
+        // traversal, so `get_categories_in_list` can filter against it.
+        // Only needed when there are category trees to traverse.
+        if self.params.skip_tracking_categories
+            && !(self.params.cat_pos.is_empty() && self.params.cat_neg.is_empty())
+        {
+            self.tracking_category_local =
+                Some(Self::resolve_tracking_category(state, &wiki).await?);
+        }
 
         // Get positive categories serial list
         self.cat_pos = self
@@ -1432,6 +1495,43 @@ mod tests {
         ];
         let result = simulate_category_query(params).await.unwrap();
         assert!(!result.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
+    async fn test_resolve_tracking_category_enwiki() {
+        let state = get_state().await;
+        let name = SourceDatabase::resolve_tracking_category(&state, "enwiki")
+            .await
+            .unwrap();
+        assert_eq!(name, "Tracking_categories");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
+    async fn test_skip_category_filters_only_remove_pages() {
+        // The filters act on the depth-1 traversal; they must not error and
+        // can only ever shrink the result, never grow it or empty a normal
+        // content tree.
+        let base_params = |extra: Vec<(&'static str, &'static str)>| {
+            let mut p = vec![
+                ("categories", "Bioinformatics"),
+                ("depth", "1"),
+                ("language", "en"),
+                ("project", "wikipedia"),
+            ];
+            p.extend(extra);
+            p
+        };
+        let unfiltered = simulate_category_query(base_params(vec![])).await.unwrap();
+        let filtered = simulate_category_query(base_params(vec![
+            ("skip_tracking_categories", "1"),
+            ("skip_hidden_categories", "1"),
+        ]))
+        .await
+        .unwrap();
+        assert!(!filtered.is_empty(), "content tree must survive filtering");
+        assert!(filtered.len() <= unfiltered.len());
     }
 
     #[tokio::test]

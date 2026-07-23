@@ -252,6 +252,18 @@
 										style='width:100%'></textarea></div>
 							</div>
 
+							<!-- Plain-English labels for now; tt.js blanks unknown keys, so switch these
+							     to tt='skip_tracking_categories' etc. once the keys exist in tooltranslate -->
+							<div class="form-group row">
+								<label class="col-sm-2 form-control-label">Category filters</label>
+								<div class="col-sm-10">
+									<div><label><input type='checkbox' name='skip_tracking_categories' />
+											<span>Skip tracking categories when traversing category trees</span></label></div>
+									<div><label><input type='checkbox' name='skip_hidden_categories' />
+											<span>Skip hidden categories when traversing category trees</span></label></div>
+								</div>
+							</div>
+
 
 						</div> <!--tab panel-->
 						<div class="tab-pane" id="tab_pageprops" role="tabpanel">
