@@ -1123,20 +1123,18 @@ impl SourceDatabase {
 
     fn get_pages_for_primary_having(&self, sql: &mut (String, Vec<MyValue>)) {
         // Link count
-        let mut having: Vec<SQLtuple> = vec![];
+        let mut having: Vec<String> = vec![];
         if let Some(l) = self.params.minlinks {
-            having.push(("link_count>=".to_owned() + l.to_string().as_str(), vec![]));
+            having.push(format!("link_count>={l}"));
         }
         if let Some(l) = self.params.maxlinks {
-            having.push(("link_count<=".to_owned() + l.to_string().as_str(), vec![]));
+            having.push(format!("link_count<={l}"));
         }
 
         // HAVING
         if !having.is_empty() {
             sql.0 += " HAVING ";
-            for h in having {
-                super::append_sql(sql, h);
-            }
+            sql.0 += &having.join(" AND ");
         }
     }
 
@@ -1847,6 +1845,17 @@ mod tests {
         let db = snapshot_db(|p| p.maxlinks = Some(10));
         let (sql, n) = built(|s| db.get_pages_for_primary_having(s));
         assert_eq!(sql, " HAVING link_count<=10");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn sql_having_min_and_max_links_are_separated() {
+        let db = snapshot_db(|p| {
+            p.minlinks = Some(5);
+            p.maxlinks = Some(10);
+        });
+        let (sql, n) = built(|s| db.get_pages_for_primary_having(s));
+        assert_eq!(sql, " HAVING link_count>=5 AND link_count<=10");
         assert_eq!(n, 0);
     }
 
