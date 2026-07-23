@@ -37,7 +37,7 @@ const TRACKING_CATEGORIES_ITEM: u64 = 6964088;
 /// are transformed mid-call and the two functions handle them slightly
 /// differently (mut borrow + clone vs. moved owned value).
 struct PrimaryQueryArgs<'a> {
-    primary: &'a String,
+    primary: Primary,
     pages_sublist: &'a mut PageList,
     is_before_after_done: &'a mut bool,
     api: Api,
@@ -65,6 +65,20 @@ impl CombineMode {
         }
     }
 }
+/// Which positive source drives the primary page query. Previously a
+/// free-form `String` ("categories", "templates", …) with a runtime
+/// `other =>` error branch in `get_pages_inner`; an enum makes the
+/// dispatch total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Primary {
+    Categories,
+    Templates,
+    LinksFrom,
+    Pagelist,
+    NoWikidata,
+    CreatedBy,
+}
+
 const PAGE_SELECT_PREFIX: &str = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len";
 
 type PrimaryResultRow = (u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount);
@@ -73,7 +87,7 @@ type PrimaryResultRow = (u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount);
 struct DsdbParams {
     link_count_sql: String,
     wiki: String,
-    primary: String,
+    primary: Primary,
     sql_before_after: SQLtuple,
     is_before_after_done: bool,
 }
@@ -578,7 +592,6 @@ impl SourceDatabase {
             "DSDB::get_pages [primary:categories] START BATCH",
             Some(sql.1.len()),
         );
-        let primary = params.primary.to_string();
         let mut is_before_after_done = params.is_before_after_done;
         self.get_pages_for_primary_new_connection(
             state,
@@ -586,7 +599,7 @@ impl SourceDatabase {
             sql,
             &mut params.sql_before_after.clone(),
             PrimaryQueryArgs {
-                primary: &primary,
+                primary: params.primary,
                 pages_sublist: &mut pl2,
                 is_before_after_done: &mut is_before_after_done,
                 api,
@@ -701,29 +714,29 @@ impl SourceDatabase {
         Ok(DsdbParams {
             link_count_sql: link_count_sql.to_string(),
             wiki,
-            primary: primary.to_string(),
+            primary,
             sql_before_after,
             is_before_after_done,
         })
     }
 
-    fn get_primary(&mut self, primary_pagelist: Option<&PageList>) -> Result<String> {
+    fn get_primary(&mut self, primary_pagelist: Option<&PageList>) -> Result<Primary> {
         let primary = if !self.cat_pos.is_empty() {
-            "categories"
+            Primary::Categories
         } else if self.has_pos_templates {
-            "templates"
+            Primary::Templates
         } else if self.has_pos_linked_from {
-            "links_from"
+            Primary::LinksFrom
         } else if primary_pagelist.is_some() {
-            "pagelist"
+            Primary::Pagelist
         } else if self.params.page_wikidata_item == "without" {
-            "no_wikidata"
+            Primary::NoWikidata
         } else if !self.params.created_by.is_empty() {
-            "created_by"
+            Primary::CreatedBy
         } else {
             return Err(anyhow!("SourceDatabase: Missing primary"));
         };
-        Ok(primary.to_string())
+        Ok(primary)
     }
 
     async fn get_pages_categories(
@@ -838,13 +851,12 @@ impl SourceDatabase {
         let mut is_before_after_done = params.is_before_after_done;
         let mut pl2 = PageList::new_from_wiki(&wiki.clone());
         let api = state.get_api_for_wiki(wiki.clone()).await?;
-        let primary = params.primary.to_string();
         self.get_pages_for_primary(
             &mut conn,
             sql,
             sql_before_after,
             PrimaryQueryArgs {
-                primary: &primary,
+                primary: params.primary,
                 pages_sublist: &mut pl2,
                 is_before_after_done: &mut is_before_after_done,
                 api,
@@ -951,16 +963,16 @@ impl SourceDatabase {
 
         let mut sql = super::sql_tuple();
 
-        match params.primary.as_str() {
-            "categories" => {
+        match params.primary {
+            Primary::Categories => {
                 return self.get_pages_categories(&params, state).await;
             }
-            "pagelist" => {
+            Primary::Pagelist => {
                 return self
                     .get_pages_pagelist(params, state, primary_pagelist)
                     .await;
             }
-            "no_wikidata" => {
+            Primary::NoWikidata => {
                 sql.0 = PAGE_SELECT_PREFIX.to_string();
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
@@ -970,7 +982,7 @@ impl SourceDatabase {
                 }
                 sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')";
             }
-            "templates" | "links_from" | "created_by" => {
+            Primary::Templates | Primary::LinksFrom | Primary::CreatedBy => {
                 sql.0 = PAGE_SELECT_PREFIX.to_string();
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
@@ -980,23 +992,17 @@ impl SourceDatabase {
                 }
                 sql.0 += " WHERE 1=1";
             }
-            other => {
-                return Err(anyhow!(
-                    "SourceDatabase::get_pages: other primary '{other}'"
-                ));
-            }
         }
 
         let mut ret = PageList::new_from_wiki(&params.wiki);
         let mut conn = state.get_wiki_db_connection(&params.wiki).await?;
         let api = state.get_api_for_wiki(params.wiki.clone()).await?;
-        let primary = params.primary.to_string();
         self.get_pages_for_primary(
             &mut conn,
             sql,
             params.sql_before_after,
             PrimaryQueryArgs {
-                primary: &primary,
+                primary: params.primary,
                 pages_sublist: &mut ret,
                 is_before_after_done: &mut params.is_before_after_done,
                 api,
@@ -1091,11 +1097,11 @@ impl SourceDatabase {
 
     fn get_pages_for_primary_wikidata_item_speedup(
         &self,
-        primary: &String,
+        primary: Primary,
         sql: &mut (String, Vec<MyValue>),
     ) {
         // Speed up "Only pages without Wikidata items"
-        if primary != "no_wikidata" && self.params.page_wikidata_item == "without" {
+        if primary != Primary::NoWikidata && self.params.page_wikidata_item == "without" {
             sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')";
         }
     }
@@ -1368,8 +1374,8 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_namespaces(&self, primary: &String, sql: &mut (String, Vec<MyValue>)) {
-        if !self.params.namespace_ids.is_empty() && primary != "pagelist" {
+    fn get_pages_for_primary_namespaces(&self, primary: Primary, sql: &mut (String, Vec<MyValue>)) {
+        if !self.params.namespace_ids.is_empty() && primary != Primary::Pagelist {
             let namespace_ids = &self
                 .params
                 .namespace_ids
@@ -1613,7 +1619,7 @@ mod tests {
     #[test]
     fn sql_namespaces_multiple_uses_in_list() {
         let db = snapshot_db(|p| p.namespace_ids = vec![0, 14]);
-        let (sql, n) = built(|s| db.get_pages_for_primary_namespaces(&"categories".to_string(), s));
+        let (sql, n) = built(|s| db.get_pages_for_primary_namespaces(Primary::Categories, s));
         assert_eq!(sql, " AND p.page_namespace IN (?,?)");
         assert_eq!(n, 2);
     }
@@ -1621,7 +1627,7 @@ mod tests {
     #[test]
     fn sql_namespaces_single_uses_equality() {
         let db = snapshot_db(|p| p.namespace_ids = vec![0]);
-        let (sql, n) = built(|s| db.get_pages_for_primary_namespaces(&"categories".to_string(), s));
+        let (sql, n) = built(|s| db.get_pages_for_primary_namespaces(Primary::Categories, s));
         assert_eq!(sql, " AND p.page_namespace=?");
         assert_eq!(n, 1);
     }
@@ -1629,7 +1635,7 @@ mod tests {
     #[test]
     fn sql_namespaces_skipped_for_pagelist_primary() {
         let db = snapshot_db(|p| p.namespace_ids = vec![0]);
-        let (sql, n) = built(|s| db.get_pages_for_primary_namespaces(&"pagelist".to_string(), s));
+        let (sql, n) = built(|s| db.get_pages_for_primary_namespaces(Primary::Pagelist, s));
         assert_eq!(sql, "");
         assert_eq!(n, 0);
     }
@@ -1804,13 +1810,13 @@ mod tests {
     fn sql_wikidata_item_speedup_only_outside_no_wikidata_primary() {
         let db = snapshot_db(|p| p.page_wikidata_item = "without".to_string());
         let (sql, _) =
-            built(|s| db.get_pages_for_primary_wikidata_item_speedup(&"categories".to_string(), s));
+            built(|s| db.get_pages_for_primary_wikidata_item_speedup(Primary::Categories, s));
         assert_eq!(
             sql,
             " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')"
         );
         let (sql_skipped, _) = built(|s| {
-            db.get_pages_for_primary_wikidata_item_speedup(&"no_wikidata".to_string(), s);
+            db.get_pages_for_primary_wikidata_item_speedup(Primary::NoWikidata, s);
         });
         assert_eq!(sql_skipped, "");
     }
@@ -1917,9 +1923,9 @@ mod tests {
             p.minlinks = Some(2);
         });
         db.has_pos_templates = false;
-        let primary = "categories".to_string();
+        let primary = Primary::Categories;
         let (sql, n) = built(|s| {
-            db.get_pages_for_primary_namespaces(&primary, s);
+            db.get_pages_for_primary_namespaces(primary, s);
             db.get_pages_for_primary_templates_as_secondary(s);
             db.get_pages_for_primary_negative_templates(s);
             // links_from / links_to skipped: require a live Api
@@ -1929,7 +1935,7 @@ mod tests {
             db.get_pages_for_primary_created_by(s);
             db.get_pages_for_primary_page_types(s);
             db.get_pages_for_primary_page_size(s);
-            db.get_pages_for_primary_wikidata_item_speedup(&primary, s);
+            db.get_pages_for_primary_wikidata_item_speedup(primary, s);
             let mut done = true;
             SourceDatabase::get_pages_for_primary_last_edited(
                 &mut done,
