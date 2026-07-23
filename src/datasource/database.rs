@@ -515,13 +515,14 @@ impl SourceDatabase {
         sql
     }
 
-    async fn get_pages_for_category_batch(
-        &self,
-        params: &DsdbParams,
-        category_batch: &[Vec<String>],
-        state: &AppState,
-        ret: &PageList,
-    ) -> Result<()> {
+    /// Build the primary query for one batch of category groups. Pure SQL
+    /// construction — no DB access — so it can be snapshot-tested.
+    ///
+    /// `Subset` intersects the groups via self-joins on `categorylinks`;
+    /// `Union` merges all groups into one deduplicated `IN` list. Note the
+    /// union dedup goes through a `HashSet`, so the *order* of bound titles
+    /// is unspecified (only their set is).
+    fn category_batch_sql(&self, link_count_sql: &str, category_batch: &[Vec<String>]) -> SQLtuple {
         let subquery = "SELECT cl_from,cl_target_id,lt_title from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
         let mut sql = super::sql_tuple();
         match self.params.combine {
@@ -529,7 +530,7 @@ impl SourceDatabase {
                 sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,
                 	(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,
                  p.page_len".to_string() ;
-                sql.0 += &params.link_count_sql;
+                sql.0 += link_count_sql;
                 sql.0 += &format!(" FROM ( {subquery} IN (");
                 super::append_sql(&mut sql, super::prep_quote(&category_batch[0]));
                 sql.0 += ")) cl0";
@@ -552,7 +553,7 @@ impl SourceDatabase {
                     .map(|s| s.to_owned())
                     .collect::<Vec<String>>();
                 sql.0 = PAGE_SELECT_PREFIX.to_string();
-                sql.0 += &params.link_count_sql;
+                sql.0 += link_count_sql;
                 sql.0 += &format!(" FROM ( {subquery} IN (");
                 super::append_sql(&mut sql, super::prep_quote(&tmp));
                 sql.0 += ")) cl0";
@@ -560,6 +561,17 @@ impl SourceDatabase {
         }
         sql.0 += " INNER JOIN (page p";
         sql.0 += ") ON p.page_id=cl0.cl_from";
+        sql
+    }
+
+    async fn get_pages_for_category_batch(
+        &self,
+        params: &DsdbParams,
+        category_batch: &[Vec<String>],
+        state: &AppState,
+        ret: &PageList,
+    ) -> Result<()> {
+        let sql = self.category_batch_sql(&params.link_count_sql, category_batch);
         let mut pl2 = PageList::new_from_wiki(&params.wiki.clone());
         let api = state.get_api_for_wiki(params.wiki.clone()).await?;
         Platform::profile(
@@ -1566,5 +1578,368 @@ mod tests {
         .unwrap();
         assert!(!has_magnus(&with_negcats), "excluded member must be removed");
         assert!(with_negcats.len() < without_negcats.len(), "exclusion must shrink the result");
+    }
+
+    // ─── SQL snapshot tests ──────────────────────────────────────────────
+    //
+    // These pin the exact SQL text (and bound-value count) each clause
+    // builder emits — no database needed. They are the safety net for
+    // refactoring the query-construction code: any change to the generated
+    // SQL must show up here as a deliberate snapshot update.
+    //
+    // Not covered (they require a live `Api` for namespace resolution):
+    // `get_pages_for_primary_links_from` / `_links_to`.
+
+    /// Build a `SourceDatabase` from tweaked default parameters.
+    fn snapshot_db(tweak: impl FnOnce(&mut SourceDatabaseParameters)) -> SourceDatabase {
+        let mut params = SourceDatabaseParameters::new();
+        tweak(&mut params);
+        SourceDatabase::new(params)
+    }
+
+    /// Run one clause builder against an empty SQL tuple and return the
+    /// generated SQL plus the number of bound values.
+    fn built(apply: impl FnOnce(&mut SQLtuple)) -> (String, usize) {
+        let mut sql = crate::datasource::sql_tuple();
+        apply(&mut sql);
+        (sql.0, sql.1.len())
+    }
+
+    /// Collapse whitespace runs so snapshots of queries with embedded
+    /// newlines/indentation stay readable. Whitespace-only changes are
+    /// deliberately not pinned.
+    fn norm(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn sql_namespaces_multiple_uses_in_list() {
+        let db = snapshot_db(|p| p.namespace_ids = vec![0, 14]);
+        let (sql, n) = built(|s| db.get_pages_for_primary_namespaces(&"categories".to_string(), s));
+        assert_eq!(sql, " AND p.page_namespace IN (?,?)");
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn sql_namespaces_single_uses_equality() {
+        let db = snapshot_db(|p| p.namespace_ids = vec![0]);
+        let (sql, n) = built(|s| db.get_pages_for_primary_namespaces(&"categories".to_string(), s));
+        assert_eq!(sql, " AND p.page_namespace=?");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn sql_namespaces_skipped_for_pagelist_primary() {
+        let db = snapshot_db(|p| p.namespace_ids = vec![0]);
+        let (sql, n) = built(|s| db.get_pages_for_primary_namespaces(&"pagelist".to_string(), s));
+        assert_eq!(sql, "");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn sql_templates_yes_one_subquery_per_template() {
+        let mut db = snapshot_db(|p| {
+            p.templates_yes = vec!["Infobox".to_string(), "Taxobox".to_string()];
+        });
+        db.has_pos_templates = true;
+        let (sql, n) = built(|s| db.get_pages_for_primary_templates_as_secondary(s));
+        let one = " AND p.page_id IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)";
+        assert_eq!(sql, format!("{one}{one}"));
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn sql_templates_any_single_subquery_with_in_list() {
+        let mut db = snapshot_db(|p| {
+            p.templates_any = vec!["Infobox".to_string(), "Taxobox".to_string()];
+        });
+        db.has_pos_templates = true;
+        let (sql, n) = built(|s| db.get_pages_for_primary_templates_as_secondary(s));
+        assert_eq!(
+            sql,
+            " AND p.page_id IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title IN (?,?))"
+        );
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn sql_templates_no_uses_not_in() {
+        let db = snapshot_db(|p| p.templates_no = vec!["Stub".to_string()]);
+        let (sql, n) = built(|s| db.get_pages_for_primary_negative_templates(s));
+        assert_eq!(
+            sql,
+            " AND p.page_id NOT IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)"
+        );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn sql_templates_talk_page_shifts_namespace() {
+        let mut db = snapshot_db(|p| {
+            p.templates_any = vec!["WikiProject_Biology".to_string()];
+            p.templates_any_talk_page = true;
+            p.namespace_ids = vec![0];
+        });
+        db.has_pos_templates = true;
+        let (sql, n) = built(|s| db.get_pages_for_primary_templates_as_secondary(s));
+        assert_eq!(
+            sql,
+            " AND p.page_id IN (SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace+1=pt.page_namespace AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=? AND tl_from_namespace=?)"
+        );
+        // Template title + the talk-shifted namespace id (0+1=1), both bound.
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn sql_lead_image_variants() {
+        let yes = snapshot_db(|p| p.page_image = "yes".to_string());
+        let (sql, n) = built(|s| yes.get_pages_for_primary_lead_image(s));
+        assert_eq!(
+            sql,
+            " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))"
+        );
+        assert_eq!(n, 0);
+
+        let no = snapshot_db(|p| p.page_image = "no".to_string());
+        let (sql_no, _) = built(|s| no.get_pages_for_primary_lead_image(s));
+        assert_eq!(
+            sql_no,
+            " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))"
+        );
+
+        let any = snapshot_db(|_| {});
+        let (sql_any, _) = built(|s| any.get_pages_for_primary_lead_image(s));
+        assert_eq!(sql_any, "");
+    }
+
+    #[test]
+    fn sql_ores_full_clause() {
+        let db = snapshot_db(|p| {
+            p.ores_type = "damaging".to_string();
+            p.ores_prediction = "yes".to_string();
+            p.ores_prob_from = Some(0.5);
+            p.ores_prob_to = Some(0.75);
+        });
+        let (sql, n) = built(|s| db.get_pages_for_primary_ores(s));
+        assert_eq!(
+            sql,
+            " AND EXISTS (SELECT * FROM ores_classification WHERE p.page_latest=oresc_rev AND oresc_model IN (SELECT oresm_id FROM ores_model WHERE oresm_is_current=1 AND oresm_name=?) AND oresc_is_predicted=1 AND oresc_probability>=0.5 AND oresc_probability<=0.75)"
+        );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn sql_ores_requires_type_and_condition() {
+        // Type alone (prediction "any", no probabilities) emits nothing.
+        let db = snapshot_db(|p| p.ores_type = "damaging".to_string());
+        let (sql, n) = built(|s| db.get_pages_for_primary_ores(s));
+        assert_eq!(sql, "");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn sql_last_edit_clauses() {
+        let db = snapshot_db(|p| {
+            p.last_edit_anon = "yes".to_string();
+            p.last_edit_bot = "no".to_string();
+            p.last_edit_flagged = "yes".to_string();
+        });
+        let (sql, n) = built(|s| db.get_pages_for_primary_last_edit(s));
+        assert_eq!(
+            sql,
+            " AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NULL) \
+             AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot') \
+             AND NOT EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)"
+        );
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn sql_created_by_binds_actor_names() {
+        let db = snapshot_db(|p| {
+            p.created_by = vec!["Alice".to_string(), "Bob".to_string()];
+        });
+        let (sql, n) = built(|s| db.get_pages_for_primary_created_by(s));
+        assert_eq!(
+            sql,
+            " AND p.page_id IN (SELECT r.rev_page FROM revision r INNER JOIN actor a ON r.rev_actor=a.actor_id WHERE r.rev_parent_id=0 AND a.actor_name IN (?,?))"
+        );
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn sql_page_types_combined() {
+        let db = snapshot_db(|p| {
+            p.soft_redirects = "yes".to_string();
+            p.redirects = "no".to_string();
+            p.disambiguation_pages = "yes".to_string();
+            p.talk_page_exists = "no".to_string();
+        });
+        let (sql, n) = built(|s| db.get_pages_for_primary_page_types(s));
+        assert_eq!(
+            sql,
+            " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?) \
+             AND p.page_is_redirect=0 \
+             AND EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation') \
+             AND NOT EXISTS (SELECT * FROM page talk_p WHERE talk_p.page_title=p.page_title AND talk_p.page_namespace=p.page_namespace+1)"
+        );
+        // The bound value is the soft-redirect template title.
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn sql_page_size_clauses() {
+        let db = snapshot_db(|p| {
+            p.larger = Some(1000);
+            p.smaller = Some(5000);
+            p.since_rev0 = Some(150);
+        });
+        let (sql, n) = built(|s| db.get_pages_for_primary_page_size(s));
+        assert_eq!(
+            sql,
+            " AND p.page_len>=1000 AND p.page_len<=5000 AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*150/100"
+        );
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn sql_wikidata_item_speedup_only_outside_no_wikidata_primary() {
+        let db = snapshot_db(|p| p.page_wikidata_item = "without".to_string());
+        let (sql, _) =
+            built(|s| db.get_pages_for_primary_wikidata_item_speedup(&"categories".to_string(), s));
+        assert_eq!(
+            sql,
+            " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')"
+        );
+        let (sql_skipped, _) = built(|s| {
+            db.get_pages_for_primary_wikidata_item_speedup(&"no_wikidata".to_string(), s);
+        });
+        assert_eq!(sql_skipped, "");
+    }
+
+    #[test]
+    fn sql_last_edited_appends_once_and_flips_flag() {
+        let before_after = (
+            " INNER JOIN (revision r) ON r.rev_page=p.page_id AND r.rev_id=p.page_latest AND r.rev_timestamp<=? ".to_string(),
+            vec![MyValue::Bytes("20240101000000".into())],
+        );
+        let mut done = false;
+        let mut sql = crate::datasource::sql_tuple();
+        SourceDatabase::get_pages_for_primary_last_edited(&mut done, &mut sql, before_after.clone());
+        assert!(done);
+        assert_eq!(sql.0, before_after.0);
+        assert_eq!(sql.1.len(), 1);
+        // A second call must be a no-op: the flag is already set.
+        SourceDatabase::get_pages_for_primary_last_edited(&mut done, &mut sql, before_after);
+        assert_eq!(sql.1.len(), 1);
+    }
+
+    #[test]
+    fn sql_having_minlinks_only() {
+        let db = snapshot_db(|p| p.minlinks = Some(5));
+        let (sql, n) = built(|s| db.get_pages_for_primary_having(s));
+        assert_eq!(sql, " HAVING link_count>=5");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn sql_having_maxlinks_only() {
+        let db = snapshot_db(|p| p.maxlinks = Some(10));
+        let (sql, n) = built(|s| db.get_pages_for_primary_having(s));
+        assert_eq!(sql, " HAVING link_count<=10");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn sql_category_batch_subset_self_joins_each_group() {
+        let db = snapshot_db(|p| p.combine = CombineMode::Subset);
+        let batch = vec![
+            vec!["Births_1974".to_string()],
+            vec!["Bioinformaticians".to_string(), "Geneticists".to_string()],
+        ];
+        let sql = db.category_batch_sql(",0 AS link_count", &batch);
+        assert_eq!(
+            norm(&sql.0),
+            "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace, \
+             (SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched, \
+             p.page_len,0 AS link_count \
+             FROM ( SELECT cl_from,cl_target_id,lt_title from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title IN (?)) cl0 \
+             INNER JOIN categorylinks cl1 ON cl0.cl_from=cl1.cl_from \
+             INNER JOIN linktarget lt1 ON lt1.lt_namespace=14 AND lt1.lt_id=cl1.cl_target_id AND lt1.lt_title IN (?,?) \
+             INNER JOIN (page p) ON p.page_id=cl0.cl_from"
+        );
+        assert_eq!(sql.1.len(), 3);
+    }
+
+    #[test]
+    fn sql_category_batch_union_merges_and_dedups() {
+        let db = snapshot_db(|p| p.combine = CombineMode::Union);
+        let batch = vec![
+            vec!["Chemistry".to_string(), "Biology".to_string()],
+            vec!["Biology".to_string()],
+        ];
+        let sql = db.category_batch_sql(",0 AS link_count", &batch);
+        // Dedup goes through a HashSet, so the bound-title order is
+        // unspecified — pin the SQL shape and the value count only.
+        assert_eq!(
+            norm(&sql.0),
+            "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,\
+             (SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,\
+             p.page_len,0 AS link_count \
+             FROM ( SELECT cl_from,cl_target_id,lt_title from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title IN (?,?)) cl0 \
+             INNER JOIN (page p) ON p.page_id=cl0.cl_from"
+        );
+        assert_eq!(sql.1.len(), 2);
+    }
+
+    /// Pin the clause order `get_pages_for_primary` applies (minus the two
+    /// `Api`-dependent links clauses) for a many-filter query, so a future
+    /// reordering shows up as a deliberate snapshot change.
+    #[test]
+    fn sql_filter_sequence_kitchen_sink() {
+        let mut db = snapshot_db(|p| {
+            p.namespace_ids = vec![0];
+            p.templates_no = vec!["Stub".to_string()];
+            p.page_image = "free".to_string();
+            p.last_edit_anon = "no".to_string();
+            p.redirects = "no".to_string();
+            p.larger = Some(100);
+            p.page_wikidata_item = "without".to_string();
+            p.minlinks = Some(2);
+        });
+        db.has_pos_templates = false;
+        let primary = "categories".to_string();
+        let (sql, n) = built(|s| {
+            db.get_pages_for_primary_namespaces(&primary, s);
+            db.get_pages_for_primary_templates_as_secondary(s);
+            db.get_pages_for_primary_negative_templates(s);
+            // links_from / links_to skipped: require a live Api
+            db.get_pages_for_primary_lead_image(s);
+            db.get_pages_for_primary_ores(s);
+            db.get_pages_for_primary_last_edit(s);
+            db.get_pages_for_primary_created_by(s);
+            db.get_pages_for_primary_page_types(s);
+            db.get_pages_for_primary_page_size(s);
+            db.get_pages_for_primary_wikidata_item_speedup(&primary, s);
+            let mut done = true;
+            SourceDatabase::get_pages_for_primary_last_edited(
+                &mut done,
+                s,
+                crate::datasource::sql_tuple(),
+            );
+            db.get_pages_for_primary_having(s);
+        });
+        assert_eq!(
+            sql,
+            " AND p.page_namespace=? \
+             AND p.page_id NOT IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=? AND tl_from_namespace=?) \
+             AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free') \
+             AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NOT NULL) \
+             AND p.page_is_redirect=0 \
+             AND p.page_len>=100 \
+             AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item') \
+             HAVING link_count>=2"
+        );
+        assert_eq!(n, 3);
     }
 }
