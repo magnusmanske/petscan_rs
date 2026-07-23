@@ -1526,29 +1526,48 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
-    async fn test_skip_category_filters_only_remove_pages() {
-        // The filters act on the depth-1 traversal; they must not error and
-        // can only ever shrink the result, never grow it or empty a normal
-        // content tree.
-        let base_params = |extra: Vec<(&'static str, &'static str)>| {
-            let mut p = vec![
-                ("categories", "Bioinformatics"),
-                ("depth", "1"),
-                ("language", "en"),
-                ("project", "wikipedia"),
-            ];
-            p.extend(extra);
-            p
+    async fn test_skip_filters_remove_tracking_subcategories() {
+        // `Category:Automatic category TOC tracking categories` on enwiki
+        // directly contains subcategories that are themselves members of
+        // `Category:Tracking categories` (e.g. "…generates no TOC") and are
+        // flagged __HIDDENCAT__. A depth-1 traversal picks them up; each
+        // filter must drop them, shrinking the tree below the unfiltered size.
+        let state = get_state().await;
+        let tracking = SourceDatabase::resolve_tracking_category(&state, "enwiki")
+            .await
+            .unwrap();
+        let tree = |skip_tracking: bool, skip_hidden: bool| {
+            let state = state.clone();
+            let tracking = tracking.clone();
+            async move {
+                let mut params = SourceDatabaseParameters::new();
+                params.set_wiki(Some("enwiki".to_string()));
+                params.skip_tracking_categories = skip_tracking;
+                params.skip_hidden_categories = skip_hidden;
+                let mut db = SourceDatabase::new(params);
+                if skip_tracking {
+                    db.tracking_category_local = Some(tracking);
+                }
+                db.get_categories_in_tree(
+                    &state,
+                    "enwiki",
+                    "Automatic_category_TOC_tracking_categories",
+                    1,
+                )
+                .await
+                .unwrap()
+                .len()
+            }
         };
-        let unfiltered = simulate_category_query(base_params(vec![])).await.unwrap();
-        let filtered = simulate_category_query(base_params(vec![
-            ("skip_tracking_categories", "1"),
-            ("skip_hidden_categories", "1"),
-        ]))
-        .await
-        .unwrap();
-        assert!(!filtered.is_empty(), "content tree must survive filtering");
-        assert!(filtered.len() <= unfiltered.len());
+
+        let unfiltered = tree(false, false).await;
+        let skip_tracking = tree(true, false).await;
+        let skip_hidden = tree(false, true).await;
+
+        // The root is always retained, so an effective filter still leaves >= 1.
+        assert!(unfiltered > skip_tracking, "tracking filter removed nothing: {unfiltered} vs {skip_tracking}");
+        assert!(unfiltered > skip_hidden, "hidden filter removed nothing: {unfiltered} vs {skip_hidden}");
+        assert!(skip_tracking >= 1, "root category must survive filtering");
     }
 
     #[tokio::test]
