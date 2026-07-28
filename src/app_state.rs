@@ -300,7 +300,7 @@ impl AppState {
     }
 
     pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api> {
-        self.site_matrix.get_api_for_wiki(&wiki).await
+        Ok(self.site_matrix.get_api_for_wiki(&wiki).await?)
     }
 
     // ------------------------------------------------------------------
