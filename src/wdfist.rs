@@ -525,7 +525,13 @@ impl WDfist {
 
         // Run batches
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
+        let rows = pagelist
+            .run_batch_queries_for_tables(
+                &self.state,
+                batches,
+                &["page", "pagelinks", "linktarget"],
+            )
+            .await?;
 
         self.items = rows
             .par_iter()
@@ -697,7 +703,9 @@ impl WDfist {
 
         // Run batches, and get a list of files to remove
         let pagelist = PageList::new_from_wiki("wikidatawiki");
-        let rows = pagelist.run_batch_queries(&self.state, batches).await?;
+        let rows = pagelist
+            .run_batch_queries_for_tables(&self.state, batches, &["imagelinks", "linktarget"])
+            .await?;
         *files_to_remove = rows
             .par_iter()
             .map(|row| my::from_row::<String>(row.to_owned()))
