@@ -39,17 +39,34 @@ CREATE TABLE `started_queries` (
 
 ### Forward replicas
 
+One tunnel per replica host you want to query:
+
 ```bash
-ssh login.toolforge.org -L 3306:XXX.analytics.db.svc.wikimedia.cloud:3306 -L 3309:wikidatawiki.analytics.db.svc.wikimedia.cloud:3306
+ssh login.toolforge.org -L 3306:XXX.web.db.svc.wikimedia.cloud:3306 -L 3309:wikidatawiki.web.db.svc.wikimedia.cloud:3306
 ```
 
 XXX: wiki to be queried (e.g. commonswiki)
+
+Some wikis keep part of their tables in an *extension database* on a separate
+replica host, reached by prefixing the hostname. There are two of these:
+
+- `links.commonswiki.web.db.svc.wikimedia.cloud` holds Commons' `categorylinks`,
+  `pagelinks`, `templatelinks`, `langlinks`, `imagelinks`, `globalimagelinks`,
+  `externallinks`, `iwlinks`, `linktarget`, `collation` and `existencelinks`
+  ([split off in September 2026](https://wikitech.wikimedia.org/wiki/News/2026_Commons_links_tables_database_split));
+  `page` and `redirect` are on both hosts.
+- `termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud` holds Wikidata's
+  `wbt_*` term-store tables.
+
+`connect_test_sql.sh` opens every tunnel `PetScan` needs and checks each one
+with a query — start from that rather than the command above.
 
 🔗 https://wikitech.wikimedia.org/wiki/Help:Toolforge/Database
 
 
 ### Create config.json
-Put the ports from the above `ssh` command with the respective wikis into `port_mapping`:
+Put the ports from the above `ssh` command into `port_mapping`, keyed by the
+leading labels of the replica hostname:
 
 ```json
 {
@@ -62,7 +79,9 @@ Put the ports from the above `ssh` command with the respective wikis into `port_
   "restart-code": "",
   "port_mapping":{
     "<xxx>":3306,
-    "wikidatawiki":3309
+    "wikidatawiki":3309,
+    "links.commonswiki":3315,
+    "termstore.wikidatawiki":3317
   },
   "mysql": [
     [
