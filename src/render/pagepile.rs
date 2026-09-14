@@ -64,7 +64,6 @@ impl Render for RenderPagePile {
             status: 200,
         })
     }
-
 }
 
 impl RenderPagePile {

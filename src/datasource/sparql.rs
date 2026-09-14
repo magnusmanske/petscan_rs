@@ -174,7 +174,10 @@ mod tests {
     #[test]
     fn test_sparql_server_wikidata_url() {
         let url = SparqlServer::Wikidata.url();
-        assert!(url.contains("wikidata.org"), "Expected wikidata.org in: {url}");
+        assert!(
+            url.contains("wikidata.org"),
+            "Expected wikidata.org in: {url}"
+        );
     }
 
     #[test]
@@ -196,7 +199,10 @@ mod tests {
     fn test_add_prefix_qlever_prepends_prefix_block() {
         let sparql = "SELECT ?item WHERE { ?item wdt:P31 wd:Q5 }";
         let result = SparqlServer::QLeverWd.add_prefix(sparql);
-        assert!(result.starts_with("PREFIX"), "Expected PREFIX at start, got: {result}");
+        assert!(
+            result.starts_with("PREFIX"),
+            "Expected PREFIX at start, got: {result}"
+        );
         assert!(result.contains(sparql), "Expected original query in result");
     }
 

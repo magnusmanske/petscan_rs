@@ -53,7 +53,6 @@ impl Render for RenderJSONL {
             status: 200,
         })
     }
-
 }
 
 impl RenderJSONL {

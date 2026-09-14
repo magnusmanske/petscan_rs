@@ -148,10 +148,7 @@ mod tests {
 
     #[test]
     fn test_escape_xml_all_specials() {
-        assert_eq!(
-            RenderKML::escape_xml("<>&\"'"),
-            "&lt;&gt;&amp;&quot;&apos;"
-        );
+        assert_eq!(RenderKML::escape_xml("<>&\"'"), "&lt;&gt;&amp;&quot;&apos;");
     }
 
     #[test]

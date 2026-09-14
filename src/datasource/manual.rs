@@ -2,7 +2,7 @@ use crate::datasource::DataSource;
 use crate::pagelist::PageList;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use wikimisc::mediawiki::title::Title;
 

@@ -1,7 +1,7 @@
 use crate::datasource::DataSource;
 use crate::pagelist::PageList;
 use crate::platform::Platform;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
@@ -46,7 +46,7 @@ impl SourceWikidata {
         sql += &sites.0;
         sql += ")";
         if no_statements {
-            sql += " AND page_namespace=0 AND ips_item_id=substr(page_title,2)*1 AND page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0" ;
+            sql += " AND page_namespace=0 AND ips_item_id=substr(page_title,2)*1 AND page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0";
         }
         Ok(sql)
     }

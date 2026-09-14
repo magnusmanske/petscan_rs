@@ -85,9 +85,7 @@ impl NamespaceContext for ApiNamespaceContext {
     }
 
     fn for_each_local_namespace(&self, f: &mut dyn FnMut(&str, &str)) {
-        if let Some(namespaces) =
-            self.api.get_site_info()["query"]["namespaces"].as_object()
-        {
+        if let Some(namespaces) = self.api.get_site_info()["query"]["namespaces"].as_object() {
             for (k, v) in namespaces {
                 if let Some(local_name) = v["*"].as_str() {
                     f(k, local_name);
@@ -96,7 +94,6 @@ impl NamespaceContext for ApiNamespaceContext {
         }
     }
 }
-
 
 /// Percent-encode `s` and then escape the four XML/HTML attribute specials
 /// (`<`, `>`, `"`, `'`). Used by the HTML and KML renderers when building
@@ -295,8 +292,8 @@ pub trait Render {
                     .and_then(|fi| fi.img_user_text.as_deref())
                     .map(|user| self.render_user_name(user, params))
                     .unwrap_or_default(),
-                "img_size" | "img_width" | "img_height" | "img_media_type"
-                | "img_major_mime" | "img_minor_mime" | "img_timestamp" | "img_sha1" => entry
+                "img_size" | "img_width" | "img_height" | "img_media_type" | "img_major_mime"
+                | "img_minor_mime" | "img_timestamp" | "img_sha1" => entry
                     .get_file_info()
                     .as_ref()
                     .and_then(|fi| fi.field_as_str(k.as_str()))

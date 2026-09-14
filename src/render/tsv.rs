@@ -123,11 +123,15 @@ mod tests {
     use super::*;
 
     fn tsv() -> RenderTSV {
-        RenderTSV { separator: "\t".to_string() }
+        RenderTSV {
+            separator: "\t".to_string(),
+        }
     }
 
     fn csv() -> RenderTSV {
-        RenderTSV { separator: ",".to_string() }
+        RenderTSV {
+            separator: ",".to_string(),
+        }
     }
 
     // ── escape_cell ──────────────────────────────────────────────────────────
@@ -251,14 +255,20 @@ mod tests {
     fn test_render_cell_namespace_for_user_talk() {
         let r = tsv();
         let entry = PageListEntry::new(Title::new("Foo", 3));
-        assert_eq!(r.render_cell_namespace(&entry, &enwiki_params()), "User talk");
+        assert_eq!(
+            r.render_cell_namespace(&entry, &enwiki_params()),
+            "User talk"
+        );
     }
 
     #[test]
     fn test_render_cell_namespace_for_category() {
         let r = tsv();
         let entry = PageListEntry::new(Title::new("Some_cat", 14));
-        assert_eq!(r.render_cell_namespace(&entry, &enwiki_params()), "Category");
+        assert_eq!(
+            r.render_cell_namespace(&entry, &enwiki_params()),
+            "Category"
+        );
     }
 
     #[test]
@@ -279,9 +289,6 @@ mod tests {
         // with_underscores form — verify that for a non-trivial title.
         let r = tsv();
         let entry = PageListEntry::new(Title::new("Foo bar baz", 0));
-        assert_eq!(
-            r.render_cell_title(&entry, &enwiki_params()),
-            "Foo_bar_baz"
-        );
+        assert_eq!(r.render_cell_title(&entry, &enwiki_params()), "Foo_bar_baz");
     }
 }

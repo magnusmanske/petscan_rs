@@ -189,10 +189,7 @@ mod tests {
         let entry = PageListEntry::new(Title::new("Cat.jpg", 6));
         // Without thumbnails: `[[:File:Cat.jpg|]]` (the namespace prefix
         // comes from the stub's namespace name for ns=6).
-        assert_eq!(
-            r.render_cell_title(&entry, &params),
-            "[[:File:Cat.jpg|]]"
-        );
+        assert_eq!(r.render_cell_title(&entry, &params), "[[:File:Cat.jpg|]]");
     }
 
     #[test]
@@ -203,10 +200,7 @@ mod tests {
         // Article namespace → wikilink without file branch. Since the
         // namespace prefix is empty, the result is `[[Cambridge|]]`
         // (with `|` because `do_output_redlinks` defaults to false).
-        assert_eq!(
-            r.render_cell_title(&entry, &params),
-            "[[Cambridge|]]"
-        );
+        assert_eq!(r.render_cell_title(&entry, &params), "[[Cambridge|]]");
     }
 
     #[test]

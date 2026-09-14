@@ -618,7 +618,8 @@ mod tests {
     #[test]
     fn test_db_host_and_schema_for_wiki_x3() {
         let state = state_with_config(make_minimal_config());
-        let (host, schema) = state.db_host_and_schema_for_wiki("wikidatawiki", DbCluster::TermStore);
+        let (host, schema) =
+            state.db_host_and_schema_for_wiki("wikidatawiki", DbCluster::TermStore);
         assert_eq!(
             host,
             "termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud"
@@ -629,8 +630,7 @@ mod tests {
     #[test]
     fn test_db_host_and_schema_normalises_wiki_name() {
         let state = state_with_config(make_minimal_config());
-        let (_host, schema) =
-            state.db_host_and_schema_for_wiki("be-taraskwiki", DbCluster::Core);
+        let (_host, schema) = state.db_host_and_schema_for_wiki("be-taraskwiki", DbCluster::Core);
         assert_eq!(schema, "be_x_oldwiki_p");
     }
 

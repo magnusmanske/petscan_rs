@@ -339,17 +339,28 @@ mod tests {
         // One placeholder per title; titles are bound, never interpolated.
         assert_eq!(params.len(), 3);
         assert!(sql.ends_with("lt_title IN (?,?,?)"), "got: {sql}");
-        assert!(sql.contains("p.page_id,p.page_title,p.page_namespace"), "got: {sql}");
+        assert!(
+            sql.contains("p.page_id,p.page_title,p.page_namespace"),
+            "got: {sql}"
+        );
         assert!(sql.contains("lt_namespace=14"), "got: {sql}");
         // No raw title text leaks into the SQL string.
-        assert!(!sql.contains("Geografia"), "titles must not be interpolated: {sql}");
+        assert!(
+            !sql.contains("Geografia"),
+            "titles must not be interpolated: {sql}"
+        );
     }
 
     #[test]
     fn category_members_query_drops_empty_titles() {
         // prep_quote trims and drops empty entries, so the placeholder count
         // tracks only the real titles — keeping us well under the 65 535 limit.
-        let cats = vec!["A".to_string(), "  ".to_string(), String::new(), "B".to_string()];
+        let cats = vec![
+            "A".to_string(),
+            "  ".to_string(),
+            String::new(),
+            "B".to_string(),
+        ];
         let SQLtuple(sql, params) = category_members_query(&cats);
         assert_eq!(params.len(), 2);
         assert!(sql.ends_with("IN (?,?)"), "got: {sql}");

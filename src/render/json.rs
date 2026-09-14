@@ -54,7 +54,6 @@ impl Render for RenderJSON {
             status: 200,
         })
     }
-
 }
 
 impl RenderJSON {
@@ -217,7 +216,10 @@ impl RenderJSON {
     }
 
     fn get_file_info_value(entry: &PageListEntry, key: &str) -> Option<Value> {
-        entry.get_file_info().as_ref().and_then(|fi| fi.field_as_json(key))
+        entry
+            .get_file_info()
+            .as_ref()
+            .and_then(|fi| fi.field_as_json(key))
     }
 
     fn get_file_usage(entry: &PageListEntry) -> Option<Value> {

@@ -82,7 +82,10 @@ mod tests {
     fn test_render_cell_title_is_pretty() {
         let r = RenderPlainText;
         let entry = PageListEntry::new(Title::new("Magnus Manske", 0));
-        assert_eq!(r.render_cell_title(&entry, &enwiki_params()), "Magnus Manske");
+        assert_eq!(
+            r.render_cell_title(&entry, &enwiki_params()),
+            "Magnus Manske"
+        );
     }
 
     #[test]
@@ -91,10 +94,7 @@ mod tests {
         let mut entry = PageListEntry::new(Title::new("Test", 0));
         entry.set_wikidata_item(Some("Q42".to_string()));
         // Pinned at "Q42" rather than "[[:d:Q42|]]" — see P0 #3.
-        assert_eq!(
-            r.render_cell_wikidata_item(&entry, &enwiki_params()),
-            "Q42"
-        );
+        assert_eq!(r.render_cell_wikidata_item(&entry, &enwiki_params()), "Q42");
     }
 
     #[test]
@@ -132,9 +132,6 @@ mod tests {
         // Plaintext's namespace cell emits the numeric ID, not the name.
         let r = RenderPlainText;
         let user_entry = PageListEntry::new(Title::new("Foo", 2));
-        assert_eq!(
-            r.render_cell_namespace(&user_entry, &enwiki_params()),
-            "2"
-        );
+        assert_eq!(r.render_cell_namespace(&user_entry, &enwiki_params()), "2");
     }
 }

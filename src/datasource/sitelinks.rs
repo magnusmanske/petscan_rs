@@ -2,7 +2,7 @@ use crate::datasource::{DataSource, SQLtuple};
 use crate::pagelist::PageList;
 use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
@@ -93,7 +93,7 @@ impl SourceSitelinks {
         let mut sql: SQLtuple = SQLtuple(String::new(), vec![]);
         sql.0 += "SELECT ";
         if self.use_min_max {
-            sql.0 += "page_title,(SELECT count(*) FROM langlinks WHERE ll_from=page_id) AS sitelink_count" ;
+            sql.0 += "page_title,(SELECT count(*) FROM langlinks WHERE ll_from=page_id) AS sitelink_count";
         } else {
             sql.0 += "DISTINCT page_title,0";
         }
@@ -197,7 +197,10 @@ mod tests {
 
     #[test]
     fn test_site2lang_strips_wiki_suffix() {
-        let src = SourceSitelinks { main_wiki: "dewiki".to_string(), use_min_max: false };
+        let src = SourceSitelinks {
+            main_wiki: "dewiki".to_string(),
+            use_min_max: false,
+        };
         assert_eq!(src.site2lang("enwiki"), Some("en".to_string()));
         assert_eq!(src.site2lang("frwiki"), Some("fr".to_string()));
         assert_eq!(src.site2lang("commonswiki"), Some("commons".to_string()));
@@ -205,14 +208,23 @@ mod tests {
 
     #[test]
     fn test_site2lang_returns_none_for_main_wiki() {
-        let src = SourceSitelinks { main_wiki: "enwiki".to_string(), use_min_max: false };
+        let src = SourceSitelinks {
+            main_wiki: "enwiki".to_string(),
+            use_min_max: false,
+        };
         assert_eq!(src.site2lang("enwiki"), None);
     }
 
     #[test]
     fn test_site2lang_no_wiki_suffix_returns_as_is() {
-        let src = SourceSitelinks { main_wiki: "enwiki".to_string(), use_min_max: false };
-        assert_eq!(src.site2lang("some_other_site"), Some("some_other_site".to_string()));
+        let src = SourceSitelinks {
+            main_wiki: "enwiki".to_string(),
+            use_min_max: false,
+        };
+        assert_eq!(
+            src.site2lang("some_other_site"),
+            Some("some_other_site".to_string())
+        );
     }
 
     // ── generate_sql_query ───────────────────────────────────────────────────

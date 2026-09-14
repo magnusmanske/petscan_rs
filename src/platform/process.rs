@@ -1,7 +1,7 @@
-use crate::datasource::SQLtuple;
-use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
 use crate::app_state::AppState;
 use crate::database_manager::DbCluster;
+use crate::datasource::SQLtuple;
+use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
 use crate::pagelist::PageList;
 use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, TriState};
 use crate::platform::{PAGE_BATCH_SIZE, Platform};
@@ -55,7 +55,9 @@ impl PageFields {
         };
         let requested: [RequestedField; 6] = [
             (self.add_image, "page_props", |f| f.add_image = true),
-            (self.add_coordinates, "geo_tags", |f| f.add_coordinates = true),
+            (self.add_coordinates, "geo_tags", |f| {
+                f.add_coordinates = true
+            }),
             (self.add_defaultsort, "page_props", |f| {
                 f.add_defaultsort = true;
             }),
@@ -839,7 +841,11 @@ impl Platform {
             .map(|s| s.trim().to_uppercase())
             .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
             .collect();
-        if allowed.is_empty() { None } else { Some(allowed) }
+        if allowed.is_empty() {
+            None
+        } else {
+            Some(allowed)
+        }
     }
 
     async fn process_file_data(
@@ -1025,7 +1031,7 @@ impl Platform {
                 .collect_and_drop()
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
-                rows.lock().await.append(&mut subresult);
+            rows.lock().await.append(&mut subresult);
         }
 
         let locked = rows.lock().await;
@@ -1536,7 +1542,10 @@ mod tests {
         let (cluster, fields) = groups[0];
         assert_eq!(cluster, DbCluster::Core);
         // Nothing is dropped: one query still selects every column.
-        assert_eq!(fields.build_select_columns(), ALL_PAGE_FIELDS.build_select_columns());
+        assert_eq!(
+            fields.build_select_columns(),
+            ALL_PAGE_FIELDS.build_select_columns()
+        );
     }
 
     #[test]
@@ -1576,7 +1585,6 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, DbCluster::Core);
     }
-
 
     #[test]
     fn test_page_fields_any_false_when_all_off() {
