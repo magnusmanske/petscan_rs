@@ -370,25 +370,69 @@ impl SourceDatabase {
         wiki: &str,
         categories: &[String],
     ) -> Result<Vec<String>> {
+        // `page_props` holds the hidden-category flag but lives on the core
+        // cluster, while `categorylinks` may not (Commons); where the two
+        // cannot be joined, the filter becomes a second query below.
+        let hiddencat_tables = &[helpers::SUBCATEGORIES_TABLES, &["page_props"]].concat();
+        let filter_hidden_inline = self.params.skip_hidden_categories
+            && state.cluster_for_tables(wiki, hiddencat_tables).is_ok();
+
         let sql = helpers::subcategories_query(
             categories,
-            self.params.skip_hidden_categories,
+            filter_hidden_inline,
             self.tracking_category_local.as_deref(),
         );
-        let result = state
-            .get_wiki_db_connection(wiki)
+        let rows = state
+            .get_wiki_db_connection_for_tables(wiki, helpers::SUBCATEGORIES_TABLES)
             .await?
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!(e))?
-            .map_and_drop(from_row::<Vec<u8>>)
+            .map_and_drop(from_row::<(u32, Vec<u8>)>)
             .await
             .map_err(|e| anyhow!(e))?;
-        let result: Vec<String> = result
-            .iter()
-            .map(|row| String::from_utf8_lossy(row).into_owned())
+        let subcategories: Vec<(u32, String)> = rows
+            .into_iter()
+            .map(|(page_id, title)| (page_id, String::from_utf8_lossy(&title).into_owned()))
             .collect();
-        Ok(result)
+
+        if self.params.skip_hidden_categories && !filter_hidden_inline {
+            return Self::remove_hidden_categories(state, wiki, subcategories).await;
+        }
+        Ok(subcategories.into_iter().map(|(_, title)| title).collect())
+    }
+
+    /// Drop the `__HIDDENCAT__` subcategories from `subcategories`.
+    ///
+    /// The equivalent of `subcategories_query`'s inline `page_props` anti-join,
+    /// for wikis where `page_props` and `categorylinks` are on different hosts
+    /// and so cannot be joined in one statement.
+    async fn remove_hidden_categories(
+        state: &AppState,
+        wiki: &str,
+        subcategories: Vec<(u32, String)>,
+    ) -> Result<Vec<String>> {
+        let page_ids: Vec<u32> = subcategories.iter().map(|(page_id, _)| *page_id).collect();
+        if page_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let sql = helpers::hidden_categories_query(&page_ids);
+        let hidden: HashSet<u32> = state
+            .get_wiki_db_connection_for_tables(wiki, &["page_props"])
+            .await?
+            .exec_iter(sql.as_str(), ())
+            .await
+            .map_err(|e| anyhow!(e))?
+            .map_and_drop(from_row::<u32>)
+            .await
+            .map_err(|e| anyhow!(e))?
+            .into_iter()
+            .collect();
+        Ok(subcategories
+            .into_iter()
+            .filter(|(page_id, _)| !hidden.contains(page_id))
+            .map(|(_, title)| title)
+            .collect())
     }
 
     /// Takes a root category and returns all subcategories to a specified depth.
@@ -935,7 +979,7 @@ impl SourceDatabase {
             return Ok(()); // No real titles in this chunk; nothing to fetch.
         }
         let rows = state
-            .get_wiki_db_connection(wiki)
+            .get_wiki_db_connection_for_tables(wiki, helpers::CATEGORY_MEMBERS_TABLES)
             .await?
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await

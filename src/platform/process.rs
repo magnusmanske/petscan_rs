@@ -1,5 +1,6 @@
 use crate::datasource::SQLtuple;
 use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
+use crate::app_state::AppState;
 use crate::database_manager::DbCluster;
 use crate::pagelist::PageList;
 use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, TriState};
@@ -20,7 +21,15 @@ use wikimisc::mediawiki::title::Title;
 
 // ─── Page-fields flags ───────────────────────────────────────────────────────
 
+/// The subset of [`PageFields`] one cluster can serve, i.e. one query's worth.
+type PageFieldGroup = (DbCluster, PageFields);
+
+/// One requested field of [`PageFields`]: whether it was asked for, the
+/// non-`page` table its column reads, and how to re-enable it on a subset.
+type RequestedField = (bool, &'static str, fn(&mut PageFields));
+
 /// Captures which optional page fields were requested for `process_pages`.
+#[derive(Debug, Clone, Copy, Default)]
 struct PageFields {
     add_image: bool,
     add_coordinates: bool,
@@ -32,6 +41,49 @@ struct PageFields {
 }
 
 impl PageFields {
+    /// The requested fields, grouped by the cluster that can serve them.
+    ///
+    /// The columns come from different tables — `page_props`, `geo_tags`,
+    /// `pagelinks`, `langlinks` — which on Commons no longer all live on one
+    /// host, so they cannot all be selected in one query. Grouping by cluster
+    /// yields one query per host: a single one everywhere but Commons.
+    fn by_cluster(&self, state: &AppState, wiki: &str) -> Result<Vec<PageFieldGroup>> {
+        let sitelinks_table = if self.is_wikidata {
+            "wb_items_per_site"
+        } else {
+            "langlinks"
+        };
+        let requested: [RequestedField; 6] = [
+            (self.add_image, "page_props", |f| f.add_image = true),
+            (self.add_coordinates, "geo_tags", |f| f.add_coordinates = true),
+            (self.add_defaultsort, "page_props", |f| {
+                f.add_defaultsort = true;
+            }),
+            (self.add_disambiguation, "page_props", |f| {
+                f.add_disambiguation = true;
+            }),
+            (self.add_incoming_links, "pagelinks", |f| {
+                f.add_incoming_links = true;
+            }),
+            (self.add_sitelinks, sitelinks_table, |f| {
+                f.add_sitelinks = true;
+            }),
+        ];
+
+        let mut groups: HashMap<DbCluster, Self> = HashMap::new();
+        for (wanted, table, enable) in requested {
+            if !wanted {
+                continue;
+            }
+            let cluster = state.cluster_for_tables(wiki, &["page", table])?;
+            enable(groups.entry(cluster).or_insert(Self {
+                is_wikidata: self.is_wikidata,
+                ..Self::default()
+            }));
+        }
+        Ok(groups.into_iter().collect())
+    }
+
     const fn any(&self) -> bool {
         self.add_image
             || self.add_coordinates
@@ -496,7 +548,7 @@ impl Platform {
 
         let mut conn = self
             .state
-            .get_wiki_db_connection(&wiki)
+            .get_wiki_db_connection_for_tables(&wiki, &["page", "pagelinks", "linktarget"])
             .await
             .map_err(|e| anyhow!(e))?;
 
@@ -639,35 +691,41 @@ impl Platform {
             return Ok(());
         }
 
-        let select_cols = fields.build_select_columns();
-        let batches: Vec<SQLtuple> = result
-            .to_sql_batches(PAGE_BATCH_SIZE)
-            .par_iter_mut()
-            .map(|sql_batch| {
-                sql_batch.0 = select_cols.clone() + &sql_batch.0;
-                sql_batch.to_owned()
-            })
-            .collect::<Vec<SQLtuple>>();
+        let wiki = result
+            .wiki()
+            .ok_or_else(|| anyhow!("Platform::process_pages: no wiki set in result"))?;
 
-        let col_title: usize = 0;
-        let col_ns: usize = 1;
-        result
-            .run_batch_queries(&self.state(), batches)
-            .await?
-            .iter()
-            .filter_map(|row| {
-                result
-                    .entry_from_row(row, col_title, col_ns)
-                    .map(|entry| (row, entry))
-            })
-            .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
-            .for_each(|(row, mut entry)| {
-                let mut parts = row.clone().unwrap();
-                parts.remove(0); // page_title
-                parts.remove(0); // page_namespace
-                fields.apply_row_to_entry(&mut parts, &mut entry);
-                result.add_entry(entry);
-            });
+        for (cluster, group) in fields.by_cluster(&self.state, &wiki)? {
+            let select_cols = group.build_select_columns();
+            let batches: Vec<SQLtuple> = result
+                .to_sql_batches(PAGE_BATCH_SIZE)
+                .par_iter_mut()
+                .map(|sql_batch| {
+                    sql_batch.0 = select_cols.clone() + &sql_batch.0;
+                    sql_batch.to_owned()
+                })
+                .collect::<Vec<SQLtuple>>();
+
+            let col_title: usize = 0;
+            let col_ns: usize = 1;
+            result
+                .run_batch_queries_with_cluster(&self.state(), batches, cluster)
+                .await?
+                .iter()
+                .filter_map(|row| {
+                    result
+                        .entry_from_row(row, col_title, col_ns)
+                        .map(|entry| (row, entry))
+                })
+                .filter_map(|(row, entry)| result.get_entry(&entry).map(|e| (row, e)))
+                .for_each(|(row, mut entry)| {
+                    let mut parts = row.clone().unwrap();
+                    parts.remove(0); // page_title
+                    parts.remove(0); // page_namespace
+                    group.apply_row_to_entry(&mut parts, &mut entry);
+                    result.add_entry(entry);
+                });
+        }
         Ok(())
     }
 
@@ -704,7 +762,10 @@ impl Platform {
             };
             let col_title: usize = 0;
             let col_ns: usize = 1;
-            let batch_results = match result.run_batch_queries(&self.state(), batches).await {
+            let batch_results = match result
+                .run_batch_queries_for_tables(&self.state(), batches, &["globalimagelinks"])
+                .await
+            {
                 Ok(res) => res,
                 Err(e) => {
                     if e.to_string().contains("packet too large") {
@@ -1455,6 +1516,67 @@ mod tests {
     }
 
     // ─── PageFields ───────────────────────────────────────────────────────────
+
+    /// Every field requested at once, to see how they get split per wiki.
+    const ALL_PAGE_FIELDS: PageFields = PageFields {
+        add_image: true,
+        add_coordinates: true,
+        add_defaultsort: true,
+        add_disambiguation: true,
+        add_incoming_links: true,
+        add_sitelinks: true,
+        is_wikidata: false,
+    };
+
+    #[test]
+    fn test_page_fields_by_cluster_single_query_off_commons() {
+        let state = AppState::default();
+        let groups = ALL_PAGE_FIELDS.by_cluster(&state, "enwiki").unwrap();
+        assert_eq!(groups.len(), 1);
+        let (cluster, fields) = groups[0];
+        assert_eq!(cluster, DbCluster::Core);
+        // Nothing is dropped: one query still selects every column.
+        assert_eq!(fields.build_select_columns(), ALL_PAGE_FIELDS.build_select_columns());
+    }
+
+    #[test]
+    fn test_page_fields_by_cluster_splits_commons() {
+        let state = AppState::default();
+        let mut groups = ALL_PAGE_FIELDS.by_cluster(&state, "commonswiki").unwrap();
+        assert_eq!(groups.len(), 2);
+        groups.sort_by_key(|(cluster, _)| format!("{cluster:?}"));
+
+        let (core, core_fields) = groups[0];
+        assert_eq!(core, DbCluster::Core);
+        assert!(core_fields.add_image);
+        assert!(core_fields.add_coordinates);
+        assert!(core_fields.add_defaultsort);
+        assert!(core_fields.add_disambiguation);
+        assert!(!core_fields.add_incoming_links);
+        assert!(!core_fields.add_sitelinks);
+
+        let (links, links_fields) = groups[1];
+        assert_eq!(links, DbCluster::Links);
+        assert!(links_fields.add_incoming_links);
+        assert!(links_fields.add_sitelinks);
+        assert!(!links_fields.add_image);
+    }
+
+    #[test]
+    fn test_page_fields_by_cluster_wikidata_sitelinks_stay_on_core() {
+        // On Wikidata the sitelink count comes from `wb_items_per_site`, not
+        // `langlinks`, and Wikidata was never split.
+        let state = AppState::default();
+        let fields = PageFields {
+            add_sitelinks: true,
+            is_wikidata: true,
+            ..PageFields::default()
+        };
+        let groups = fields.by_cluster(&state, "wikidatawiki").unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, DbCluster::Core);
+    }
+
 
     #[test]
     fn test_page_fields_any_false_when_all_off() {

@@ -139,6 +139,9 @@ pub(super) fn links_to_subquery(input: &[String], api: &Api) -> SQLtuple {
 ///
 /// Titles are bound as positional parameters (no string interpolation), so
 /// this is not an SQL-injection vector.
+/// Tables read by [`category_members_query`].
+pub(super) const CATEGORY_MEMBERS_TABLES: &[&str] = &["page", "categorylinks", "linktarget"];
+
 pub(super) fn category_members_query(cats: &[String]) -> SQLtuple {
     let mut sql: SQLtuple = SQLtuple(
         "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace FROM page p,categorylinks,linktarget WHERE p.page_id=cl_from AND lt_id=cl_target_id AND lt_namespace=14 AND lt_title IN ("
@@ -156,7 +159,9 @@ pub(super) fn category_members_query(cats: &[String]) -> SQLtuple {
 /// Two optional filters keep deep traversals from drifting into
 /// housekeeping parts of the category graph (issue #197):
 /// - `skip_hidden_categories` drops subcategories marked `__HIDDENCAT__`
-///   (a primary-key `page_props` lookup per candidate row).
+///   (a primary-key `page_props` lookup per candidate row). Only available
+///   where `page_props` sits on the same host as `categorylinks`; on Commons
+///   it has to be a separate [`hidden_categories_query`] instead.
 /// - `tracking_category` drops subcategories that are themselves members of
 ///   the wiki's "tracking categories" container category (the local sitelink
 ///   of Wikidata Q6964088), via an indexed anti-join on `categorylinks`.
@@ -165,13 +170,32 @@ pub(super) fn category_members_query(cats: &[String]) -> SQLtuple {
 /// a user explicitly listed are never filtered. Note the deliberate absence
 /// of any page-level filter: most articles sit in *some* tracking category
 /// ("CS1 errors" etc.), so filtering result pages would gut the results.
+/// Tables read by [`subcategories_query`], excluding the optional
+/// `page_props` hidden-category filter.
+pub(super) const SUBCATEGORIES_TABLES: &[&str] = &["page", "categorylinks", "linktarget"];
+
+/// Build the query picking out which of `page_ids` are hidden categories, for
+/// when [`subcategories_query`] cannot filter them inline.
+///
+/// Page IDs come from the database as integers and are interpolated rather
+/// than bound: there is no injection surface, and a category tree level can
+/// hold far more IDs than `MySQL`'s 65 535 placeholder limit allows.
+pub(super) fn hidden_categories_query(page_ids: &[u32]) -> String {
+    let ids = page_ids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<String>>()
+        .join(",");
+    format!("SELECT pp_page FROM page_props WHERE pp_propname='hiddencat' AND pp_page IN ({ids})")
+}
+
 pub(super) fn subcategories_query(
     categories: &[String],
     skip_hidden_categories: bool,
     tracking_category: Option<&str>,
 ) -> SQLtuple {
     let mut sql: SQLtuple = SQLtuple(
-        "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN ("
+        "SELECT DISTINCT page_id,page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN ("
             .to_string(),
         vec![],
     );
@@ -331,7 +355,7 @@ mod tests {
         assert!(sql.ends_with("IN (?,?)"), "got: {sql}");
     }
 
-    const SUBCAT_BASE: &str = "SELECT DISTINCT page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN (?,?)";
+    const SUBCAT_BASE: &str = "SELECT DISTINCT page_id,page_title FROM page,categorylinks,linktarget WHERE lt_id=cl_target_id AND cl_from=page_id AND cl_type='subcat' AND lt_namespace=14 AND lt_title IN (?,?)";
 
     #[test]
     fn subcategories_query_no_filters_matches_plain_traversal() {
@@ -379,6 +403,17 @@ mod tests {
         assert!(sql.contains("pp_propname='hiddencat'"), "got: {sql}");
         assert!(sql.contains("lttc.lt_title=?"), "got: {sql}");
         assert_eq!(params.len(), 2);
+    }
+
+    #[test]
+    fn hidden_categories_query_interpolates_ids() {
+        let sql = hidden_categories_query(&[1, 22, 333]);
+        assert_eq!(
+            sql,
+            "SELECT pp_page FROM page_props WHERE pp_propname='hiddencat' AND pp_page IN (1,22,333)"
+        );
+        // No placeholders, so no placeholder limit to hit.
+        assert!(!sql.contains('?'));
     }
 
     #[test]

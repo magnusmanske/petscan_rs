@@ -142,9 +142,11 @@ impl SourceSitelinks {
         platform: &Platform,
         sql: SQLtuple,
     ) -> Result<Vec<(Vec<u8>, u32)>> {
+        // `page` is on the links cluster too, so the langlinks join still
+        // works on a wiki whose links tables were split off.
         let mut conn = platform
             .state()
-            .get_wiki_db_connection(&self.main_wiki)
+            .get_wiki_db_connection_for_tables(&self.main_wiki, &["page", "langlinks"])
             .await?;
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))

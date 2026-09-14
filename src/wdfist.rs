@@ -223,7 +223,11 @@ impl WDfist {
             batches.push(sql);
         });
         let rows = PageList::new_from_wiki("commonswiki")
-            .run_batch_queries(&self.state, batches)
+            .run_batch_queries_for_tables(
+                &self.state,
+                batches,
+                &["page", "globalimagelinks", "categorylinks", "linktarget"],
+            )
             .await
             .map_err(|e| anyhow!("{e}"))?;
         let page_file: Vec<(String, String)> = rows

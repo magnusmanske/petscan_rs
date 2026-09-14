@@ -398,6 +398,27 @@ impl PageList {
             .await
     }
 
+    /// Runs batched queries on the cluster that can serve all of `tables`.
+    ///
+    /// Preferred over [`Self::run_batch_queries`] wherever a query reads
+    /// tables that are not all on a wiki's core cluster: naming the tables
+    /// keeps the cluster mapping in one place (`wikimisc`'s `DbCluster`)
+    /// instead of spreading it over the call sites. Fails when the tables
+    /// span clusters, which no single connection can join.
+    pub async fn run_batch_queries_for_tables(
+        &self,
+        state: &AppState,
+        batches: Vec<SQLtuple>,
+        tables: &[&str],
+    ) -> Result<Vec<my::Row>> {
+        let wiki = self
+            .wiki()
+            .ok_or_else(|| anyhow!("PageList::run_batch_queries_for_tables: No wiki"))?;
+        let cluster = state.cluster_for_tables(&wiki, tables)?;
+        self.run_batch_queries_mutex(state, batches, wiki, cluster)
+            .await
+    }
+
     /// Runs batched queries for `process_batch_results` and `annotate_batch_results`
     pub async fn run_batch_queries_with_cluster(
         &self,
