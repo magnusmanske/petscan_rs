@@ -9,6 +9,15 @@
 "restart-code":"",
 "use_file_table": false,
 "use_new_categorylinks_table": false,
+"//port_mapping":"local SSH-tunnel ports, keyed by the leading labels of the replica host; see connect_test_sql.sh",
+"port_mapping":{
+	"enwiki":3310,
+	"dewiki":3307,
+	"wikidatawiki":3309,
+	"commonswiki":3305,
+	"links.commonswiki":3315,
+	"termstore.wikidatawiki":3317
+},
 "mysql":[
 	["user_id","password"],...
 ]

@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::pagelist::DatabaseCluster;
 use anyhow::{Result, anyhow};
 use chrono::prelude::*;
 use mysql_async as my;
@@ -10,11 +9,24 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{instrument, trace};
+pub use wikimisc::toolforge_db::{DbCluster, DbServerGroup};
 
-/// The termstore host for the X3 / Wikidata term-store cluster.
-/// This is a non-standard hostname that toolforge does not generate, so we
-/// keep it as a constant and supply credentials separately.
-const TERMSTORE_SERVER: &str = "termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud";
+/// The DNS suffix shared by every Wiki Replica service. A replica host is
+/// `{cluster prefix}{wiki}.{server group}` plus this.
+const REPLICA_DOMAIN: &str = ".db.svc.wikimedia.cloud";
+
+/// Which replica service group serves a cluster.
+///
+/// Everything uses `web`, whose short query timeout suits a user waiting for
+/// a result. The Wikidata term store is the exception: `PetScan` has always
+/// read it from the `analytics` host, whose longer timeout the label queries
+/// need.
+const fn server_group(cluster: DbCluster) -> DbServerGroup {
+    match cluster {
+        DbCluster::TermStore => DbServerGroup::Analytics,
+        _ => DbServerGroup::Web,
+    }
+}
 
 /// Retry policy for `max_user_connections` rejections. Wikimedia replicas
 /// enforce a per-user limit (typically 10 concurrent connections); a brief
@@ -79,7 +91,7 @@ pub struct DatabaseManager {
     config: Config,
     /// Per-`(wiki, cluster)` connection pools, lazily created. Pools live
     /// for the lifetime of the manager and reuse TCP/TLS/auth handshakes.
-    wiki_pools: Arc<Mutex<HashMap<(String, DatabaseCluster), my::Pool>>>,
+    wiki_pools: Arc<Mutex<HashMap<(String, DbCluster), my::Pool>>>,
     /// Shared pool for the tool DB (PSID + query log).
     tool_db_pool: Arc<Mutex<Option<my::Pool>>>,
 }
@@ -175,29 +187,76 @@ impl DatabaseManager {
     /// Returns the canonical Toolforge host and `_p`-suffixed database name
     /// for a wiki replica, as a `(host, schema)` tuple.
     ///
-    /// For the default (WEB) cluster the host follows the standard Toolforge
-    /// pattern `{wiki}.web.db.svc.wikimedia.cloud`.  For the X3 cluster the
-    /// hard-coded termstore hostname is returned.
+    /// Hosts follow the Toolforge pattern
+    /// `{cluster prefix}{wiki}.{server group}.db.svc.wikimedia.cloud`, so the
+    /// core cluster of `enwiki` is `enwiki.web.…` and the Commons links
+    /// cluster is `links.commonswiki.web.…`. Asking for a cluster a wiki does
+    /// not have falls back to [`DbCluster::Core`], where those tables still
+    /// live — so a caller may always ask for [`DbCluster::Links`] when
+    /// reading `pagelinks`, whatever the wiki.
     ///
     /// This method is credential-free; use [`Self::get_wiki_db_connection`]
     /// when you need an actual connection.
     pub fn db_host_and_schema_for_wiki(
         &self,
         wiki: &str,
-        cluster: DatabaseCluster,
+        cluster: DbCluster,
     ) -> (String, String) {
         let wiki = self.fix_wiki_name(wiki);
-        let host = match cluster {
-            DatabaseCluster::X3 => TERMSTORE_SERVER.to_string(),
-            _ => format!("{wiki}.web.db.svc.wikimedia.cloud"),
-        };
+        let cluster = self.effective_cluster(&wiki, cluster);
+        let host = format!(
+            "{prefix}{wiki}.{group}{REPLICA_DOMAIN}",
+            prefix = cluster.host_prefix(),
+            group = server_group(cluster),
+        );
         let schema = format!("{wiki}_p");
         (host, schema)
+    }
+
+    /// The cluster actually used for `wiki`: the requested one where the wiki
+    /// has it, [`DbCluster::Core`] otherwise.
+    fn effective_cluster(&self, wiki: &str, cluster: DbCluster) -> DbCluster {
+        let wiki = self.fix_wiki_name(wiki);
+        if cluster.applies_to_wiki(&wiki) {
+            cluster
+        } else {
+            DbCluster::Core
+        }
+    }
+
+    /// The single cluster able to serve a query reading all of `tables`.
+    ///
+    /// Errors when they are split across clusters — on Commons since the
+    /// September 2026 links-table split — which no one connection can join;
+    /// such a query has to be run in parts and combined in code.
+    pub fn cluster_for_tables(&self, wiki: &str, tables: &[&str]) -> Result<DbCluster> {
+        let wiki = self.fix_wiki_name(wiki);
+        DbCluster::for_tables(&wiki, tables).map_err(|e| anyhow!(e))
     }
 
     // ------------------------------------------------------------------
     // Connection helpers
     // ------------------------------------------------------------------
+
+    /// The `MySQL` port for `(wiki, cluster)`.
+    ///
+    /// On Toolforge every service listens on the default 3306; locally each
+    /// replica is reached through its own SSH tunnel, so `config.port_mapping`
+    /// maps the leading labels of the replica host — `commonswiki`,
+    /// `links.commonswiki`, `termstore.wikidatawiki` — to a local port. `x3`
+    /// is still accepted as a legacy alias for the term store.
+    fn tunnel_port(&self, wiki: &str, cluster: DbCluster) -> u16 {
+        let wiki = self.fix_wiki_name(wiki);
+        let cluster = self.effective_cluster(&wiki, cluster);
+        let key = format!("{}{wiki}", cluster.host_prefix());
+        let legacy_key = matches!(cluster, DbCluster::TermStore).then_some("x3");
+        self.config
+            .port_mapping
+            .get(&key)
+            .or_else(|| legacy_key.and_then(|k| self.config.port_mapping.get(k)))
+            .copied()
+            .unwrap_or_else(|| self.config.db_port.unwrap_or(3306))
+    }
 
     /// Build [`my::Opts`] for a wiki-replica or termstore connection.
     ///
@@ -205,23 +264,11 @@ impl DatabaseManager {
     /// `toolforge` crate).  Locally they fall back to `config["user"]` /
     /// `config["password"]`, and the port is taken from `port_mapping` (for
     /// SSH-tunnel setups) or `config["db_port"]`.
-    fn get_mysql_opts_for_wiki(&self, wiki: &str, cluster: DatabaseCluster) -> Result<my::Opts> {
+    fn get_mysql_opts_for_wiki(&self, wiki: &str, cluster: DbCluster) -> Result<my::Opts> {
         let creds = self.credentials()?;
 
         let (host, schema) = self.db_host_and_schema_for_wiki(wiki, cluster);
-
-        // Port: prefer an explicit port_mapping entry (local SSH tunnels),
-        // then fall back to config.db_port, then the default 3306.
-        let port_key = match cluster {
-            DatabaseCluster::X3 => "x3",
-            _ => wiki,
-        };
-        let port: u16 = self
-            .config
-            .port_mapping
-            .get(port_key)
-            .copied()
-            .unwrap_or_else(|| self.config.db_port.unwrap_or(3306));
+        let port = self.tunnel_port(wiki, cluster);
 
         // When running locally (host = 127.0.0.1 in config), always bind to
         // 127.0.0.1 regardless of what db_host_and_schema_for_wiki computed.
@@ -256,7 +303,7 @@ impl DatabaseManager {
     /// Get or lazily create the connection pool for `(wiki, cluster)`.
     /// Pools are kept for the lifetime of the manager so the TCP/TLS/auth
     /// handshake is only paid once per replica per process.
-    async fn get_wiki_pool(&self, wiki: &str, cluster: DatabaseCluster) -> Result<my::Pool> {
+    async fn get_wiki_pool(&self, wiki: &str, cluster: DbCluster) -> Result<my::Pool> {
         let key = (wiki.to_string(), cluster);
         let mut pools = self.wiki_pools.lock().await;
         if let Some(p) = pools.get(&key) {
@@ -268,13 +315,37 @@ impl DatabaseManager {
         Ok(pool)
     }
 
-    #[instrument(skip(self), err)]
+    /// Connects to a wiki's core cluster. `"x3"` is a legacy alias for the
+    /// Wikidata term store.
     pub async fn get_wiki_db_connection(&self, wiki: &str) -> Result<my::Conn> {
         let (wiki, cluster) = match wiki {
-            "x3" => ("wikidatawiki", DatabaseCluster::X3),
-            other => (other, DatabaseCluster::Default),
+            "x3" => ("wikidatawiki", DbCluster::TermStore),
+            other => (other, DbCluster::Core),
         };
+        self.get_wiki_db_connection_for_cluster(wiki, cluster).await
+    }
 
+    /// Connects to the cluster able to serve a query reading all of `tables`.
+    ///
+    /// Errors when they span clusters; see [`Self::cluster_for_tables`].
+    pub async fn get_wiki_db_connection_for_tables(
+        &self,
+        wiki: &str,
+        tables: &[&str],
+    ) -> Result<my::Conn> {
+        let cluster = self.cluster_for_tables(wiki, tables)?;
+        self.get_wiki_db_connection_for_cluster(wiki, cluster).await
+    }
+
+    /// Connects to one cluster of a wiki, falling back to
+    /// [`DbCluster::Core`] for wikis that do not have it.
+    #[instrument(skip(self), err)]
+    pub async fn get_wiki_db_connection_for_cluster(
+        &self,
+        wiki: &str,
+        cluster: DbCluster,
+    ) -> Result<my::Conn> {
+        let cluster = self.effective_cluster(wiki, cluster);
         let pool = self.get_wiki_pool(wiki, cluster).await?;
         trace!(wiki, ?cluster, "leasing connection from pool");
         let mut attempt: u32 = 0;
@@ -319,9 +390,10 @@ impl DatabaseManager {
         Ok(conn)
     }
 
-    /// Connects to the X3 / Wikidata term-store cluster.
+    /// Connects to the Wikidata term-store cluster (`x3`).
     pub async fn get_x3_db_connection(&self) -> Result<my::Conn> {
-        self.get_wiki_db_connection("x3").await
+        self.get_wiki_db_connection_for_cluster("wikidatawiki", DbCluster::TermStore)
+            .await
     }
 
     /// Opens a connection to the tool database.
@@ -503,6 +575,41 @@ impl DatabaseManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn manager_with_ports(pairs: &[(&str, u16)]) -> DatabaseManager {
+        DatabaseManager::with_config(Config {
+            port_mapping: pairs.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
+            db_port: Some(3999),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn tunnel_port_is_keyed_by_replica_host_labels() {
+        let dbm = manager_with_ports(&[
+            ("commonswiki", 3305),
+            ("links.commonswiki", 3315),
+            ("termstore.wikidatawiki", 3317),
+        ]);
+        assert_eq!(dbm.tunnel_port("commonswiki", DbCluster::Core), 3305);
+        assert_eq!(dbm.tunnel_port("commonswiki", DbCluster::Links), 3315);
+        assert_eq!(
+            dbm.tunnel_port("wikidatawiki", DbCluster::TermStore),
+            3317
+        );
+        // Wikis without a links cluster read those tables from their core, so
+        // they must not fall through to the Commons links tunnel.
+        assert_eq!(dbm.tunnel_port("enwiki", DbCluster::Links), 3999);
+    }
+
+    #[test]
+    fn tunnel_port_accepts_legacy_x3_key() {
+        let dbm = manager_with_ports(&[("x3", 3317)]);
+        assert_eq!(
+            dbm.tunnel_port("wikidatawiki", DbCluster::TermStore),
+            3317
+        );
+    }
 
     #[test]
     fn exponential_backoff_starts_at_base() {

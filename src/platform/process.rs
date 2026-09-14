@@ -1,6 +1,7 @@
 use crate::datasource::SQLtuple;
 use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
-use crate::pagelist::{DatabaseCluster, PageList};
+use crate::database_manager::DbCluster;
+use crate::pagelist::PageList;
 use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, TriState};
 use crate::platform::{PAGE_BATCH_SIZE, Platform};
 use anyhow::{Result, anyhow};
@@ -1042,7 +1043,7 @@ impl Platform {
             Platform::entry_from_entity(&term_full_entity_id)
         };
         result
-            .run_batch_queries_with_cluster(&self.state(), batches, DatabaseCluster::X3)
+            .run_batch_queries_with_cluster(&self.state(), batches, DbCluster::TermStore)
             .await?
             .iter()
             .filter_map(|row| the_f(row.to_owned()))

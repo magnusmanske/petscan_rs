@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::content_type::ContentType;
 use crate::database_manager::DatabaseManager;
 use crate::form_parameters::FormParameters;
-use crate::pagelist::DatabaseCluster;
+use crate::database_manager::DbCluster;
 use crate::platform::MyResponse;
 use anyhow::{Result, anyhow};
 use mysql_async as my;
@@ -168,12 +168,13 @@ impl AppState {
 
     /// Returns the canonical Toolforge host and `_p`-suffixed database name
     /// for a wiki replica, as a `(host, schema)` tuple.
-    pub fn db_host_and_schema_for_wiki(
-        &self,
-        wiki: &str,
-        cluster: DatabaseCluster,
-    ) -> (String, String) {
+    pub fn db_host_and_schema_for_wiki(&self, wiki: &str, cluster: DbCluster) -> (String, String) {
         self.db_manager.db_host_and_schema_for_wiki(wiki, cluster)
+    }
+
+    /// The single cluster able to serve a query reading all of `tables`.
+    pub fn cluster_for_tables(&self, wiki: &str, tables: &[&str]) -> Result<DbCluster> {
+        self.db_manager.cluster_for_tables(wiki, tables)
     }
 
     // ------------------------------------------------------------------
@@ -182,6 +183,29 @@ impl AppState {
 
     pub async fn get_wiki_db_connection(&self, wiki: &str) -> Result<my::Conn> {
         self.db_manager.get_wiki_db_connection(wiki).await
+    }
+
+    /// Connects to one cluster of a wiki, falling back to [`DbCluster::Core`]
+    /// for wikis that do not have it.
+    pub async fn get_wiki_db_connection_for_cluster(
+        &self,
+        wiki: &str,
+        cluster: DbCluster,
+    ) -> Result<my::Conn> {
+        self.db_manager
+            .get_wiki_db_connection_for_cluster(wiki, cluster)
+            .await
+    }
+
+    /// Connects to the cluster able to serve a query reading all of `tables`.
+    pub async fn get_wiki_db_connection_for_tables(
+        &self,
+        wiki: &str,
+        tables: &[&str],
+    ) -> Result<my::Conn> {
+        self.db_manager
+            .get_wiki_db_connection_for_tables(wiki, tables)
+            .await
     }
 
     /// Connects to the X3 / Wikidata term-store cluster.
@@ -526,15 +550,65 @@ mod tests {
     #[test]
     fn test_db_host_and_schema_for_wiki_web() {
         let state = state_with_config(make_minimal_config());
-        let (host, schema) = state.db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default);
+        let (host, schema) = state.db_host_and_schema_for_wiki("enwiki", DbCluster::Core);
         assert_eq!(host, "enwiki.web.db.svc.wikimedia.cloud");
         assert_eq!(schema, "enwiki_p");
     }
 
     #[test]
+    fn test_db_host_and_schema_for_wiki_links_cluster() {
+        let state = state_with_config(make_minimal_config());
+        // Commons' links tables moved to their own cluster in Sept 2026 ...
+        let (host, schema) = state.db_host_and_schema_for_wiki("commonswiki", DbCluster::Links);
+        assert_eq!(host, "links.commonswiki.web.db.svc.wikimedia.cloud");
+        assert_eq!(schema, "commonswiki_p");
+        // ... while every other wiki keeps serving them from its core cluster,
+        // so callers may always ask for `Links`.
+        let (en_host, en_schema) = state.db_host_and_schema_for_wiki("enwiki", DbCluster::Links);
+        assert_eq!(en_host, "enwiki.web.db.svc.wikimedia.cloud");
+        assert_eq!(en_schema, "enwiki_p");
+    }
+
+    #[test]
+    fn test_cluster_for_tables() {
+        let state = state_with_config(make_minimal_config());
+        // `page` exists on both Commons clusters, so links joins still work.
+        assert_eq!(
+            state
+                .cluster_for_tables("commonswiki", &["page", "categorylinks", "linktarget"])
+                .unwrap(),
+            DbCluster::Links
+        );
+        assert_eq!(
+            state
+                .cluster_for_tables("enwiki", &["page", "categorylinks", "linktarget"])
+                .unwrap(),
+            DbCluster::Core
+        );
+        assert_eq!(
+            state
+                .cluster_for_tables("commonswiki", &["page", "page_props"])
+                .unwrap(),
+            DbCluster::Core
+        );
+        // A join across the Commons split has no single host to run on.
+        assert!(
+            state
+                .cluster_for_tables("commonswiki", &["categorylinks", "revision"])
+                .is_err()
+        );
+        // The same join is fine anywhere else.
+        assert!(
+            state
+                .cluster_for_tables("dewiki", &["categorylinks", "revision"])
+                .is_ok()
+        );
+    }
+
+    #[test]
     fn test_db_host_and_schema_for_wiki_x3() {
         let state = state_with_config(make_minimal_config());
-        let (host, schema) = state.db_host_and_schema_for_wiki("wikidatawiki", DatabaseCluster::X3);
+        let (host, schema) = state.db_host_and_schema_for_wiki("wikidatawiki", DbCluster::TermStore);
         assert_eq!(
             host,
             "termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud"
@@ -546,7 +620,7 @@ mod tests {
     fn test_db_host_and_schema_normalises_wiki_name() {
         let state = state_with_config(make_minimal_config());
         let (_host, schema) =
-            state.db_host_and_schema_for_wiki("be-taraskwiki", DatabaseCluster::Default);
+            state.db_host_and_schema_for_wiki("be-taraskwiki", DbCluster::Core);
         assert_eq!(schema, "be_x_oldwiki_p");
     }
 
@@ -791,13 +865,13 @@ mod tests {
         assert_eq!(
             "enwiki_p".to_string(),
             state
-                .db_host_and_schema_for_wiki("enwiki", DatabaseCluster::Default)
+                .db_host_and_schema_for_wiki("enwiki", DbCluster::Core)
                 .1
         );
         assert_eq!(
             "be_x_oldwiki_p".to_string(),
             state
-                .db_host_and_schema_for_wiki("be-taraskwiki", DatabaseCluster::Default)
+                .db_host_and_schema_for_wiki("be-taraskwiki", DbCluster::Core)
                 .1
         );
     }

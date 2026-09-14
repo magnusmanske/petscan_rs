@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::database_manager::DbCluster;
 use crate::datasource::SQLtuple;
 use crate::pagelist_entry::{PageListEntry, PageListSort, sort_or_shuffle};
 use crate::platform::{MAX_CONCURRENT_DB_BATCHES, PAGE_BATCH_SIZE, Platform};
@@ -37,11 +38,9 @@ fn write_lock<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     lock.write().unwrap_or_else(|p| p.into_inner())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DatabaseCluster {
-    Default,
-    X3,
-}
+/// Historical name for [`DbCluster`]; kept so existing callers of
+/// [`crate::app_state::AppState::db_host_and_schema_for_wiki`] keep compiling.
+pub use crate::database_manager::DbCluster as DatabaseCluster;
 
 /// Distinguishes Wikidata item entities (Q-prefixed, namespace 0) from
 /// property entities (P-prefixed, namespace 120). The two flavours map to
@@ -370,13 +369,12 @@ impl PageList {
         state: &AppState,
         sql: SQLtuple,
         wiki: &str,
-        cluster: DatabaseCluster,
+        cluster: DbCluster,
     ) -> Result<Vec<my::Row>> {
-        let mut conn = match cluster {
-            DatabaseCluster::Default => state.get_wiki_db_connection(wiki).await,
-            DatabaseCluster::X3 => state.get_x3_db_connection().await,
-        }
-        .map_err(|e| anyhow!(e))?;
+        let mut conn = state
+            .get_wiki_db_connection_for_cluster(wiki, cluster)
+            .await
+            .map_err(|e| anyhow!(e))?;
         let rows = conn
             .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
             .await?
@@ -396,7 +394,7 @@ impl PageList {
         state: &AppState,
         batches: Vec<SQLtuple>,
     ) -> Result<Vec<my::Row>> {
-        self.run_batch_queries_with_cluster(state, batches, DatabaseCluster::Default)
+        self.run_batch_queries_with_cluster(state, batches, DbCluster::Core)
             .await
     }
 
@@ -405,7 +403,7 @@ impl PageList {
         &self,
         state: &AppState,
         batches: Vec<SQLtuple>,
-        cluster: DatabaseCluster,
+        cluster: DbCluster,
     ) -> Result<Vec<my::Row>> {
         let wiki = self
             .wiki()
@@ -422,7 +420,7 @@ impl PageList {
         state: &AppState,
         batches: Vec<SQLtuple>,
         wiki: String,
-        cluster: DatabaseCluster,
+        cluster: DbCluster,
     ) -> Result<Vec<my::Row>> {
         let mut futures = vec![];
         for sql in batches {
@@ -621,7 +619,7 @@ impl PageList {
         };
         let col_title = 0;
         let col_ns = 1;
-        self.run_batch_queries_with_cluster(&platform.state(), batches, DatabaseCluster::X3)
+        self.run_batch_queries_with_cluster(&platform.state(), batches, DbCluster::TermStore)
             .await?
             .iter()
             .filter_map(|row| {
