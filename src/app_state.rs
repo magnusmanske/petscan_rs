@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::content_type::ContentType;
 use crate::database_manager::DatabaseManager;
-use crate::form_parameters::FormParameters;
 use crate::database_manager::DbCluster;
+use crate::form_parameters::FormParameters;
 use crate::platform::MyResponse;
 use anyhow::{Result, anyhow};
 use mysql_async as my;
@@ -175,6 +175,16 @@ impl AppState {
     /// The single cluster able to serve a query reading all of `tables`.
     pub fn cluster_for_tables(&self, wiki: &str, tables: &[&str]) -> Result<DbCluster> {
         self.db_manager.cluster_for_tables(wiki, tables)
+    }
+
+    /// Whether a query on `cluster` can read every one of `tables` for `wiki`.
+    pub fn cluster_hosts_tables(&self, wiki: &str, cluster: DbCluster, tables: &[&str]) -> bool {
+        self.db_manager.cluster_hosts_tables(wiki, cluster, tables)
+    }
+
+    /// Whether `wiki` has this cluster at all.
+    pub fn wiki_has_cluster(&self, wiki: &str, cluster: DbCluster) -> bool {
+        self.db_manager.wiki_has_cluster(wiki, cluster)
     }
 
     // ------------------------------------------------------------------

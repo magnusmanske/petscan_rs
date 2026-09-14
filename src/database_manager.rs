@@ -197,11 +197,7 @@ impl DatabaseManager {
     ///
     /// This method is credential-free; use [`Self::get_wiki_db_connection`]
     /// when you need an actual connection.
-    pub fn db_host_and_schema_for_wiki(
-        &self,
-        wiki: &str,
-        cluster: DbCluster,
-    ) -> (String, String) {
+    pub fn db_host_and_schema_for_wiki(&self, wiki: &str, cluster: DbCluster) -> (String, String) {
         let wiki = self.fix_wiki_name(wiki);
         let cluster = self.effective_cluster(&wiki, cluster);
         let host = format!(
@@ -213,15 +209,32 @@ impl DatabaseManager {
         (host, schema)
     }
 
+    /// Whether `wiki` has this cluster at all. Every wiki has a
+    /// [`DbCluster::Core`]; an extension database exists only for the wikis
+    /// whose tables were actually split off.
+    pub fn wiki_has_cluster(&self, wiki: &str, cluster: DbCluster) -> bool {
+        cluster.applies_to_wiki(&self.fix_wiki_name(wiki))
+    }
+
     /// The cluster actually used for `wiki`: the requested one where the wiki
     /// has it, [`DbCluster::Core`] otherwise.
     fn effective_cluster(&self, wiki: &str, cluster: DbCluster) -> DbCluster {
-        let wiki = self.fix_wiki_name(wiki);
-        if cluster.applies_to_wiki(&wiki) {
+        if self.wiki_has_cluster(wiki, cluster) {
             cluster
         } else {
             DbCluster::Core
         }
+    }
+
+    /// Whether a query on `cluster` can read every one of `tables` for `wiki`.
+    ///
+    /// Unlike [`Self::cluster_for_tables`] this answers about a cluster the
+    /// caller has already picked, which is what routing a query's individual
+    /// clauses needs: `page` is on the Commons links cluster as well as its
+    /// core one, so a clause reading only `page` fits either.
+    pub fn cluster_hosts_tables(&self, wiki: &str, cluster: DbCluster, tables: &[&str]) -> bool {
+        let wiki = self.fix_wiki_name(wiki);
+        tables.iter().all(|table| cluster.hosts_table(&wiki, table))
     }
 
     /// The single cluster able to serve a query reading all of `tables`.
@@ -593,10 +606,7 @@ mod tests {
         ]);
         assert_eq!(dbm.tunnel_port("commonswiki", DbCluster::Core), 3305);
         assert_eq!(dbm.tunnel_port("commonswiki", DbCluster::Links), 3315);
-        assert_eq!(
-            dbm.tunnel_port("wikidatawiki", DbCluster::TermStore),
-            3317
-        );
+        assert_eq!(dbm.tunnel_port("wikidatawiki", DbCluster::TermStore), 3317);
         // Wikis without a links cluster read those tables from their core, so
         // they must not fall through to the Commons links tunnel.
         assert_eq!(dbm.tunnel_port("enwiki", DbCluster::Links), 3999);
@@ -605,10 +615,7 @@ mod tests {
     #[test]
     fn tunnel_port_accepts_legacy_x3_key() {
         let dbm = manager_with_ports(&[("x3", 3317)]);
-        assert_eq!(
-            dbm.tunnel_port("wikidatawiki", DbCluster::TermStore),
-            3317
-        );
+        assert_eq!(dbm.tunnel_port("wikidatawiki", DbCluster::TermStore), 3317);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use crate::app_state::AppState;
+use crate::database_manager::DbCluster;
 use crate::datasource::DataSource;
 use crate::datasource::SQLtuple;
 use crate::pagelist::PageList;
@@ -16,7 +17,7 @@ use mysql_async::Value as MyValue;
 use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::debug;
 use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
@@ -24,24 +25,28 @@ use wikimisc::mediawiki::title::Title;
 mod helpers;
 use helpers::MAX_CATEGORY_BATCH_SIZE;
 
+/// An SQL fragment with no bound values.
+fn sql_text(sql: &str) -> SQLtuple {
+    SQLtuple(sql.to_string(), vec![])
+}
+
 const MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
+
+/// The tables each family of filter clauses reads besides `page`. Named so a
+/// clause and the cluster it can run on cannot drift apart.
+const TEMPLATELINKS: &[&str] = &["templatelinks", "linktarget"];
+const PAGELINKS: &[&str] = &["pagelinks", "linktarget"];
+const PAGE_PROPS: &[&str] = &["page_props"];
+const REVISION: &[&str] = &["revision"];
+const REVISION_ACTOR: &[&str] = &["revision", "actor"];
+const REVISION_USER_GROUPS: &[&str] = &["revision", "actor", "user_groups"];
+const FLAGGEDPAGES: &[&str] = &["flaggedpages"];
+const ORES: &[&str] = &["ores_classification", "ores_model"];
 
 /// Wikidata item Q6964088 ("Category:Tracking categories"). Its sitelinks
 /// give the authoritative, wiki-local name of the container category that
 /// holds each wiki's tracking categories (issue #197).
 const TRACKING_CATEGORIES_ITEM: u64 = 6964088;
-
-/// Bundles the four mostly-context arguments shared by
-/// `get_pages_for_primary` and `get_pages_for_primary_new_connection`.
-/// `sql` and `sql_before_after` stay as separate parameters because they
-/// are transformed mid-call and the two functions handle them slightly
-/// differently (mut borrow + clone vs. moved owned value).
-struct PrimaryQueryArgs<'a> {
-    primary: Primary,
-    pages_sublist: &'a mut PageList,
-    is_before_after_done: &'a mut bool,
-    api: Api,
-}
 
 /// How multiple categories should be combined. Previously a free-form
 /// `String` field with `"subset"`/`"union"` magic values and an explicit
@@ -79,7 +84,22 @@ enum Primary {
     CreatedBy,
 }
 
-const PAGE_SELECT_PREFIX: &str = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,p.page_len";
+/// `page_touched` is the timestamp of a page's latest revision, which only
+/// `revision` knows. Where that table is on another host than the rest of the
+/// base query — Commons' links cluster — the column comes back empty and
+/// [`SourceDatabase::apply_deferred_filters`] fills it in from the core
+/// cluster instead.
+const PAGE_TOUCHED_FROM_REVISION: &str =
+    "(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched";
+
+/// The base query's page columns, as the cluster it runs on can provide them.
+fn page_select_prefix(cluster: DbCluster) -> String {
+    let page_touched = match cluster {
+        DbCluster::Core => PAGE_TOUCHED_FROM_REVISION,
+        _ => "'' AS page_touched",
+    };
+    format!("SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,{page_touched},p.page_len")
+}
 
 type PrimaryResultRow = (u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount);
 
@@ -88,8 +108,98 @@ struct DsdbParams {
     link_count_sql: String,
     wiki: String,
     primary: Primary,
-    sql_before_after: SQLtuple,
-    is_before_after_done: bool,
+    /// The cluster the base query runs on; see [`Filters::base_cluster`].
+    base_cluster: DbCluster,
+    /// Every filter clause the query asks for, collected once and split per
+    /// batch. The clauses depend only on the query parameters, so building
+    /// them here also settles `base_cluster`.
+    filters: Filters,
+}
+
+/// One filter clause of the primary query, plus the tables it reads besides
+/// `page`.
+///
+/// The SQL is the same wherever it runs; only *where* it can run depends on
+/// the wiki, so clauses are collected first and routed to clusters when the
+/// query is assembled.
+#[derive(Debug, Clone)]
+struct Filter {
+    tables: &'static [&'static str],
+    sql: SQLtuple,
+}
+
+/// The filter clauses of one primary query.
+///
+/// Commons keeps its links tables (`categorylinks`, `pagelinks`,
+/// `templatelinks`, `langlinks`, …) on a different host than `revision`,
+/// `page_props`, `actor` and friends, so a single statement cannot filter on
+/// both. [`Self::split`] puts everything the base query's cluster can serve
+/// into that query and groups the rest by the cluster that can, to be applied
+/// as `page_id IN (…)` passes afterwards. Off Commons there is only ever one
+/// cluster and nothing is deferred.
+///
+/// Every clause must be a self-contained ` AND …` over the `page p` alias, so
+/// that it reads the same in the base query as in a deferred
+/// `SELECT p.page_id FROM page p WHERE …` pass.
+#[derive(Debug, Clone, Default)]
+struct Filters(Vec<Filter>);
+
+impl Filters {
+    /// Records a clause. Empty SQL is dropped, so a builder can push
+    /// unconditionally.
+    fn push(&mut self, tables: &'static [&'static str], sql: SQLtuple) {
+        if !sql.0.is_empty() {
+            self.0.push(Filter { tables, sql });
+        }
+    }
+
+    /// Records a clause that reads no table but `page`.
+    fn push_page_only(&mut self, sql: SQLtuple) {
+        self.push(&[], sql);
+    }
+
+    /// The cluster to run the base query on, given the tables it joins itself.
+    ///
+    /// The links cluster wins as soon as anything in the query needs it.
+    /// Which cluster carries the selective predicates decides the cost: on
+    /// Commons the links tables hold what a query actually selects on — a
+    /// category, a template, an incoming link — while the core-only filters
+    /// (`revision` timestamps, `page_props` flags) only narrow an
+    /// already-small set. Deferring a links predicate instead would leave the
+    /// base query scanning all of `page`.
+    fn base_cluster(&self, state: &AppState, wiki: &str, base_tables: &[&str]) -> DbCluster {
+        let needs_links = base_tables
+            .iter()
+            .copied()
+            .chain(self.0.iter().flat_map(|f| f.tables.iter().copied()))
+            .any(|table| !state.cluster_hosts_tables(wiki, DbCluster::Core, &[table]));
+        if needs_links && state.wiki_has_cluster(wiki, DbCluster::Links) {
+            DbCluster::Links
+        } else {
+            DbCluster::Core
+        }
+    }
+
+    /// Splits the clauses into the ones a base query on `base` can carry and
+    /// the ones that have to run on another cluster, grouped by cluster.
+    fn split(
+        self,
+        state: &AppState,
+        wiki: &str,
+        base: DbCluster,
+    ) -> Result<(SQLtuple, HashMap<DbCluster, SQLtuple>)> {
+        let mut inline = super::sql_tuple();
+        let mut deferred: HashMap<DbCluster, SQLtuple> = HashMap::new();
+        for Filter { tables, sql } in self.0 {
+            if state.cluster_hosts_tables(wiki, base, tables) {
+                super::append_sql(&mut inline, sql);
+            } else {
+                let cluster = state.cluster_for_tables(wiki, &[&["page"], tables].concat())?;
+                super::append_sql(deferred.entry(cluster).or_default(), sql);
+            }
+        }
+        Ok((inline, deferred))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -580,14 +690,17 @@ impl SourceDatabase {
     /// `Union` merges all groups into one deduplicated `IN` list. Note the
     /// union dedup goes through a `HashSet`, so the *order* of bound titles
     /// is unspecified (only their set is).
-    fn category_batch_sql(&self, link_count_sql: &str, category_batch: &[Vec<String>]) -> SQLtuple {
+    fn category_batch_sql(
+        &self,
+        base_cluster: DbCluster,
+        link_count_sql: &str,
+        category_batch: &[Vec<String>],
+    ) -> SQLtuple {
         let subquery = "SELECT cl_from,cl_target_id,lt_title from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
         let mut sql = super::sql_tuple();
         match self.params.combine {
             CombineMode::Subset => {
-                sql.0 = "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,
-                	(SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,
-                 p.page_len".to_string() ;
+                sql.0 = page_select_prefix(base_cluster);
                 sql.0 += link_count_sql;
                 sql.0 += &format!(" FROM ( {subquery} IN (");
                 super::append_sql(&mut sql, super::prep_quote(&category_batch[0]));
@@ -610,7 +723,7 @@ impl SourceDatabase {
                     .par_iter()
                     .map(|s| s.to_owned())
                     .collect::<Vec<String>>();
-                sql.0 = PAGE_SELECT_PREFIX.to_string();
+                sql.0 = page_select_prefix(base_cluster);
                 sql.0 += link_count_sql;
                 sql.0 += &format!(" FROM ( {subquery} IN (");
                 super::append_sql(&mut sql, super::prep_quote(&tmp));
@@ -629,27 +742,15 @@ impl SourceDatabase {
         state: &AppState,
         ret: &PageList,
     ) -> Result<()> {
-        let sql = self.category_batch_sql(&params.link_count_sql, category_batch);
+        let sql =
+            self.category_batch_sql(params.base_cluster, &params.link_count_sql, category_batch);
         let mut pl2 = PageList::new_from_wiki(&params.wiki.clone());
-        let api = state.get_api_for_wiki(params.wiki.clone()).await?;
         Platform::profile(
             "DSDB::get_pages [primary:categories] START BATCH",
             Some(sql.1.len()),
         );
-        let mut is_before_after_done = params.is_before_after_done;
-        self.get_pages_for_primary_new_connection(
-            state,
-            &params.wiki,
-            sql,
-            &mut params.sql_before_after.clone(),
-            PrimaryQueryArgs {
-                primary: params.primary,
-                pages_sublist: &mut pl2,
-                is_before_after_done: &mut is_before_after_done,
-                api,
-            },
-        )
-        .await?;
+        self.get_pages_for_primary(state, params, sql, &mut pl2)
+            .await?;
         Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH", None);
         ret.union(&pl2, None).await?;
         Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE", None);
@@ -709,6 +810,7 @@ impl SourceDatabase {
 
         let mut conn = state.get_wiki_db_connection(&wiki).await?;
         self.talk_namespace_ids = self.get_talk_namespace_ids(&mut conn).await?;
+        drop(conn);
 
         self.has_pos_templates =
             !self.params.templates_yes.is_empty() || !self.params.templates_any.is_empty();
@@ -725,43 +827,37 @@ impl SourceDatabase {
             ",0 AS link_count" // Dummy
         };
 
-        let mut sql_before_after = super::sql_tuple();
-        let mut before: String = self.params.before.clone();
-        let mut after: String = self.params.after.clone();
-        let mut is_before_after_done: bool = false;
-        if let Some(max_age) = self.params.max_age {
-            let utc = Utc::now().sub(Duration::try_hours(max_age).unwrap_or_default());
-            before = String::new();
-            after = utc.format("%Y%m%d%H%M%S").to_string();
-        }
-
-        if before.is_empty() && after.is_empty() {
-            is_before_after_done = true;
-        } else {
-            sql_before_after.0 = " INNER JOIN (revision r) ON r.rev_page=p.page_id".to_string();
-            if self.params.only_new_since {
-                sql_before_after.0 += " AND r.rev_parent_id=0";
-            } else {
-                sql_before_after.0 += " AND r.rev_id=p.page_latest";
-            }
-            if !before.is_empty() {
-                sql_before_after.0 += " AND r.rev_timestamp<=?";
-                sql_before_after.1.push(MyValue::Bytes(before.into()));
-            }
-            if !after.is_empty() {
-                sql_before_after.0 += " AND r.rev_timestamp>=?";
-                sql_before_after.1.push(MyValue::Bytes(after.into()));
-            }
-            sql_before_after.0 += " ";
-        }
+        let api = state.get_api_for_wiki(wiki.clone()).await?;
+        let filters = self.collect_filters(primary, api);
+        let base_cluster = filters.base_cluster(state, &wiki, &self.base_query_tables(primary));
 
         Ok(DsdbParams {
             link_count_sql: link_count_sql.to_string(),
             wiki,
             primary,
-            sql_before_after,
-            is_before_after_done,
+            base_cluster,
+            filters,
         })
+    }
+
+    /// The tables the base query joins itself, besides `page`: the primary
+    /// source's, plus `pagelinks` when the link count is being gathered as a
+    /// `SELECT` column.
+    fn base_query_tables(&self, primary: Primary) -> Vec<&'static str> {
+        let mut tables = match primary {
+            // The only primary whose source is joined in the base query; the
+            // others are `FROM page p` plus filter clauses.
+            Primary::Categories => vec!["categorylinks", "linktarget"],
+            Primary::Templates
+            | Primary::LinksFrom
+            | Primary::Pagelist
+            | Primary::NoWikidata
+            | Primary::CreatedBy => vec![],
+        };
+        if self.params.gather_link_count {
+            tables.push("pagelinks");
+        }
+        tables
     }
 
     fn get_primary(&mut self, primary_pagelist: Option<&PageList>) -> Result<Primary> {
@@ -826,7 +922,7 @@ impl SourceDatabase {
 
     async fn get_pages_pagelist(
         &mut self,
-        mut params: DsdbParams,
+        params: DsdbParams,
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList> {
@@ -844,12 +940,9 @@ impl SourceDatabase {
         nslist.iter().for_each(|nsgroup| {
             nsgroup.1.chunks(PAGE_BATCH_SIZE * 2).for_each(|titles| {
                 let mut sql = super::sql_tuple();
-                sql.0 = PAGE_SELECT_PREFIX.to_string();
+                sql.0 = page_select_prefix(params.base_cluster);
                 sql.0 += &params.link_count_sql;
                 sql.0 += " FROM page p";
-                if !params.is_before_after_done {
-                    super::append_sql(&mut sql, params.sql_before_after.clone());
-                }
                 sql.0 += " WHERE (p.page_namespace=";
                 sql.0 += &nsgroup.0.to_string();
                 sql.0 += " AND p.page_title IN (";
@@ -858,9 +951,6 @@ impl SourceDatabase {
                 batches.push(sql);
             });
         });
-
-        // Either way, it's done
-        params.is_before_after_done = true;
 
         let wiki = primary_pagelist
             .wiki()
@@ -890,24 +980,9 @@ impl SourceDatabase {
         state: &AppState,
         params: &DsdbParams,
     ) -> Result<PageList> {
-        let mut conn = state.get_wiki_db_connection(&wiki).await?;
-        let sql_before_after = params.sql_before_after.clone();
-        let mut is_before_after_done = params.is_before_after_done;
         let mut pl2 = PageList::new_from_wiki(&wiki.clone());
-        let api = state.get_api_for_wiki(wiki.clone()).await?;
-        self.get_pages_for_primary(
-            &mut conn,
-            sql,
-            sql_before_after,
-            PrimaryQueryArgs {
-                primary: params.primary,
-                pages_sublist: &mut pl2,
-                is_before_after_done: &mut is_before_after_done,
-                api,
-            },
-        )
-        .await?;
-        drop(conn);
+        self.get_pages_for_primary(state, params, sql, &mut pl2)
+            .await?;
         Ok(pl2)
     }
 
@@ -1001,11 +1076,9 @@ impl SourceDatabase {
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList> {
-        let mut params = self
+        let params = self
             .get_pages_initialize_query(state, primary_pagelist)
             .await?;
-
-        let mut sql = super::sql_tuple();
 
         match params.primary {
             Primary::Categories => {
@@ -1016,98 +1089,58 @@ impl SourceDatabase {
                     .get_pages_pagelist(params, state, primary_pagelist)
                     .await;
             }
-            Primary::NoWikidata => {
-                sql.0 = PAGE_SELECT_PREFIX.to_string();
-                sql.0 += &params.link_count_sql;
-                sql.0 += " FROM page p";
-                if !params.is_before_after_done {
-                    params.is_before_after_done = true;
-                    super::append_sql(&mut sql, params.sql_before_after.clone());
-                }
-                sql.0 += " WHERE p.page_id NOT IN (SELECT pp_page FROM page_props WHERE pp_propname='wikibase_item')";
-            }
-            Primary::Templates | Primary::LinksFrom | Primary::CreatedBy => {
-                sql.0 = PAGE_SELECT_PREFIX.to_string();
-                sql.0 += &params.link_count_sql;
-                sql.0 += " FROM page p";
-                if !params.is_before_after_done {
-                    params.is_before_after_done = true;
-                    super::append_sql(&mut sql, params.sql_before_after.clone());
-                }
-                sql.0 += " WHERE 1=1";
-            }
+            // Every other primary selects from `page` alone; what narrows it
+            // down is a filter clause. `NoWikidata` in particular is just the
+            // "without a Wikidata item" filter, added by
+            // `get_pages_for_primary_wikidata_item`.
+            Primary::Templates | Primary::LinksFrom | Primary::CreatedBy | Primary::NoWikidata => {}
         }
 
+        let mut sql = super::sql_tuple();
+        sql.0 = page_select_prefix(params.base_cluster);
+        sql.0 += &params.link_count_sql;
+        sql.0 += " FROM page p WHERE 1=1";
+
         let mut ret = PageList::new_from_wiki(&params.wiki);
-        let mut conn = state.get_wiki_db_connection(&params.wiki).await?;
-        let api = state.get_api_for_wiki(params.wiki.clone()).await?;
-        self.get_pages_for_primary(
-            &mut conn,
-            sql,
-            params.sql_before_after,
-            PrimaryQueryArgs {
-                primary: params.primary,
-                pages_sublist: &mut ret,
-                is_before_after_done: &mut params.is_before_after_done,
-                api,
-            },
-        )
-        .await?;
+        self.get_pages_for_primary(state, &params, sql, &mut ret)
+            .await?;
         Ok(ret)
     }
 
-    async fn get_pages_for_primary_new_connection(
-        &self,
-        state: &AppState,
-        wiki: &str,
-        sql: SQLtuple,
-        sql_before_after: &mut SQLtuple,
-        args: PrimaryQueryArgs<'_>,
-    ) -> Result<()> {
-        let mut conn = state.get_wiki_db_connection(wiki).await?;
-        Platform::profile(
-            "DSDB::get_pages_for_primary_new_connection STARTING",
-            Some(sql.1.len()),
-        );
-        let ret = self
-            .get_pages_for_primary(&mut conn, sql, sql_before_after.clone(), args)
-            .await;
-        ret
+    /// Collects every filter clause the query's parameters ask for.
+    ///
+    /// Negative categories are *not* here: they are applied after the primary
+    /// query as an in-memory set difference (see
+    /// `subtract_negative_categories`), because a deep excluded-category tree
+    /// can expand to more titles than MySQL's 65 535 placeholder limit allows
+    /// in one statement (#206).
+    fn collect_filters(&self, primary: Primary, api: Api) -> Filters {
+        let mut filters = Filters::default();
+        self.get_pages_for_primary_namespaces(primary, &mut filters);
+        self.get_pages_for_primary_templates_as_secondary(&mut filters);
+        self.get_pages_for_primary_negative_templates(&mut filters);
+        self.get_pages_for_primary_links_from(&mut filters, &api);
+        self.get_pages_for_primary_links_to(&mut filters, api);
+        self.get_pages_for_primary_lead_image(&mut filters);
+        self.get_pages_for_primary_ores(&mut filters);
+        self.get_pages_for_primary_last_edit(&mut filters);
+        self.get_pages_for_primary_created_by(&mut filters);
+        self.get_pages_for_primary_page_types(&mut filters);
+        self.get_pages_for_primary_page_size(&mut filters);
+        self.get_pages_for_primary_wikidata_item(&mut filters);
+        self.get_pages_for_primary_last_edited(&mut filters);
+        filters
     }
 
     async fn get_pages_for_primary(
         &self,
-        conn: &mut my::Conn,
+        state: &AppState,
+        params: &DsdbParams,
         mut sql: SQLtuple,
-        sql_before_after: SQLtuple,
-        args: PrimaryQueryArgs<'_>,
+        pages_sublist: &mut PageList,
     ) -> Result<()> {
-        let PrimaryQueryArgs {
-            primary,
-            pages_sublist,
-            is_before_after_done,
-            api,
-        } = args;
+        let base_cluster = params.base_cluster;
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
-
-        self.get_pages_for_primary_namespaces(primary, &mut sql);
-        // Negative categories are applied *after* the primary query as an
-        // in-memory set difference (see `subtract_negative_categories`), not
-        // inlined here: a deep excluded-category tree can expand to more titles
-        // than MySQL's 65 535 placeholder limit allows in one statement (#206).
-        self.get_pages_for_primary_templates_as_secondary(&mut sql);
-        self.get_pages_for_primary_negative_templates(&mut sql);
-        self.get_pages_for_primary_links_from(&mut sql, &api);
-        self.get_pages_for_primary_links_to(&mut sql, api);
-        self.get_pages_for_primary_lead_image(&mut sql);
-        self.get_pages_for_primary_ores(&mut sql);
-        self.get_pages_for_primary_last_edit(&mut sql);
-        self.get_pages_for_primary_created_by(&mut sql);
-        self.get_pages_for_primary_page_types(&mut sql);
-        self.get_pages_for_primary_page_size(&mut sql);
-        self.get_pages_for_primary_wikidata_item_speedup(primary, &mut sql);
-        Self::get_pages_for_primary_last_edited(is_before_after_done, &mut sql, sql_before_after);
-        self.get_pages_for_primary_having(&mut sql);
 
         let wiki = self
             .params
@@ -1120,9 +1153,19 @@ impl SourceDatabase {
             })?
             .to_string();
 
+        let (inline, deferred) = params.filters.clone().split(state, &wiki, base_cluster)?;
+        super::append_sql(&mut sql, inline);
+        self.get_pages_for_primary_having(&mut sql);
+
         let sql_1_len = sql.1.len();
-        let rows = self.get_pages_for_primary_run_query(sql, conn).await?;
+        let mut conn = state
+            .get_wiki_db_connection_for_cluster(&wiki, base_cluster)
+            .await?;
+        let rows = self.get_pages_for_primary_run_query(sql, &mut conn).await?;
+        drop(conn);
         Platform::profile("DSDB::get_pages_for_primary RUN FINISHED", Some(sql_1_len));
+
+        let rows = Self::apply_deferred_filters(state, &wiki, base_cluster, deferred, rows).await?;
 
         pages_sublist.set_wiki(Some(wiki));
         pages_sublist.clear_entries();
@@ -1139,14 +1182,117 @@ impl SourceDatabase {
         Ok(())
     }
 
-    fn get_pages_for_primary_wikidata_item_speedup(
-        &self,
-        primary: Primary,
-        sql: &mut SQLtuple,
-    ) {
-        // Speed up "Only pages without Wikidata items"
-        if primary != Primary::NoWikidata && self.params.page_wikidata_item == "without" {
-            sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')";
+    /// Applies the filter clauses the base query's cluster could not serve,
+    /// and fills in `page_touched` where the base query could not select it.
+    ///
+    /// One extra query per cluster involved — none at all off Commons —
+    /// selecting from `page` the IDs among `rows` that satisfy that cluster's
+    /// clauses; rows whose ID is missing from the answer are dropped. The
+    /// core-cluster pass doubles as the `page_touched` lookup, since that
+    /// value comes from `revision`, which only the core cluster has.
+    async fn apply_deferred_filters(
+        state: &AppState,
+        wiki: &str,
+        base_cluster: DbCluster,
+        mut deferred: HashMap<DbCluster, SQLtuple>,
+        mut rows: Vec<PrimaryResultRow>,
+    ) -> Result<Vec<PrimaryResultRow>> {
+        // `page_touched` comes from `revision`; a base query that did not run
+        // on the core cluster left the column empty, so it needs a pass there
+        // even with no clauses to apply.
+        let fetch_page_touched = base_cluster != DbCluster::Core;
+        if fetch_page_touched {
+            deferred.entry(DbCluster::Core).or_default();
+        }
+        if deferred.is_empty() || rows.is_empty() {
+            return Ok(rows);
+        }
+
+        for (cluster, clauses) in deferred {
+            let want_page_touched = fetch_page_touched && cluster == DbCluster::Core;
+            let page_ids: Vec<u32> = rows.iter().map(|row| row.0).collect();
+            let batches: Vec<SQLtuple> = page_ids
+                .chunks(PAGE_BATCH_SIZE)
+                .map(|chunk| {
+                    let mut sql = sql_text(&format!(
+                        "SELECT p.page_id,{page_touched} FROM page p WHERE p.page_id IN ({ids})",
+                        page_touched = if want_page_touched {
+                            PAGE_TOUCHED_FROM_REVISION
+                        } else {
+                            "'' AS page_touched"
+                        },
+                        ids = chunk
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<String>>()
+                            .join(","),
+                    ));
+                    super::append_sql(&mut sql, clauses.clone());
+                    sql
+                })
+                .collect();
+
+            let futures: Vec<_> = batches
+                .into_iter()
+                .map(|sql| Self::run_deferred_filter_batch(state, wiki, cluster, sql))
+                .collect();
+            let results: Vec<_> = iter(futures)
+                .buffered(MAX_CONCURRENT_DB_BATCHES)
+                .collect()
+                .await;
+
+            let mut kept: HashMap<u32, Vec<u8>> = HashMap::new();
+            for result in results {
+                kept.extend(result?);
+            }
+            rows.retain(|row| kept.contains_key(&row.0));
+            if want_page_touched {
+                for row in &mut rows {
+                    if let Some(page_touched) = kept.get(&row.0) {
+                        row.3 = page_touched.clone();
+                    }
+                }
+            }
+            if rows.is_empty() {
+                break;
+            }
+        }
+        Ok(rows)
+    }
+
+    /// Runs one batch of [`Self::apply_deferred_filters`], returning the
+    /// surviving page IDs and their `page_touched`.
+    async fn run_deferred_filter_batch(
+        state: &AppState,
+        wiki: &str,
+        cluster: DbCluster,
+        sql: SQLtuple,
+    ) -> Result<Vec<(u32, Vec<u8>)>> {
+        debug_assert!(
+            sql.placeholders_balanced(),
+            "unbalanced placeholders: {}",
+            sql.0
+        );
+        let mut conn = state
+            .get_wiki_db_connection_for_cluster(wiki, cluster)
+            .await?;
+        let rows = conn
+            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .await
+            .map_err(|e| anyhow!(e))?
+            .map_and_drop(from_row::<(u32, Vec<u8>)>)
+            .await
+            .map_err(|e| anyhow!(e))?;
+        Ok(rows)
+    }
+
+    /// "Only pages without Wikidata items". Also carries
+    /// [`Primary::NoWikidata`], whose only condition this is: as a filter
+    /// clause it can be deferred to the core cluster where `page_props` is
+    /// not joinable with the rest of the query.
+    fn get_pages_for_primary_wikidata_item(&self, filters: &mut Filters) {
+        if self.params.page_wikidata_item == "without" {
+            filters.push(PAGE_PROPS, sql_text(" AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')"));
         }
     }
 
@@ -1188,73 +1334,64 @@ impl SourceDatabase {
         }
     }
 
-    fn get_pages_for_primary_page_size(&self, sql: &mut SQLtuple) {
+    fn get_pages_for_primary_page_size(&self, filters: &mut Filters) {
         // Size
         if let Some(i) = self.params.larger {
-            sql.0 += " AND p.page_len>=";
-            sql.0 += i.to_string().as_str();
+            filters.push_page_only(sql_text(&format!(" AND p.page_len>={i}")));
         }
         if let Some(i) = self.params.smaller {
-            sql.0 += &format!(" AND p.page_len<={i}");
+            filters.push_page_only(sql_text(&format!(" AND p.page_len<={i}")));
         }
         if let Some(i) = self.params.since_rev0 {
-            sql.0 += &format!(
-                " AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*{i}/100"
+            filters.push(
+                REVISION,
+                sql_text(&format!(
+                    " AND p.page_len<=(SELECT rev_len FROM revision WHERE rev_page=p.page_id AND rev_parent_id=0 LIMIT 1)*{i}/100"
+                )),
             );
         }
     }
 
-    fn get_pages_for_primary_page_types(&self, sql: &mut SQLtuple) {
+    fn get_pages_for_primary_page_types(&self, filters: &mut Filters) {
         // Misc page types
         // TODO FIXME get local "Soft_redirect" page title from Wikidata Q4844001
         let soft_redirects_page = "Soft_redirect";
         if "yes" == self.params.soft_redirects.as_str() {
-            sql.0 += " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)";
-            sql.1.push(MyValue::Bytes(soft_redirects_page.into()));
+            filters.push(
+                TEMPLATELINKS,
+                SQLtuple(
+                    " AND EXISTS (SELECT * FROM templatelinks,linktarget WHERE tl_from=p.page_id AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)".to_string(),
+                    vec![MyValue::Bytes(soft_redirects_page.into())],
+                ),
+            );
         }
         match self.params.redirects.as_str() {
-            "yes" => sql.0 += " AND p.page_is_redirect=1",
-            "no" => sql.0 += " AND p.page_is_redirect=0",
+            "yes" => filters.push_page_only(sql_text(" AND p.page_is_redirect=1")),
+            "no" => filters.push_page_only(sql_text(" AND p.page_is_redirect=0")),
             _ => {}
         }
         match self.params.disambiguation_pages.as_str() {
-            "yes" => {
-                sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')";
-            }
-            "no" => {
-                sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')";
-            }
+            "yes" => filters.push(PAGE_PROPS, sql_text(" AND EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')")),
+            "no" => filters.push(PAGE_PROPS, sql_text(" AND NOT EXISTS (SELECT * FROM page_props WHERE pp_page=p.page_id AND pp_propname='disambiguation')")),
             _ => {}
         }
         match self.params.talk_page_exists.as_str() {
-            "yes" => {
-                sql.0 += " AND EXISTS (SELECT * FROM page talk_p WHERE talk_p.page_title=p.page_title AND talk_p.page_namespace=p.page_namespace+1)";
-            }
-            "no" => {
-                sql.0 += " AND NOT EXISTS (SELECT * FROM page talk_p WHERE talk_p.page_title=p.page_title AND talk_p.page_namespace=p.page_namespace+1)";
-            }
+            "yes" => filters.push_page_only(sql_text(" AND EXISTS (SELECT * FROM page talk_p WHERE talk_p.page_title=p.page_title AND talk_p.page_namespace=p.page_namespace+1)")),
+            "no" => filters.push_page_only(sql_text(" AND NOT EXISTS (SELECT * FROM page talk_p WHERE talk_p.page_title=p.page_title AND talk_p.page_namespace=p.page_namespace+1)")),
             _ => {}
         }
     }
 
-    fn get_pages_for_primary_last_edit(&self, sql: &mut SQLtuple) {
+    fn get_pages_for_primary_last_edit(&self, filters: &mut Filters) {
         // Last edit
         match self.params.last_edit_anon.as_str() {
-            "yes" => {
-                sql.0 += " AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NULL)";
-            }
-            "no" => {
-                sql.0 += " AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NOT NULL)";
-            }
+            "yes" => filters.push(REVISION_ACTOR, sql_text(" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=p.page_latest AND rev_page=p.page_id AND rev_actor=actor_id AND actor_user IS NULL)")),
+            "no" => filters.push(REVISION_ACTOR, sql_text(" AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=p.page_latest AND rev_page=p.page_id AND rev_actor=actor_id AND actor_user IS NOT NULL)")),
             _ => {}
         }
         match self.params.last_edit_bot.as_str() {
-            "yes" => {
-                sql.0 += " AND EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')";
-            }
-            "no" => {
-                sql.0 += " AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')";
-            }
+            "yes" => filters.push(REVISION_USER_GROUPS, sql_text(" AND EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=p.page_latest AND rev_page=p.page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')")),
+            "no" => filters.push(REVISION_USER_GROUPS, sql_text(" AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=p.page_latest AND rev_page=p.page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot')")),
             _ => {}
         }
         // `flaggedpages.fp_pending_since` stores the timestamp of the oldest
@@ -1265,182 +1402,215 @@ impl SourceDatabase {
         // enrolled in FlaggedRevs at all (no row in `flaggedpages`) as
         // `last_edit_flagged=yes`, matching the upstream PHP PetScan.
         match self.params.last_edit_flagged.as_str() {
-            "yes" => {
-                sql.0 += " AND NOT EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)";
-            }
-            "no" => {
-                sql.0 += " AND EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)";
-            }
+            "yes" => filters.push(FLAGGEDPAGES, sql_text(" AND NOT EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)")),
+            "no" => filters.push(FLAGGEDPAGES, sql_text(" AND EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)")),
             _ => {}
         }
     }
 
-    fn get_pages_for_primary_created_by(&self, sql: &mut SQLtuple) {
+    fn get_pages_for_primary_created_by(&self, filters: &mut Filters) {
         if self.params.created_by.is_empty() {
             return;
         }
-        let tmp = super::prep_quote(&self.params.created_by);
-        sql.0 += " AND p.page_id IN (SELECT r.rev_page FROM revision r INNER JOIN actor a ON r.rev_actor=a.actor_id WHERE r.rev_parent_id=0 AND a.actor_name IN (";
-        super::append_sql(sql, tmp);
+        let mut sql = sql_text(
+            " AND p.page_id IN (SELECT r.rev_page FROM revision r INNER JOIN actor a ON r.rev_actor=a.actor_id WHERE r.rev_parent_id=0 AND a.actor_name IN (",
+        );
+        super::append_sql(&mut sql, super::prep_quote(&self.params.created_by));
         sql.0 += "))";
+        filters.push(REVISION_ACTOR, sql);
     }
 
-    fn get_pages_for_primary_ores(&self, sql: &mut SQLtuple) {
+    fn get_pages_for_primary_ores(&self, filters: &mut Filters) {
         // ORES
-        if self.params.ores_type != "any"
-            && (self.params.ores_prediction != "any"
-                || self.params.ores_prob_from.is_some()
-                || self.params.ores_prob_to.is_some())
+        if self.params.ores_type == "any"
+            || (self.params.ores_prediction == "any"
+                && self.params.ores_prob_from.is_none()
+                && self.params.ores_prob_to.is_none())
         {
-            sql.0 += " AND EXISTS (SELECT * FROM ores_classification WHERE p.page_latest=oresc_rev AND oresc_model IN (SELECT oresm_id FROM ores_model WHERE oresm_is_current=1 AND oresm_name=?)";
-            sql.1
-                .push(MyValue::Bytes(self.params.ores_type.to_owned().into()));
-            match self.params.ores_prediction.as_str() {
-                "yes" => sql.0 += " AND oresc_is_predicted=1",
-                "no" => sql.0 += " AND oresc_is_predicted=0",
-                _ => {}
-            }
-            if let Some(x) = self.params.ores_prob_from {
-                sql.0 += &format!(" AND oresc_probability>={x}");
-            }
-            if let Some(x) = self.params.ores_prob_to {
-                sql.0 += &format!(" AND oresc_probability<={x}");
-            }
-            sql.0 += ")";
+            return;
         }
-    }
-
-    fn get_pages_for_primary_lead_image(&self, sql: &mut SQLtuple) {
-        // Lead image
-        match self.params.page_image.as_str() {
-            "yes" => {
-                sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))";
-            }
-            "free" => {
-                sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free')";
-            }
-            "nonfree" => {
-                sql.0 += " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image')";
-            }
-            "no" => {
-                sql.0 += " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))";
-            }
+        let mut sql = SQLtuple(
+            " AND EXISTS (SELECT * FROM ores_classification WHERE p.page_latest=oresc_rev AND oresc_model IN (SELECT oresm_id FROM ores_model WHERE oresm_is_current=1 AND oresm_name=?)".to_string(),
+            vec![MyValue::Bytes(self.params.ores_type.to_owned().into())],
+        );
+        match self.params.ores_prediction.as_str() {
+            "yes" => sql.0 += " AND oresc_is_predicted=1",
+            "no" => sql.0 += " AND oresc_is_predicted=0",
             _ => {}
         }
+        if let Some(x) = self.params.ores_prob_from {
+            sql.0 += &format!(" AND oresc_probability>={x}");
+        }
+        if let Some(x) = self.params.ores_prob_to {
+            sql.0 += &format!(" AND oresc_probability<={x}");
+        }
+        sql.0 += ")";
+        filters.push(ORES, sql);
     }
 
-    fn get_pages_for_primary_links_to(&self, sql: &mut SQLtuple, api: Api) {
+    fn get_pages_for_primary_lead_image(&self, filters: &mut Filters) {
+        // Lead image
+        let clause = match self.params.page_image.as_str() {
+            "yes" => {
+                " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))"
+            }
+            "free" => {
+                " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free')"
+            }
+            "nonfree" => {
+                " AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image')"
+            }
+            "no" => {
+                " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname IN ('page_image','page_image_free'))"
+            }
+            _ => return,
+        };
+        filters.push(PAGE_PROPS, sql_text(clause));
+    }
+
+    fn get_pages_for_primary_links_to(&self, filters: &mut Filters, api: Api) {
+        let mut push = |prefix: &str, titles: &[String]| {
+            let mut sql = sql_text(prefix);
+            super::append_sql(&mut sql, helpers::links_to_subquery(titles, &api));
+            filters.push(PAGELINKS, sql);
+        };
+
         // Links to all
-        self.params.links_to_all.iter().for_each(|l| {
-            sql.0 += " AND p.page_id IN ";
-            super::append_sql(sql, helpers::links_to_subquery(&[l.to_owned()], &api));
-        });
+        for l in &self.params.links_to_all {
+            push(" AND p.page_id IN ", &[l.to_owned()]);
+        }
 
         // Links to any
         if !self.params.links_to_any.is_empty() {
-            sql.0 += " AND p.page_id IN ";
-            super::append_sql(
-                sql,
-                helpers::links_to_subquery(&self.params.links_to_any, &api),
-            );
+            push(" AND p.page_id IN ", &self.params.links_to_any);
         }
 
         // Links to none
         if !self.params.links_to_none.is_empty() {
-            sql.0 += " AND p.page_id NOT IN ";
-            super::append_sql(
-                sql,
-                helpers::links_to_subquery(&self.params.links_to_none, &api),
-            );
+            push(" AND p.page_id NOT IN ", &self.params.links_to_none);
         }
     }
 
-    fn get_pages_for_primary_links_from(&self, sql: &mut SQLtuple, api: &Api) {
+    fn get_pages_for_primary_links_from(&self, filters: &mut Filters, api: &Api) {
+        let mut push = |prefix: &str, titles: &[String]| {
+            let mut sql = sql_text(prefix);
+            super::append_sql(&mut sql, helpers::links_from_subquery(titles, api));
+            filters.push(PAGELINKS, sql);
+        };
+
         // Links from all
-        self.params.linked_from_all.iter().for_each(|l| {
-            sql.0 += " AND p.page_id IN ";
-            super::append_sql(sql, helpers::links_from_subquery(&[l.to_owned()], api));
-        });
+        for l in &self.params.linked_from_all {
+            push(" AND p.page_id IN ", &[l.to_owned()]);
+        }
 
         // Links from any
         if !self.params.linked_from_any.is_empty() {
-            sql.0 += " AND p.page_id IN ";
-            super::append_sql(
-                sql,
-                helpers::links_from_subquery(&self.params.linked_from_any, api),
-            );
+            push(" AND p.page_id IN ", &self.params.linked_from_any);
         }
 
         // Links from none
         if !self.params.linked_from_none.is_empty() {
-            sql.0 += " AND p.page_id NOT IN ";
-            super::append_sql(
-                sql,
-                helpers::links_from_subquery(&self.params.linked_from_none, api),
-            );
+            push(" AND p.page_id NOT IN ", &self.params.linked_from_none);
         }
     }
 
-    fn get_pages_for_primary_negative_templates(&self, sql: &mut SQLtuple) {
+    fn get_pages_for_primary_negative_templates(&self, filters: &mut Filters) {
         // Negative templates
         if !self.params.templates_no.is_empty() {
-            let tmp = self.template_subquery(
-                &self.params.templates_no,
-                self.params.templates_no_talk_page,
-                true,
+            filters.push(
+                TEMPLATELINKS,
+                self.template_subquery(
+                    &self.params.templates_no,
+                    self.params.templates_no_talk_page,
+                    true,
+                ),
             );
-            super::append_sql(sql, tmp);
         }
     }
 
     /// Templates as secondary; template namespace only!
-    fn get_pages_for_primary_templates_as_secondary(&self, sql: &mut SQLtuple) {
-        if self.has_pos_templates {
-            // All
-            self.params.templates_yes.iter().for_each(|t| {
-                let tmp = self.template_subquery(
+    fn get_pages_for_primary_templates_as_secondary(&self, filters: &mut Filters) {
+        if !self.has_pos_templates {
+            return;
+        }
+        // All
+        for t in &self.params.templates_yes {
+            filters.push(
+                TEMPLATELINKS,
+                self.template_subquery(
                     &[t.to_string()],
                     self.params.templates_yes_talk_page,
                     false,
-                );
-                super::append_sql(sql, tmp);
-            });
+                ),
+            );
+        }
 
-            // Any
-            if !self.params.templates_any.is_empty() {
-                let tmp = self.template_subquery(
+        // Any
+        if !self.params.templates_any.is_empty() {
+            filters.push(
+                TEMPLATELINKS,
+                self.template_subquery(
                     &self.params.templates_any,
                     self.params.templates_any_talk_page,
                     false,
-                );
-                super::append_sql(sql, tmp);
+                ),
+            );
+        }
+    }
+
+    fn get_pages_for_primary_namespaces(&self, primary: Primary, filters: &mut Filters) {
+        if self.params.namespace_ids.is_empty() || primary == Primary::Pagelist {
+            return;
+        }
+        let namespace_ids = &self
+            .params
+            .namespace_ids
+            .iter()
+            .map(|ns| ns.to_string())
+            .collect::<Vec<String>>();
+        let mut sql = sql_text(" AND p.page_namespace");
+        helpers::sql_in(namespace_ids, &mut sql);
+        filters.push_page_only(sql);
+    }
+
+    /// "Last edited (or created) before/after", as an `EXISTS` over
+    /// `revision`.
+    ///
+    /// Was an `INNER JOIN (revision r)` fragment threaded through the query
+    /// builders with an "already appended?" flag, because the category
+    /// primary's SQL has no `WHERE` to hang a condition off. `EXISTS` is
+    /// equivalent under the query's `SELECT DISTINCT`, needs no such
+    /// bookkeeping, and — being an ordinary clause — can be deferred to the
+    /// cluster that has `revision`.
+    fn get_pages_for_primary_last_edited(&self, filters: &mut Filters) {
+        // `max_age` is a relative form of `after`, and overrides both.
+        let (before, after) = match self.params.max_age {
+            Some(max_age) => {
+                let utc = Utc::now().sub(Duration::try_hours(max_age).unwrap_or_default());
+                (String::new(), utc.format("%Y%m%d%H%M%S").to_string())
             }
+            None => (self.params.before.clone(), self.params.after.clone()),
+        };
+        if before.is_empty() && after.is_empty() {
+            return;
         }
-    }
 
-    fn get_pages_for_primary_namespaces(&self, primary: Primary, sql: &mut SQLtuple) {
-        if !self.params.namespace_ids.is_empty() && primary != Primary::Pagelist {
-            let namespace_ids = &self
-                .params
-                .namespace_ids
-                .iter()
-                .map(|ns| ns.to_string())
-                .collect::<Vec<String>>();
-            sql.0 += " AND p.page_namespace";
-            helpers::sql_in(namespace_ids, sql);
+        let mut sql = sql_text(" AND EXISTS (SELECT 1 FROM revision r WHERE r.rev_page=p.page_id");
+        if self.params.only_new_since {
+            sql.0 += " AND r.rev_parent_id=0";
+        } else {
+            sql.0 += " AND r.rev_id=p.page_latest";
         }
-    }
-
-    fn get_pages_for_primary_last_edited(
-        is_before_after_done: &mut bool,
-        sql: &mut SQLtuple,
-        sql_before_after: SQLtuple,
-    ) {
-        // Last edit/created before/after
-        if !*is_before_after_done {
-            super::append_sql(sql, sql_before_after);
-            *is_before_after_done = true;
+        if !before.is_empty() {
+            sql.0 += " AND r.rev_timestamp<=?";
+            sql.1.push(MyValue::Bytes(before.into()));
         }
+        if !after.is_empty() {
+            sql.0 += " AND r.rev_timestamp>=?";
+            sql.1.push(MyValue::Bytes(after.into()));
+        }
+        sql.0 += ")";
+        filters.push(REVISION, sql);
     }
 
     async fn get_pages_for_primary_run_query(
@@ -1448,7 +1618,11 @@ impl SourceDatabase {
         sql: SQLtuple,
         conn: &mut my::Conn,
     ) -> Result<Vec<PrimaryResultRow>> {
-        debug_assert!(sql.placeholders_balanced(), "unbalanced placeholders: {}", sql.0);
+        debug_assert!(
+            sql.placeholders_balanced(),
+            "unbalanced placeholders: {}",
+            sql.0
+        );
         Platform::profile(
             "DSDB::get_pages_for_primary STARTING RUN",
             Some(sql.1.len()),
@@ -1518,6 +1692,54 @@ mod tests {
                 .iter()
                 .any(|entry| entry.title().pretty() == "Magnus Manske")
         );
+    }
+
+    /// The Commons links split in one query: `categorylinks` on the links
+    /// cluster, `revision` (the `before` filter *and* `page_touched`) on the
+    /// core one. Nothing but the split machinery can make this return rows.
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
+    async fn test_commons_category_query_spans_clusters() {
+        let commons_category = vec![
+            ("categories", "Cambridge"),
+            ("language", "commons"),
+            ("project", "wikimedia"),
+            ("ns[14]", "1"),
+        ];
+        let unfiltered = simulate_category_query(commons_category.clone())
+            .await
+            .unwrap();
+        assert_eq!(unfiltered.wiki(), Some("commonswiki".to_string()));
+        assert!(!unfiltered.is_empty());
+        // `page_touched` comes from `revision`, which the links cluster does
+        // not have, so a populated timestamp proves the deferred core pass ran.
+        assert!(
+            unfiltered
+                .as_vec()
+                .iter()
+                .all(|entry| entry.get_page_timestamp().is_some_and(|ts| ts.len() == 14)),
+            "every row needs a page_touched from the core cluster"
+        );
+
+        // Add a filter that can only run on the core cluster.
+        let mut filtered_params = commons_category;
+        filtered_params.push(("before", "20100101000000"));
+        let filtered = simulate_category_query(filtered_params).await.unwrap();
+        assert!(filtered.len() < unfiltered.len(), "the filter must bite");
+        let unfiltered_entries = unfiltered.as_vec();
+        let unfiltered_titles: HashSet<&str> = unfiltered_entries
+            .iter()
+            .map(|entry| entry.title().pretty())
+            .collect();
+        for entry in filtered.as_vec() {
+            assert!(
+                unfiltered_titles.contains(entry.title().pretty()),
+                "filtering must only remove rows, not invent them: {:?}",
+                entry.title()
+            );
+            let timestamp = entry.get_page_timestamp().unwrap_or_default();
+            assert!(timestamp.as_str() <= "20100101000000", "got {timestamp}");
+        }
     }
 
     #[tokio::test]
@@ -1609,8 +1831,14 @@ mod tests {
         let skip_hidden = tree(false, true).await;
 
         // The root is always retained, so an effective filter still leaves >= 1.
-        assert!(unfiltered > skip_tracking, "tracking filter removed nothing: {unfiltered} vs {skip_tracking}");
-        assert!(unfiltered > skip_hidden, "hidden filter removed nothing: {unfiltered} vs {skip_hidden}");
+        assert!(
+            unfiltered > skip_tracking,
+            "tracking filter removed nothing: {unfiltered} vs {skip_tracking}"
+        );
+        assert!(
+            unfiltered > skip_hidden,
+            "hidden filter removed nothing: {unfiltered} vs {skip_hidden}"
+        );
         assert!(skip_tracking >= 1, "root category must survive filtering");
     }
 
@@ -1634,7 +1862,10 @@ mod tests {
         ])
         .await
         .unwrap();
-        assert!(has_magnus(&without_negcats), "baseline should include Magnus");
+        assert!(
+            has_magnus(&without_negcats),
+            "baseline should include Magnus"
+        );
 
         let with_negcats = simulate_category_query(vec![
             ("categories", "1974_births"),
@@ -1644,8 +1875,14 @@ mod tests {
         ])
         .await
         .unwrap();
-        assert!(!has_magnus(&with_negcats), "excluded member must be removed");
-        assert!(with_negcats.len() < without_negcats.len(), "exclusion must shrink the result");
+        assert!(
+            !has_magnus(&with_negcats),
+            "excluded member must be removed"
+        );
+        assert!(
+            with_negcats.len() < without_negcats.len(),
+            "exclusion must shrink the result"
+        );
     }
 
     // ─── SQL snapshot tests ──────────────────────────────────────────────
@@ -1665,14 +1902,43 @@ mod tests {
         SourceDatabase::new(params)
     }
 
-    /// Run one clause builder against an empty SQL tuple and return the
-    /// generated SQL plus the number of bound values. Every complete
-    /// fragment must have one bound value per `?` placeholder.
-    fn built(apply: impl FnOnce(&mut SQLtuple)) -> (String, usize) {
+    /// Run one clause builder and return the concatenated SQL it produced
+    /// plus the number of bound values — i.e. what the base query gets when
+    /// nothing needs deferring. Every complete fragment must have one bound
+    /// value per `?` placeholder.
+    fn built(apply: impl FnOnce(&mut Filters)) -> (String, usize) {
+        let mut filters = Filters::default();
+        apply(&mut filters);
+        let mut sql = crate::datasource::sql_tuple();
+        for filter in filters.0 {
+            crate::datasource::append_sql(&mut sql, filter.sql);
+        }
+        assert!(
+            sql.placeholders_balanced(),
+            "unbalanced placeholders: {}",
+            sql.0
+        );
+        (sql.0, sql.1.len())
+    }
+
+    /// Like [`built`], for the builders that still append straight to the
+    /// query text rather than emitting a routable clause (`HAVING`).
+    fn built_sql(apply: impl FnOnce(&mut SQLtuple)) -> (String, usize) {
         let mut sql = crate::datasource::sql_tuple();
         apply(&mut sql);
-        assert!(sql.placeholders_balanced(), "unbalanced placeholders: {}", sql.0);
+        assert!(
+            sql.placeholders_balanced(),
+            "unbalanced placeholders: {}",
+            sql.0
+        );
         (sql.0, sql.1.len())
+    }
+
+    /// The tables the clauses of a builder read, in the order pushed.
+    fn built_tables(apply: impl FnOnce(&mut Filters)) -> Vec<Vec<&'static str>> {
+        let mut filters = Filters::default();
+        apply(&mut filters);
+        filters.0.into_iter().map(|f| f.tables.to_vec()).collect()
     }
 
     /// Collapse whitespace runs so snapshots of queries with embedded
@@ -1817,8 +2083,8 @@ mod tests {
         let (sql, n) = built(|s| db.get_pages_for_primary_last_edit(s));
         assert_eq!(
             sql,
-            " AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NULL) \
-             AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot') \
+            " AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=p.page_latest AND rev_page=p.page_id AND rev_actor=actor_id AND actor_user IS NULL) \
+             AND NOT EXISTS (SELECT * FROM revision,user_groups,actor WHERE rev_id=p.page_latest AND rev_page=p.page_id AND rev_actor=actor_id AND actor_user=ug_user AND ug_group='bot') \
              AND NOT EXISTS (SELECT * FROM flaggedpages WHERE fp_pending_since IS NOT NULL AND fp_page_id=p.page_id)"
         );
         assert_eq!(n, 0);
@@ -1867,47 +2133,81 @@ mod tests {
         let (sql, n) = built(|s| db.get_pages_for_primary_page_size(s));
         assert_eq!(
             sql,
-            " AND p.page_len>=1000 AND p.page_len<=5000 AND page_len<=(SELECT rev_len FROM revision WHERE rev_page=page_id AND rev_parent_id=0 LIMIT 1)*150/100"
+            " AND p.page_len>=1000 AND p.page_len<=5000 AND p.page_len<=(SELECT rev_len FROM revision WHERE rev_page=p.page_id AND rev_parent_id=0 LIMIT 1)*150/100"
         );
         assert_eq!(n, 0);
+        // Only the `since_rev0` clause reads `revision`, so only it has to
+        // move to another cluster where `page` and `revision` are apart.
+        assert_eq!(
+            built_tables(|s| db.get_pages_for_primary_page_size(s)),
+            vec![vec![], vec![], vec!["revision"]]
+        );
     }
 
     #[test]
-    fn sql_wikidata_item_speedup_only_outside_no_wikidata_primary() {
+    fn sql_wikidata_item_clause_for_every_primary() {
         let db = snapshot_db(|p| p.page_wikidata_item = "without".to_string());
-        let (sql, _) =
-            built(|s| db.get_pages_for_primary_wikidata_item_speedup(Primary::Categories, s));
+        let (sql, _) = built(|s| db.get_pages_for_primary_wikidata_item(s));
         assert_eq!(
             sql,
             " AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item')"
         );
-        let (sql_skipped, _) = built(|s| {
-            db.get_pages_for_primary_wikidata_item_speedup(Primary::NoWikidata, s);
-        });
+        // Also the sole condition of the `NoWikidata` primary, whose base
+        // query is now `FROM page p` alone.
+        assert_eq!(
+            built_tables(|s| db.get_pages_for_primary_wikidata_item(s)),
+            vec![vec!["page_props"]]
+        );
+
+        let db_off = snapshot_db(|p| p.page_wikidata_item = "any".to_string());
+        let (sql_skipped, _) = built(|s| db_off.get_pages_for_primary_wikidata_item(s));
         assert_eq!(sql_skipped, "");
     }
 
     #[test]
-    fn sql_last_edited_appends_once_and_flips_flag() {
-        let before_after = SQLtuple(
-            " INNER JOIN (revision r) ON r.rev_page=p.page_id AND r.rev_id=p.page_latest AND r.rev_timestamp<=? ".to_string(),
-            vec![MyValue::Bytes("20240101000000".into())],
+    fn sql_last_edited_before_and_after() {
+        let db = snapshot_db(|p| {
+            p.before = "20240101000000".to_string();
+            p.after = "20230101000000".to_string();
+        });
+        let (sql, n) = built(|s| db.get_pages_for_primary_last_edited(s));
+        assert_eq!(
+            sql,
+            " AND EXISTS (SELECT 1 FROM revision r WHERE r.rev_page=p.page_id AND r.rev_id=p.page_latest AND r.rev_timestamp<=? AND r.rev_timestamp>=?)"
         );
-        let mut done = false;
-        let mut sql = crate::datasource::sql_tuple();
-        SourceDatabase::get_pages_for_primary_last_edited(&mut done, &mut sql, before_after.clone());
-        assert!(done);
-        assert_eq!(sql.0, before_after.0);
-        assert_eq!(sql.1.len(), 1);
-        // A second call must be a no-op: the flag is already set.
-        SourceDatabase::get_pages_for_primary_last_edited(&mut done, &mut sql, before_after);
-        assert_eq!(sql.1.len(), 1);
+        assert_eq!(n, 2);
+        assert_eq!(
+            built_tables(|s| db.get_pages_for_primary_last_edited(s)),
+            vec![vec!["revision"]]
+        );
+    }
+
+    #[test]
+    fn sql_last_edited_only_new_since_matches_creation() {
+        let db = snapshot_db(|p| {
+            p.after = "20230101000000".to_string();
+            p.only_new_since = true;
+        });
+        let (sql, n) = built(|s| db.get_pages_for_primary_last_edited(s));
+        assert_eq!(
+            sql,
+            " AND EXISTS (SELECT 1 FROM revision r WHERE r.rev_page=p.page_id AND r.rev_parent_id=0 AND r.rev_timestamp>=?)"
+        );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn sql_last_edited_absent_without_before_or_after() {
+        let db = snapshot_db(|_| {});
+        let (sql, n) = built(|s| db.get_pages_for_primary_last_edited(s));
+        assert_eq!(sql, "");
+        assert_eq!(n, 0);
     }
 
     #[test]
     fn sql_having_minlinks_only() {
         let db = snapshot_db(|p| p.minlinks = Some(5));
-        let (sql, n) = built(|s| db.get_pages_for_primary_having(s));
+        let (sql, n) = built_sql(|s| db.get_pages_for_primary_having(s));
         assert_eq!(sql, " HAVING link_count>=5");
         assert_eq!(n, 0);
     }
@@ -1915,7 +2215,7 @@ mod tests {
     #[test]
     fn sql_having_maxlinks_only() {
         let db = snapshot_db(|p| p.maxlinks = Some(10));
-        let (sql, n) = built(|s| db.get_pages_for_primary_having(s));
+        let (sql, n) = built_sql(|s| db.get_pages_for_primary_having(s));
         assert_eq!(sql, " HAVING link_count<=10");
         assert_eq!(n, 0);
     }
@@ -1926,7 +2226,7 @@ mod tests {
             p.minlinks = Some(5);
             p.maxlinks = Some(10);
         });
-        let (sql, n) = built(|s| db.get_pages_for_primary_having(s));
+        let (sql, n) = built_sql(|s| db.get_pages_for_primary_having(s));
         assert_eq!(sql, " HAVING link_count>=5 AND link_count<=10");
         assert_eq!(n, 0);
     }
@@ -1938,11 +2238,11 @@ mod tests {
             vec!["Births_1974".to_string()],
             vec!["Bioinformaticians".to_string(), "Geneticists".to_string()],
         ];
-        let sql = db.category_batch_sql(",0 AS link_count", &batch);
+        let sql = db.category_batch_sql(DbCluster::Core, ",0 AS link_count", &batch);
         assert_eq!(
             norm(&sql.0),
-            "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace, \
-             (SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched, \
+            "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,\
+             (SELECT rev_timestamp FROM revision WHERE rev_id=p.page_latest LIMIT 1) AS page_touched,\
              p.page_len,0 AS link_count \
              FROM ( SELECT cl_from,cl_target_id,lt_title from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title IN (?)) cl0 \
              INNER JOIN categorylinks cl1 ON cl0.cl_from=cl1.cl_from \
@@ -1959,7 +2259,7 @@ mod tests {
             vec!["Chemistry".to_string(), "Biology".to_string()],
             vec!["Biology".to_string()],
         ];
-        let sql = db.category_batch_sql(",0 AS link_count", &batch);
+        let sql = db.category_batch_sql(DbCluster::Core, ",0 AS link_count", &batch);
         // Dedup goes through a HashSet, so the bound-title order is
         // unspecified — pin the SQL shape and the value count only.
         assert_eq!(
@@ -1973,11 +2273,9 @@ mod tests {
         assert_eq!(sql.1.len(), 2);
     }
 
-    /// Pin the clause order `get_pages_for_primary` applies (minus the two
-    /// `Api`-dependent links clauses) for a many-filter query, so a future
-    /// reordering shows up as a deliberate snapshot change.
-    #[test]
-    fn sql_filter_sequence_kitchen_sink() {
+    /// A many-filter query, built through every clause builder
+    /// `collect_filters` calls except the two `Api`-dependent links ones.
+    fn kitchen_sink_filters() -> Filters {
         let mut db = snapshot_db(|p| {
             p.namespace_ids = vec![0];
             p.templates_no = vec!["Stub".to_string()];
@@ -1986,41 +2284,149 @@ mod tests {
             p.redirects = "no".to_string();
             p.larger = Some(100);
             p.page_wikidata_item = "without".to_string();
-            p.minlinks = Some(2);
+            p.before = "20240101000000".to_string();
         });
         db.has_pos_templates = false;
-        let primary = Primary::Categories;
-        let (sql, n) = built(|s| {
-            db.get_pages_for_primary_namespaces(primary, s);
-            db.get_pages_for_primary_templates_as_secondary(s);
-            db.get_pages_for_primary_negative_templates(s);
-            // links_from / links_to skipped: require a live Api
-            db.get_pages_for_primary_lead_image(s);
-            db.get_pages_for_primary_ores(s);
-            db.get_pages_for_primary_last_edit(s);
-            db.get_pages_for_primary_created_by(s);
-            db.get_pages_for_primary_page_types(s);
-            db.get_pages_for_primary_page_size(s);
-            db.get_pages_for_primary_wikidata_item_speedup(primary, s);
-            let mut done = true;
-            SourceDatabase::get_pages_for_primary_last_edited(
-                &mut done,
-                s,
-                crate::datasource::sql_tuple(),
-            );
-            db.get_pages_for_primary_having(s);
-        });
+        let mut filters = Filters::default();
+        db.get_pages_for_primary_namespaces(Primary::Categories, &mut filters);
+        db.get_pages_for_primary_templates_as_secondary(&mut filters);
+        db.get_pages_for_primary_negative_templates(&mut filters);
+        // links_from / links_to skipped: require a live Api
+        db.get_pages_for_primary_lead_image(&mut filters);
+        db.get_pages_for_primary_ores(&mut filters);
+        db.get_pages_for_primary_last_edit(&mut filters);
+        db.get_pages_for_primary_created_by(&mut filters);
+        db.get_pages_for_primary_page_types(&mut filters);
+        db.get_pages_for_primary_page_size(&mut filters);
+        db.get_pages_for_primary_wikidata_item(&mut filters);
+        db.get_pages_for_primary_last_edited(&mut filters);
+        filters
+    }
+
+    /// Pin the clause order `collect_filters` produces, so a future
+    /// reordering shows up as a deliberate snapshot change.
+    #[test]
+    fn sql_filter_sequence_kitchen_sink() {
+        let (sql, n) = built(|f| *f = kitchen_sink_filters());
         assert_eq!(
             sql,
             " AND p.page_namespace=? \
              AND p.page_id NOT IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=? AND tl_from_namespace=?) \
              AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free') \
-             AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=page_latest AND rev_page=page_id AND rev_actor=actor_id AND actor_user IS NOT NULL) \
+             AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=p.page_latest AND rev_page=p.page_id AND rev_actor=actor_id AND actor_user IS NOT NULL) \
              AND p.page_is_redirect=0 \
              AND p.page_len>=100 \
              AND NOT EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='wikibase_item') \
-             HAVING link_count>=2"
+             AND EXISTS (SELECT 1 FROM revision r WHERE r.rev_page=p.page_id AND r.rev_id=p.page_latest AND r.rev_timestamp<=?)"
         );
-        assert_eq!(n, 3);
+        assert_eq!(n, 4);
+    }
+
+    // ─── Cluster routing of the filter clauses ──────────────────────────────
+
+    #[test]
+    fn filters_all_inline_off_commons() {
+        let state = AppState::default();
+        let filters = kitchen_sink_filters();
+        let expected = built(|f| *f = kitchen_sink_filters());
+        // Off Commons every table is on the core cluster, so nothing moves:
+        // one query, byte-for-byte the pre-split one.
+        assert_eq!(
+            filters.base_cluster(&state, "enwiki", &["categorylinks", "linktarget"]),
+            DbCluster::Core
+        );
+        let (inline, deferred) = kitchen_sink_filters()
+            .split(&state, "enwiki", DbCluster::Core)
+            .unwrap();
+        assert!(deferred.is_empty());
+        assert_eq!((inline.0, inline.1.len()), expected);
+    }
+
+    #[test]
+    fn filters_split_across_commons_clusters() {
+        let state = AppState::default();
+        // A category query reads `categorylinks`, so the base query belongs
+        // on the links cluster ...
+        let base = kitchen_sink_filters().base_cluster(
+            &state,
+            "commonswiki",
+            &["categorylinks", "linktarget"],
+        );
+        assert_eq!(base, DbCluster::Links);
+
+        let (inline, deferred) = kitchen_sink_filters()
+            .split(&state, "commonswiki", base)
+            .unwrap();
+        // ... where the page-only and templatelinks clauses can run too ...
+        assert!(inline.0.contains("p.page_namespace=?"));
+        assert!(inline.0.contains("FROM templatelinks,linktarget"));
+        assert!(inline.0.contains("p.page_is_redirect=0"));
+        assert!(inline.0.contains("p.page_len>=100"));
+        // ... while everything reading page_props / revision / actor moves to
+        // the core cluster.
+        assert_eq!(deferred.len(), 1);
+        let core = &deferred[&DbCluster::Core];
+        assert!(core.0.contains("pp_propname='page_image_free'"));
+        assert!(core.0.contains("pp_propname='wikibase_item'"));
+        assert!(core.0.contains("FROM revision,actor"));
+        assert!(core.0.contains("r.rev_timestamp<=?"));
+        assert!(!core.0.contains("templatelinks"));
+        // No clause is lost or duplicated, and each query's placeholders
+        // still match its bound values.
+        assert!(inline.placeholders_balanced());
+        assert!(core.placeholders_balanced());
+        assert_eq!(inline.1.len() + core.1.len(), 4);
+    }
+
+    #[test]
+    fn filters_stay_on_core_when_no_links_table_is_read() {
+        // "Pages without a Wikidata item" reads only `page` and `page_props`,
+        // so even on Commons it is one core-cluster query.
+        let state = AppState::default();
+        let db = snapshot_db(|p| p.page_wikidata_item = "without".to_string());
+        let mut filters = Filters::default();
+        db.get_pages_for_primary_wikidata_item(&mut filters);
+        assert_eq!(
+            filters.base_cluster(&state, "commonswiki", &[]),
+            DbCluster::Core
+        );
+        let (inline, deferred) = filters
+            .split(&state, "commonswiki", DbCluster::Core)
+            .unwrap();
+        assert!(deferred.is_empty());
+        assert!(inline.0.contains("pp_propname='wikibase_item'"));
+    }
+
+    #[test]
+    fn filters_base_cluster_follows_the_link_count_column() {
+        // Gathering the link count puts a `pagelinks` sub-select in the base
+        // query's SELECT list, which on Commons decides the cluster.
+        let state = AppState::default();
+        let db = snapshot_db(|p| {
+            p.gather_link_count = true;
+            p.page_wikidata_item = "without".to_string();
+        });
+        let mut filters = Filters::default();
+        db.get_pages_for_primary_wikidata_item(&mut filters);
+        let base_tables = db.base_query_tables(Primary::NoWikidata);
+        assert_eq!(base_tables, vec!["pagelinks"]);
+        assert_eq!(
+            filters.base_cluster(&state, "commonswiki", &base_tables),
+            DbCluster::Links
+        );
+    }
+
+    #[test]
+    fn page_select_prefix_only_reads_revision_on_core() {
+        // `page_touched` comes from `revision`; off the core cluster the
+        // column is a placeholder the deferred pass fills in.
+        assert!(page_select_prefix(DbCluster::Core).contains("rev_timestamp"));
+        assert!(!page_select_prefix(DbCluster::Links).contains("rev_timestamp"));
+        assert!(page_select_prefix(DbCluster::Links).contains("'' AS page_touched"));
+        // Same column count and order either way, so one row type fits both.
+        assert_eq!(
+            page_select_prefix(DbCluster::Core).matches(',').count(),
+            page_select_prefix(DbCluster::Links).matches(',').count()
+        );
     }
 }
