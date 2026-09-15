@@ -32,6 +32,18 @@ fn sql_text(sql: &str) -> SQLtuple {
 
 const MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
 
+/// The most pages a [`Filter::seed`] may name and still restrict the base
+/// query.
+///
+/// A seeded base query costs one statement per [`PAGE_BATCH_SIZE`] seed
+/// pages (per category batch), each a random-access probe of the links
+/// tables — on Commons roughly 1.5 s per statement. An unseeded one costs
+/// its full result set, then that many rows again in the deferred pass. The
+/// cap keeps a seed from being applied where it would be the larger side:
+/// Commons creates about 55 000 pages a day, so this admits a "created in
+/// the last few days" window and rejects a "last edited this month" one.
+const MAX_SEED_PAGES: usize = 150_000;
+
 /// The tables each family of filter clauses reads besides `page`. Named so a
 /// clause and the cluster it can run on cannot drift apart.
 const TEMPLATELINKS: &[&str] = &["templatelinks", "linktarget"];
@@ -114,6 +126,26 @@ struct DsdbParams {
     /// batch. The clauses depend only on the query parameters, so building
     /// them here also settles `base_cluster`.
     filters: Filters,
+    /// Page IDs every result is among, when a deferred filter could name
+    /// them cheaply up front; see [`Filter::seed`].
+    seed: Option<Vec<u32>>,
+}
+
+impl DsdbParams {
+    /// The page-ID restrictions to run the base query under: one per chunk
+    /// of the seed, or a single unrestricted run without one.
+    fn seed_chunks(&self) -> Vec<Option<&[u32]>> {
+        match &self.seed {
+            Some(ids) => ids.chunks(PAGE_BATCH_SIZE).map(Some).collect(),
+            None => vec![None],
+        }
+    }
+}
+
+/// Page IDs as an SQL `IN` list body. They come from the database, so
+/// interpolating them costs no placeholders and risks no injection.
+fn id_list(ids: &[u32]) -> String {
+    ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
 }
 
 /// One filter clause of the primary query, plus the tables it reads besides
@@ -126,6 +158,17 @@ struct DsdbParams {
 struct Filter {
     tables: &'static [&'static str],
     sql: SQLtuple,
+    /// A query selecting a superset of the page IDs this clause matches,
+    /// driven by an index of its own so it needs no page set to start from.
+    ///
+    /// Only clauses that typically match few pages — a window on
+    /// `revision`'s timestamp, a creator — offer one. When such a clause is
+    /// deferred, the base query would otherwise produce every page of its
+    /// source (a large category tree, say) only for the deferred pass to
+    /// drop nearly all of them; the seed lets the base query start from the
+    /// few instead. The clause itself is still applied afterwards, so the
+    /// seed only has to be a superset and correctness never depends on it.
+    seed: Option<SQLtuple>,
 }
 
 /// The filter clauses of one primary query.
@@ -148,8 +191,18 @@ impl Filters {
     /// Records a clause. Empty SQL is dropped, so a builder can push
     /// unconditionally.
     fn push(&mut self, tables: &'static [&'static str], sql: SQLtuple) {
+        self.push_seeded(tables, sql, None);
+    }
+
+    /// Records a clause with its [`Filter::seed`].
+    fn push_seeded(
+        &mut self,
+        tables: &'static [&'static str],
+        sql: SQLtuple,
+        seed: Option<SQLtuple>,
+    ) {
         if !sql.0.is_empty() {
-            self.0.push(Filter { tables, sql });
+            self.0.push(Filter { tables, sql, seed });
         }
     }
 
@@ -180,6 +233,23 @@ impl Filters {
         }
     }
 
+    /// The seed of the first clause a base query on `base` has to defer, and
+    /// the cluster to run it on. Inline clauses need none: there the
+    /// optimizer picks the selective side itself.
+    fn seed(
+        &self,
+        state: &AppState,
+        wiki: &str,
+        base: DbCluster,
+    ) -> Result<Option<(DbCluster, SQLtuple)>> {
+        self.0
+            .iter()
+            .filter(|filter| !state.cluster_hosts_tables(wiki, base, filter.tables))
+            .find_map(|filter| filter.seed.clone().map(|seed| (filter.tables, seed)))
+            .map(|(tables, seed)| Ok((state.cluster_for_tables(wiki, tables)?, seed)))
+            .transpose()
+    }
+
     /// Splits the clauses into the ones a base query on `base` can carry and
     /// the ones that have to run on another cluster, grouped by cluster.
     fn split(
@@ -190,7 +260,7 @@ impl Filters {
     ) -> Result<(SQLtuple, HashMap<DbCluster, SQLtuple>)> {
         let mut inline = super::sql_tuple();
         let mut deferred: HashMap<DbCluster, SQLtuple> = HashMap::new();
-        for Filter { tables, sql } in self.0 {
+        for Filter { tables, sql, .. } in self.0 {
             if state.cluster_hosts_tables(wiki, base, tables) {
                 super::append_sql(&mut inline, sql);
             } else {
@@ -690,13 +760,24 @@ impl SourceDatabase {
     /// `Union` merges all groups into one deduplicated `IN` list. Note the
     /// union dedup goes through a `HashSet`, so the *order* of bound titles
     /// is unspecified (only their set is).
+    ///
+    /// A `seed` restricts the members considered to those page IDs, inside
+    /// the `categorylinks` sub-select: that is where it makes the server
+    /// probe the few seed pages' categories instead of every member of the
+    /// batch's categories.
     fn category_batch_sql(
         &self,
         base_cluster: DbCluster,
         link_count_sql: &str,
         category_batch: &[Vec<String>],
+        seed: Option<&[u32]>,
     ) -> SQLtuple {
-        let subquery = "SELECT cl_from,cl_target_id,lt_title from categorylinks,linktarget WHERE lt_id=cl_target_id AND lt_namespace=14 AND lt_title";
+        let seed = seed.map_or(String::new(), |ids| {
+            format!("cl_from IN ({}) AND ", id_list(ids))
+        });
+        let subquery = format!(
+            "SELECT cl_from,cl_target_id,lt_title from categorylinks,linktarget WHERE {seed}lt_id=cl_target_id AND lt_namespace=14 AND lt_title"
+        );
         let mut sql = super::sql_tuple();
         match self.params.combine {
             CombineMode::Subset => {
@@ -735,26 +816,27 @@ impl SourceDatabase {
         sql
     }
 
-    async fn get_pages_for_category_batch(
+    /// Runs each base query through [`Self::get_pages_for_primary`], a few
+    /// at a time, and unions the results.
+    async fn run_base_queries(
         &self,
-        params: &DsdbParams,
-        category_batch: &[Vec<String>],
         state: &AppState,
-        ret: &PageList,
-    ) -> Result<()> {
-        let sql =
-            self.category_batch_sql(params.base_cluster, &params.link_count_sql, category_batch);
-        let mut pl2 = PageList::new_from_wiki(&params.wiki.clone());
-        Platform::profile(
-            "DSDB::get_pages [primary:categories] START BATCH",
-            Some(sql.1.len()),
-        );
-        self.get_pages_for_primary(state, params, sql, &mut pl2)
-            .await?;
-        Platform::profile("DSDB::get_pages [primary:categories] PROCESS BATCH", None);
-        ret.union(&pl2, None).await?;
-        Platform::profile("DSDB::get_pages [primary:categories] BATCH COMPLETE", None);
-        Ok(())
+        params: &DsdbParams,
+        queries: Vec<SQLtuple>,
+    ) -> Result<PageList> {
+        let ret = PageList::new_from_wiki(&params.wiki);
+        let futures: Vec<_> = queries
+            .into_iter()
+            .map(|sql| self.get_pages_for_primary(state, params, sql))
+            .collect();
+        let results: Vec<_> = iter(futures)
+            .buffered(MAX_CONCURRENT_DB_BATCHES)
+            .collect()
+            .await;
+        for pages in results {
+            ret.union(&pages?, None).await?;
+        }
+        Ok(ret)
     }
 
     async fn get_pages_initialize_query(
@@ -830,6 +912,12 @@ impl SourceDatabase {
         let api = state.get_api_for_wiki(wiki.clone()).await?;
         let filters = self.collect_filters(primary, api);
         let base_cluster = filters.base_cluster(state, &wiki, &self.base_query_tables(primary));
+        // A pagelist is already narrowed to its titles; a seed would only add
+        // a query.
+        let seed = match primary {
+            Primary::Pagelist => None,
+            _ => Self::fetch_seed(state, &wiki, &filters, base_cluster).await?,
+        };
 
         Ok(DsdbParams {
             link_count_sql: link_count_sql.to_string(),
@@ -837,7 +925,36 @@ impl SourceDatabase {
             primary,
             base_cluster,
             filters,
+            seed,
         })
+    }
+
+    /// Fetches the page IDs the base query is restricted to, if a deferred
+    /// filter offers a [`Filter::seed`] and it names at most
+    /// [`MAX_SEED_PAGES`] of them. Beyond that the seed is the larger side
+    /// and the query runs unseeded.
+    async fn fetch_seed(
+        state: &AppState,
+        wiki: &str,
+        filters: &Filters,
+        base_cluster: DbCluster,
+    ) -> Result<Option<Vec<u32>>> {
+        let Some((cluster, mut sql)) = filters.seed(state, wiki, base_cluster)? else {
+            return Ok(None);
+        };
+        sql.0 += &format!(" LIMIT {}", MAX_SEED_PAGES + 1);
+        let mut conn = state
+            .get_wiki_db_connection_for_cluster(wiki, cluster)
+            .await?;
+        let ids = conn
+            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .await
+            .map_err(|e| anyhow!(e))?
+            .map_and_drop(from_row::<u32>)
+            .await
+            .map_err(|e| anyhow!(e))?;
+        Platform::profile("DSDB::fetch_seed", Some(ids.len()));
+        Ok((ids.len() <= MAX_SEED_PAGES).then_some(ids))
     }
 
     /// The tables the base query joins itself, besides `page`: the primary
@@ -894,25 +1011,20 @@ impl SourceDatabase {
             "DSDB::get_pages [primary:categories] BATCHES begin",
             Some(category_batches.len()),
         );
-        let ret = PageList::new_from_wiki(&params.wiki);
-
-        let futures: Vec<_> = category_batches
+        let queries: Vec<SQLtuple> = category_batches
             .iter()
-            .map(|category_batch| {
-                self.get_pages_for_category_batch(params, category_batch, state, &ret)
+            .flat_map(|category_batch| {
+                params.seed_chunks().into_iter().map(|seed| {
+                    self.category_batch_sql(
+                        params.base_cluster,
+                        &params.link_count_sql,
+                        category_batch,
+                        seed,
+                    )
+                })
             })
             .collect();
-
-        let results: Vec<_> = iter(futures)
-            .buffered(MAX_CONCURRENT_DB_BATCHES)
-            .collect()
-            .await;
-
-        // Check for errors
-        for result in results {
-            result?;
-        }
-
+        let ret = self.run_base_queries(state, params, queries).await?;
         Platform::profile(
             "DSDB::get_pages [primary:categories] RESULTS end",
             Some(ret.len()),
@@ -926,14 +1038,8 @@ impl SourceDatabase {
         state: &AppState,
         primary_pagelist: Option<&PageList>,
     ) -> Result<PageList> {
-        let ret = PageList::new_from_wiki(&params.wiki);
         let primary_pagelist = primary_pagelist
             .ok_or_else(|| anyhow!("SourceDatabase::get_pages: pagelist: No primary_pagelist"))?;
-        ret.set_wiki(primary_pagelist.wiki());
-        if primary_pagelist.is_empty() {
-            // Nothing to do, but that's OK
-            return Ok(ret);
-        }
 
         let nslist = primary_pagelist.group_by_namespace();
         let mut batches: Vec<SQLtuple> = vec![];
@@ -952,38 +1058,9 @@ impl SourceDatabase {
             });
         });
 
-        let wiki = primary_pagelist
-            .wiki()
-            .ok_or_else(|| anyhow!("No wiki given in datasource_database::get_pages_pagelist"))?;
-
-        let mut futures: Vec<_> = vec![];
-        for sql in batches {
-            let future = self.get_pages_pagelist_batch(wiki.clone(), sql, state, &params);
-            futures.push(future);
-        }
-        let results: Vec<_> = iter(futures)
-            .buffered(MAX_CONCURRENT_DB_BATCHES)
-            .collect()
-            .await;
-
-        for pl2 in results {
-            ret.union(&pl2?, None).await?;
-        }
-
+        let ret = self.run_base_queries(state, &params, batches).await?;
+        ret.set_wiki(primary_pagelist.wiki());
         Ok(ret)
-    }
-
-    async fn get_pages_pagelist_batch(
-        &self,
-        wiki: String,
-        sql: SQLtuple,
-        state: &AppState,
-        params: &DsdbParams,
-    ) -> Result<PageList> {
-        let mut pl2 = PageList::new_from_wiki(&wiki.clone());
-        self.get_pages_for_primary(state, params, sql, &mut pl2)
-            .await?;
-        Ok(pl2)
     }
 
     pub async fn get_pages(
@@ -1096,15 +1173,21 @@ impl SourceDatabase {
             Primary::Templates | Primary::LinksFrom | Primary::CreatedBy | Primary::NoWikidata => {}
         }
 
-        let mut sql = super::sql_tuple();
-        sql.0 = page_select_prefix(params.base_cluster);
-        sql.0 += &params.link_count_sql;
-        sql.0 += " FROM page p WHERE 1=1";
-
-        let mut ret = PageList::new_from_wiki(&params.wiki);
-        self.get_pages_for_primary(state, &params, sql, &mut ret)
-            .await?;
-        Ok(ret)
+        let queries: Vec<SQLtuple> = params
+            .seed_chunks()
+            .into_iter()
+            .map(|seed| {
+                let mut sql = super::sql_tuple();
+                sql.0 = page_select_prefix(params.base_cluster);
+                sql.0 += &params.link_count_sql;
+                sql.0 += " FROM page p WHERE 1=1";
+                if let Some(ids) = seed {
+                    sql.0 += &format!(" AND p.page_id IN ({})", id_list(ids));
+                }
+                sql
+            })
+            .collect();
+        self.run_base_queries(state, &params, queries).await
     }
 
     /// Collects every filter clause the query's parameters ask for.
@@ -1132,13 +1215,14 @@ impl SourceDatabase {
         filters
     }
 
+    /// Runs one base query on its cluster, then the deferred filters, and
+    /// returns the surviving pages.
     async fn get_pages_for_primary(
         &self,
         state: &AppState,
         params: &DsdbParams,
         mut sql: SQLtuple,
-        pages_sublist: &mut PageList,
-    ) -> Result<()> {
+    ) -> Result<PageList> {
         let base_cluster = params.base_cluster;
         Platform::profile("DSDB::get_pages_for_primary STARTING", Some(sql.1.len()));
 
@@ -1167,19 +1251,14 @@ impl SourceDatabase {
 
         let rows = Self::apply_deferred_filters(state, &wiki, base_cluster, deferred, rows).await?;
 
-        pages_sublist.set_wiki(Some(wiki));
-        pages_sublist.clear_entries();
-
         Platform::profile(
             "DSDB::get_pages_for_primary RETRIEVING RESULT",
             Some(sql_1_len),
         );
-
-        self.get_pages_for_primary_rows_to_result(rows, pages_sublist);
-
+        let mut pages = PageList::new_from_wiki(&wiki);
+        self.get_pages_for_primary_rows_to_result(rows, &mut pages);
         Platform::profile("DSDB::get_pages_for_primary COMPLETE", Some(sql_1_len));
-
-        Ok(())
+        Ok(pages)
     }
 
     /// Applies the filter clauses the base query's cluster could not serve,
@@ -1221,11 +1300,7 @@ impl SourceDatabase {
                         } else {
                             "'' AS page_touched"
                         },
-                        ids = chunk
-                            .iter()
-                            .map(u32::to_string)
-                            .collect::<Vec<String>>()
-                            .join(","),
+                        ids = id_list(chunk),
                     ));
                     super::append_sql(&mut sql, clauses.clone());
                     sql
@@ -1412,12 +1487,17 @@ impl SourceDatabase {
         if self.params.created_by.is_empty() {
             return;
         }
-        let mut sql = sql_text(
-            " AND p.page_id IN (SELECT r.rev_page FROM revision r INNER JOIN actor a ON r.rev_actor=a.actor_id WHERE r.rev_parent_id=0 AND a.actor_name IN (",
+        // The pages a user created are few and indexed by actor, so the
+        // sub-select doubles as the clause's seed.
+        let mut creations = sql_text(
+            "SELECT r.rev_page FROM revision r INNER JOIN actor a ON r.rev_actor=a.actor_id WHERE r.rev_parent_id=0 AND a.actor_name IN (",
         );
-        super::append_sql(&mut sql, super::prep_quote(&self.params.created_by));
-        sql.0 += "))";
-        filters.push(REVISION_ACTOR, sql);
+        super::append_sql(&mut creations, super::prep_quote(&self.params.created_by));
+        creations.0 += ")";
+        let mut sql = sql_text(" AND p.page_id IN (");
+        super::append_sql(&mut sql, creations.clone());
+        sql.0 += ")";
+        filters.push_seeded(REVISION_ACTOR, sql, Some(creations));
     }
 
     fn get_pages_for_primary_ores(&self, filters: &mut Filters) {
@@ -1603,14 +1683,32 @@ impl SourceDatabase {
         }
         if !before.is_empty() {
             sql.0 += " AND r.rev_timestamp<=?";
-            sql.1.push(MyValue::Bytes(before.into()));
+            sql.1.push(MyValue::Bytes(before.clone().into()));
         }
         if !after.is_empty() {
             sql.0 += " AND r.rev_timestamp>=?";
-            sql.1.push(MyValue::Bytes(after.into()));
+            sql.1.push(MyValue::Bytes(after.clone().into()));
         }
         sql.0 += ")";
-        filters.push(REVISION, sql);
+
+        // A lower bound on the timestamp is selective enough to drive a
+        // query off `revision`'s timestamp index; an upper bound alone
+        // matches nearly everything. Pages with any revision in the window
+        // are a superset of the clause's matches, which is all a seed needs.
+        let seed = (!after.is_empty()).then(|| {
+            let mut seed =
+                sql_text("SELECT DISTINCT rev_page FROM revision WHERE rev_timestamp>=?");
+            seed.1.push(MyValue::Bytes(after.into()));
+            if !before.is_empty() {
+                seed.0 += " AND rev_timestamp<=?";
+                seed.1.push(MyValue::Bytes(before.into()));
+            }
+            if self.params.only_new_since {
+                seed.0 += " AND rev_parent_id=0";
+            }
+            seed
+        });
+        filters.push_seeded(REVISION, sql, seed);
     }
 
     async fn get_pages_for_primary_run_query(
@@ -2196,6 +2294,68 @@ mod tests {
         assert_eq!(n, 1);
     }
 
+    /// The seed a builder attached to its clause, as SQL text and value
+    /// count.
+    fn built_seed(apply: impl FnOnce(&mut Filters)) -> Option<(String, usize)> {
+        let mut filters = Filters::default();
+        apply(&mut filters);
+        assert_eq!(filters.0.len(), 1);
+        let seed = filters.0.remove(0).seed?;
+        assert!(seed.placeholders_balanced(), "unbalanced: {}", seed.0);
+        Some((seed.0, seed.1.len()))
+    }
+
+    #[test]
+    fn seed_last_edited_needs_a_lower_bound() {
+        // "Created since" seeds off the timestamp index, creations only ...
+        let db = snapshot_db(|p| {
+            p.after = "20230101000000".to_string();
+            p.only_new_since = true;
+        });
+        assert_eq!(
+            built_seed(|s| db.get_pages_for_primary_last_edited(s)),
+            Some((
+                "SELECT DISTINCT rev_page FROM revision WHERE rev_timestamp>=? AND rev_parent_id=0"
+                    .to_string(),
+                1
+            ))
+        );
+        // ... "edited within" takes any revision in the window, a superset
+        // of the pages whose *latest* revision is in it ...
+        let edited_within = snapshot_db(|p| {
+            p.before = "20240101000000".to_string();
+            p.after = "20230101000000".to_string();
+        });
+        assert_eq!(
+            built_seed(|s| edited_within.get_pages_for_primary_last_edited(s)),
+            Some((
+                "SELECT DISTINCT rev_page FROM revision WHERE rev_timestamp>=? AND rev_timestamp<=?"
+                    .to_string(),
+                2
+            ))
+        );
+        // ... and an upper bound alone matches nearly every page, so it is
+        // no seed at all.
+        let before_only = snapshot_db(|p| p.before = "20240101000000".to_string());
+        assert_eq!(
+            built_seed(|s| before_only.get_pages_for_primary_last_edited(s)),
+            None
+        );
+    }
+
+    #[test]
+    fn seed_created_by_is_the_clause_sub_select() {
+        let db = snapshot_db(|p| p.created_by = vec!["Alice".to_string()]);
+        assert_eq!(
+            built_seed(|s| db.get_pages_for_primary_created_by(s)),
+            Some((
+                "SELECT r.rev_page FROM revision r INNER JOIN actor a ON r.rev_actor=a.actor_id WHERE r.rev_parent_id=0 AND a.actor_name IN (?)"
+                    .to_string(),
+                1
+            ))
+        );
+    }
+
     #[test]
     fn sql_last_edited_absent_without_before_or_after() {
         let db = snapshot_db(|_| {});
@@ -2238,7 +2398,7 @@ mod tests {
             vec!["Births_1974".to_string()],
             vec!["Bioinformaticians".to_string(), "Geneticists".to_string()],
         ];
-        let sql = db.category_batch_sql(DbCluster::Core, ",0 AS link_count", &batch);
+        let sql = db.category_batch_sql(DbCluster::Core, ",0 AS link_count", &batch, None);
         assert_eq!(
             norm(&sql.0),
             "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace,\
@@ -2253,13 +2413,31 @@ mod tests {
     }
 
     #[test]
+    fn sql_category_batch_seed_restricts_the_members_sub_select() {
+        let db = snapshot_db(|p| p.combine = CombineMode::Subset);
+        let batch = vec![vec!["Births_1974".to_string()]];
+        let sql = db.category_batch_sql(DbCluster::Links, "", &batch, Some(&[7, 42]));
+        // Inside the sub-select, ahead of the title list: the server then
+        // probes the seed pages' categories rather than every member of the
+        // batch's categories.
+        assert!(
+            sql.0.contains(
+                "from categorylinks,linktarget WHERE cl_from IN (7,42) AND lt_id=cl_target_id"
+            ),
+            "got: {}",
+            sql.0
+        );
+        assert_eq!(sql.1.len(), 1);
+    }
+
+    #[test]
     fn sql_category_batch_union_merges_and_dedups() {
         let db = snapshot_db(|p| p.combine = CombineMode::Union);
         let batch = vec![
             vec!["Chemistry".to_string(), "Biology".to_string()],
             vec!["Biology".to_string()],
         ];
-        let sql = db.category_batch_sql(DbCluster::Core, ",0 AS link_count", &batch);
+        let sql = db.category_batch_sql(DbCluster::Core, ",0 AS link_count", &batch, None);
         // Dedup goes through a HashSet, so the bound-title order is
         // unspecified — pin the SQL shape and the value count only.
         assert_eq!(
@@ -2414,6 +2592,79 @@ mod tests {
             filters.base_cluster(&state, "commonswiki", &base_tables),
             DbCluster::Links
         );
+    }
+
+    #[test]
+    fn filters_seed_only_from_a_deferred_clause() {
+        let state = AppState::default();
+        let db = snapshot_db(|p| {
+            p.after = "20230101000000".to_string();
+            p.only_new_since = true;
+        });
+        let mut filters = Filters::default();
+        db.get_pages_for_primary_namespaces(Primary::Categories, &mut filters);
+        db.get_pages_for_primary_last_edited(&mut filters);
+
+        // On Commons a category query runs on the links cluster and has to
+        // defer the revision clause, whose seed then comes from the core.
+        let seed = filters
+            .seed(&state, "commonswiki", DbCluster::Links)
+            .unwrap()
+            .expect("deferred revision clause offers a seed");
+        assert_eq!(seed.0, DbCluster::Core);
+        assert!(
+            seed.1
+                .0
+                .starts_with("SELECT DISTINCT rev_page FROM revision")
+        );
+
+        // Off Commons the clause is inline and the optimizer's business.
+        assert!(
+            filters
+                .seed(&state, "enwiki", DbCluster::Core)
+                .unwrap()
+                .is_none()
+        );
+
+        // A deferred clause without a seed offers none.
+        let no_item = snapshot_db(|p| p.page_wikidata_item = "without".to_string());
+        let mut unseeded = Filters::default();
+        no_item.get_pages_for_primary_wikidata_item(&mut unseeded);
+        assert!(
+            unseeded
+                .seed(&state, "commonswiki", DbCluster::Links)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn seed_chunks_split_like_the_deferred_passes() {
+        let params = |seed| DsdbParams {
+            link_count_sql: String::new(),
+            wiki: "commonswiki".to_string(),
+            primary: Primary::Categories,
+            base_cluster: DbCluster::Links,
+            filters: Filters::default(),
+            seed,
+        };
+        // No seed: one unrestricted run.
+        assert_eq!(params(None).seed_chunks(), vec![None]);
+        // An empty seed: nothing can match, so nothing runs.
+        assert!(params(Some(vec![])).seed_chunks().is_empty());
+        // One chunk per PAGE_BATCH_SIZE IDs.
+        let ids: Vec<u32> = (0..=PAGE_BATCH_SIZE as u32).collect();
+        let p = params(Some(ids.clone()));
+        let chunks = p.seed_chunks();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], Some(&ids[..PAGE_BATCH_SIZE]));
+        assert_eq!(chunks[1], Some(&ids[PAGE_BATCH_SIZE..]));
+    }
+
+    #[test]
+    fn id_list_joins_without_placeholders() {
+        assert_eq!(id_list(&[]), "");
+        assert_eq!(id_list(&[1, 20, 300]), "1,20,300");
     }
 
     #[test]
