@@ -709,6 +709,11 @@ impl PageList {
         if !self.is_wikidata() {
             return Ok(());
         }
+        if self.is_empty() {
+            // Nothing to look up, so no reason to fetch the target wiki's API client.
+            self.set_wiki(Some(wiki.to_string()));
+            return Ok(());
+        }
         Platform::profile("PageList::convert_from_wikidata START", None);
         let batches = self.to_sql_batches(PAGE_BATCH_SIZE*2)
             .par_iter_mut()
@@ -1162,5 +1167,16 @@ mod tests {
 
         pl.regexp_filter("Magnus.*");
         assert_eq!(pl.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn convert_to_wiki_on_empty_wikidata_list_skips_the_api() {
+        // The default `AppState` has no SiteMatrix, so fetching an API client
+        // would fail: an empty list must not need one.
+        let platform = crate::test_support::make_platform(vec![]);
+        let pl = PageList::new_from_wiki("wikidatawiki");
+        pl.convert_to_wiki("enwiki", &platform).await.unwrap();
+        assert_eq!(pl.wiki(), Some("enwiki".to_string()));
+        assert!(pl.is_empty());
     }
 }

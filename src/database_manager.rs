@@ -484,12 +484,11 @@ impl DatabaseManager {
     // ------------------------------------------------------------------
 
     pub async fn get_query_from_psid(&self, psid: &str) -> Result<String> {
+        let psid: usize = psid
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("Invalid PSID '{psid}': expected a number"))?;
         let mut conn = self.get_tool_db_connection().await?;
-
-        let psid = match psid.parse::<usize>() {
-            Ok(psid) => psid,
-            Err(e) => return Err(anyhow!(e)),
-        };
         let sql = format!("SELECT querystring FROM query WHERE id={psid}");
 
         let rows = conn
@@ -643,5 +642,14 @@ mod tests {
     fn exponential_backoff_saturates_on_huge_attempt() {
         // Must not overflow or panic for any u32 input.
         assert_eq!(exponential_backoff_ms(u32::MAX), MAX_DELAY_MS);
+    }
+
+    #[tokio::test]
+    async fn get_query_from_psid_rejects_non_numeric_psid() {
+        let err = DatabaseManager::default()
+            .get_query_from_psid("abc")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid PSID 'abc'"), "{err}");
     }
 }
