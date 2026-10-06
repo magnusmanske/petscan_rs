@@ -27,6 +27,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 futures = "0.3"
 tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
 tracing = "0.1.40"
+rlimit = "0.10"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

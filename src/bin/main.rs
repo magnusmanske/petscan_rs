@@ -6,6 +6,7 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
+    petscan_rs::raise_open_file_limit();
 
     let petscan_config = get_petscan_config();
     let app_state = Arc::new(AppState::new_from_config(&petscan_config).await?);

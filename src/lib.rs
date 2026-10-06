@@ -62,3 +62,15 @@ pub mod webserver;
 pub(crate) mod test_support;
 
 use tracing_subscriber as _;
+
+/// Lift the soft open-file limit as far as the hard limit allows. Every
+/// queued request, replica connection and TLS client holds a descriptor;
+/// the inherited default of 1024 was exhausted in production, at which
+/// point both `accept()` and `reqwest::Client::builder()` ("builder error")
+/// fail for everyone.
+pub fn raise_open_file_limit() {
+    match rlimit::increase_nofile_limit(u64::MAX) {
+        Ok(limit) => tracing::info!("Open-file limit is now {limit}"),
+        Err(e) => tracing::warn!("Could not raise the open-file limit: {e}"),
+    }
+}
