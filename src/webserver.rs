@@ -214,12 +214,18 @@ impl WebServer {
                     let psid_params = match FormParameters::outcome_from_query(&psid_query) {
                         Ok(pp) => pp,
                         Err(e) => {
-                            return self.app_state.render_error(e.to_string(), &form_parameters);
+                            return self
+                                .app_state
+                                .render_error(format!("{e:#}"), &form_parameters);
                         }
                     };
                     form_parameters.rebase(&psid_params);
                 }
-                Err(e) => return self.app_state.render_error(e.to_string(), &form_parameters),
+                Err(e) => {
+                    return self
+                        .app_state
+                        .render_error(format!("{e:#}"), &form_parameters);
+                }
             }
         }
 
@@ -246,6 +252,22 @@ impl WebServer {
             };
         }
 
+        // Actually do something useful!
+        // Cap the number of requests doing real work at once. If 50 are
+        // already running, additional callers wait here until one finishes;
+        // once too many are waiting (or one has waited too long) they are
+        // turned away with an explained 503 instead of holding a socket.
+        let _request_permit = match self.app_state.acquire_request_permit().await {
+            Ok(permit) => permit,
+            Err(overload) => {
+                return self
+                    .app_state
+                    .render_error(overload.to_string(), &form_parameters);
+            }
+        };
+
+        // Logged only once the query actually starts, so queued requests
+        // neither touch the tools DB nor show up as running.
         let started_query_id = match self
             .app_state
             .log_query_start(&form_parameters.to_string())
@@ -257,12 +279,6 @@ impl WebServer {
                 0
             }
         };
-
-        // Actually do something useful!
-        // Cap the number of requests doing real work at once. If 50 are
-        // already running, additional callers wait here until one finishes
-        // (or the outer 30-minute wall-clock budget aborts them).
-        let _request_permit = self.app_state.acquire_request_permit().await;
         // The guard increments the in-flight counter now and decrements on
         // drop — including unwind — so a panic anywhere below cannot leave
         // the counter permanently inflated.
@@ -283,9 +299,11 @@ impl WebServer {
             Ok(_) => {}
             Err(error) => {
                 drop(platform);
+                // `{:#}` keeps the context chain, so a bare upstream message
+                // like reqwest's "builder error" arrives with its cause.
                 return self
                     .app_state
-                    .render_error(error.to_string(), &form_parameters);
+                    .render_error(format!("{error:#}"), &form_parameters);
             }
         }
 
@@ -301,7 +319,9 @@ impl WebServer {
                 Ok(psid) => Some(psid),
                 Err(e) => {
                     // log_query_end was already called above after platform.run(); do not call it again
-                    return self.app_state.render_error(e.to_string(), &form_parameters);
+                    return self
+                        .app_state
+                        .render_error(format!("{e:#}"), &form_parameters);
                 }
             },
         };
@@ -310,7 +330,9 @@ impl WebServer {
         // Render response
         let response = match platform.get_response().await {
             Ok(response) => response,
-            Err(e) => self.app_state.render_error(e.to_string(), &form_parameters),
+            Err(e) => self
+                .app_state
+                .render_error(format!("{e:#}"), &form_parameters),
         };
         drop(platform);
         response
@@ -550,5 +572,18 @@ mod tests {
             allow_origin == "*" || allow_origin == "https://example.test",
             "unexpected ACAO header: {allow_origin:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn overloaded_server_rejects_immediately_with_503() {
+        let server = test_server("<html></html>");
+        let _slots = server.app_state.saturate_for_test();
+        let req = AxumRequest::builder()
+            .uri("/?doit=1&format=json&manual_list=Foo&manual_list_wiki=enwiki")
+            .body(Body::empty())
+            .unwrap();
+        let (status, _ct, body) = send(&server, req).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(body.contains("overloaded"), "body was {body}");
     }
 }

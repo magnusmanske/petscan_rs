@@ -4,22 +4,36 @@ use crate::database_manager::DatabaseManager;
 use crate::database_manager::DbCluster;
 use crate::form_parameters::FormParameters;
 use crate::platform::MyResponse;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use mysql_async as my;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, RwLock};
-use tokio::sync::Semaphore;
+use std::time::Duration;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::timeout;
 use wikimisc::mediawiki::api::Api;
 use wikimisc::site_matrix::SiteMatrix;
 
 /// Inbound concurrency cap: at most this many `process_form` calls run at
-/// once. Excess requests queue on the semaphore (and the outer 30-minute
-/// wall-clock budget will reject them if they cannot start in time).
+/// once. Excess requests queue on the semaphore, up to
+/// [`MAX_QUEUED_REQUESTS`] of them for at most [`QUEUE_WAIT_TIMEOUT`].
 /// 50 is roughly 5× the per-user MySQL connection budget, so the
 /// max_user_connections backoff still has headroom and a request burst
 /// cannot fork-bomb the worker pool.
 const MAX_CONCURRENT_REQUESTS: usize = 50;
+
+/// Admission queue cap: at most this many requests wait for a permit; any
+/// further one is turned away at once with a 503. An unbounded queue let a
+/// request flood hold ~1000 sockets open, exhausting the process's file
+/// descriptors, after which nothing (not even `accept()`) worked.
+const MAX_QUEUED_REQUESTS: usize = 200;
+
+/// How long a queued request may wait for a permit before being turned
+/// away. Beyond this the client (or the Cloud VPS proxy) has usually given
+/// up, so starting the query would only waste a slot.
+const QUEUE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Retry policy for startup network calls (Wikidata API + SiteMatrix).
 /// 5 attempts with 1s → 2s → 4s → 8s → 16s exponential backoff (total
@@ -74,6 +88,11 @@ pub struct AppState {
     main_page: String,
     /// Caps inbound request concurrency. See [`MAX_CONCURRENT_REQUESTS`].
     request_semaphore: Arc<Semaphore>,
+    /// Caps how many requests may wait for `request_semaphore`. See
+    /// [`MAX_QUEUED_REQUESTS`].
+    queue_semaphore: Arc<Semaphore>,
+    /// One API client per wiki, shared by every request in this process.
+    api_cache: Arc<RwLock<HashMap<String, Api>>>,
 }
 
 impl Default for AppState {
@@ -85,6 +104,8 @@ impl Default for AppState {
             site_matrix: SiteMatrix::default(),
             main_page: String::default(),
             request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
+            queue_semaphore: Arc::new(Semaphore::new(MAX_QUEUED_REQUESTS)),
+            api_cache: Arc::default(),
         }
     }
 }
@@ -120,19 +141,62 @@ impl AppState {
 
         Ok(Self {
             db_manager,
-            threads_running: Arc::new(RwLock::new(0)),
-            shutting_down: Arc::new(RwLock::new(false)),
             site_matrix,
             main_page,
-            request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
+            ..Self::default()
         })
     }
 
     /// Acquire a permit before doing heavy per-request work. The permit is
-    /// released when the returned guard is dropped. Returns `None` if the
-    /// semaphore was closed (the runtime is shutting down).
-    pub async fn acquire_request_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
-        self.request_semaphore.clone().acquire_owned().await.ok()
+    /// released when the returned guard is dropped.
+    ///
+    /// Overload is reported, not absorbed: when [`MAX_QUEUED_REQUESTS`]
+    /// callers are already waiting, or this one has waited
+    /// [`QUEUE_WAIT_TIMEOUT`], the request is turned away with an
+    /// [`OverloadError`] that says so, instead of holding its socket open
+    /// for minutes.
+    pub async fn acquire_request_permit(&self) -> Result<OwnedSemaphorePermit, OverloadError> {
+        let Ok(_queue_slot) = self.queue_semaphore.clone().try_acquire_owned() else {
+            return Err(self.overload_error("the waiting queue is full"));
+        };
+        match timeout(
+            QUEUE_WAIT_TIMEOUT,
+            self.request_semaphore.clone().acquire_owned(),
+        )
+        .await
+        {
+            Ok(Ok(permit)) => Ok(permit),
+            Ok(Err(_closed)) => Err(self.overload_error("the server is shutting down")),
+            Err(_elapsed) => Err(self.overload_error(&format!(
+                "no slot became free within {} seconds",
+                QUEUE_WAIT_TIMEOUT.as_secs()
+            ))),
+        }
+    }
+
+    fn overload_error(&self, reason: &str) -> OverloadError {
+        OverloadError {
+            running: MAX_CONCURRENT_REQUESTS - self.request_semaphore.available_permits(),
+            waiting: MAX_QUEUED_REQUESTS - self.queue_semaphore.available_permits(),
+            reason: reason.to_string(),
+        }
+    }
+
+    /// Test-only: occupy every running and queued slot, so the next
+    /// `acquire_request_permit` is turned away immediately.
+    #[cfg(test)]
+    pub(crate) fn saturate_for_test(&self) -> (OwnedSemaphorePermit, OwnedSemaphorePermit) {
+        let running = self
+            .request_semaphore
+            .clone()
+            .try_acquire_many_owned(MAX_CONCURRENT_REQUESTS as u32)
+            .expect("fresh state");
+        let queued = self
+            .queue_semaphore
+            .clone()
+            .try_acquire_many_owned(MAX_QUEUED_REQUESTS as u32)
+            .expect("fresh state");
+        (running, queued)
     }
 
     /// Test-only constructor: builds an `AppState` over a default
@@ -281,9 +345,10 @@ impl AppState {
         tracing::error!(error = %error, http_status = status, "rendering error response");
         let mut response = match form_parameters.params.get("format").map(|s| s.as_str()) {
             Some("") | Some("html") => {
+                // Error texts can echo user input (wiki names, PSIDs, …).
                 let output = format!(
                     "<div class='alert alert-danger' role='alert'>{}</div>",
-                    &error
+                    htmlescape::encode_minimal(&error)
                 );
                 let interface_language = form_parameters
                     .params
@@ -333,8 +398,27 @@ impl AppState {
         }
     }
 
+    /// The API client for `wiki`, built on first use and then shared by every
+    /// request. Building one costs a TLS client plus a `siteinfo` round trip,
+    /// and a single query asks for the same wiki's client several times.
     pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api> {
-        Ok(self.site_matrix.get_api_for_wiki(&wiki).await?)
+        let cached = self
+            .api_cache
+            .read()
+            .ok()
+            .and_then(|cache| cache.get(&wiki).cloned());
+        if let Some(api) = cached {
+            return Ok(api);
+        }
+        let api = self
+            .site_matrix
+            .get_api_for_wiki(&wiki)
+            .await
+            .with_context(|| format!("Could not initialise the MediaWiki API client for {wiki}"))?;
+        if let Ok(mut cache) = self.api_cache.write() {
+            cache.insert(wiki, api.clone());
+        }
+        Ok(api)
     }
 
     // ------------------------------------------------------------------
@@ -414,10 +498,33 @@ impl Drop for ThreadGuard {
 /// HTTP status code; previously every failure rendered as 200, which
 /// meant monitoring could not distinguish a DB outage from a successful
 /// zero-result query.
+/// Why a request was turned away at admission. Shown to the user, so it
+/// says what is happening and what to do about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverloadError {
+    running: usize,
+    waiting: usize,
+    reason: String,
+}
+
+impl std::fmt::Display for OverloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PetScan is overloaded ({} queries running, {} waiting): {}. Please try again in a few minutes.",
+            self.running, self.waiting, self.reason
+        )
+    }
+}
+
+impl std::error::Error for OverloadError {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppError {
     /// 400 — user input was rejected.
     BadRequest,
+    /// 503 — admission control turned the request away; retry later.
+    Overloaded,
     /// 502 — a replica or external API failed.
     Upstream,
     /// 500 — anything else (treat as a server bug).
@@ -428,6 +535,7 @@ impl AppError {
     pub const fn status(self) -> u16 {
         match self {
             AppError::BadRequest => 400,
+            AppError::Overloaded => 503,
             AppError::Upstream => 502,
             AppError::Internal => 500,
         }
@@ -439,8 +547,11 @@ impl AppError {
     /// common shapes so most user-visible failures get the right status.
     pub fn classify(error: &str) -> Self {
         let lc = error.to_lowercase();
+        // Admission control turned the request away (503).
+        if lc.contains("overloaded") {
+            AppError::Overloaded
         // Upstream / infrastructure failures (502).
-        if lc.contains("max_user_connections")
+        } else if lc.contains("max_user_connections")
             || lc.contains("connection refused")
             || lc.contains("connection reset")
             || lc.contains("timed out")
@@ -884,5 +995,76 @@ mod tests {
                 .db_host_and_schema_for_wiki("be-taraskwiki", DbCluster::Core)
                 .1
         );
+    }
+
+    #[tokio::test]
+    async fn acquire_request_permit_succeeds_when_idle() {
+        let state = AppState::default();
+        assert!(state.acquire_request_permit().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn acquire_request_permit_rejects_when_queue_is_full() {
+        let state = AppState::default();
+        let _slots = state.saturate_for_test();
+        let err = state.acquire_request_permit().await.unwrap_err();
+        assert_eq!(
+            (err.running, err.waiting),
+            (MAX_CONCURRENT_REQUESTS, MAX_QUEUED_REQUESTS)
+        );
+        assert!(err.to_string().contains("queue is full"), "{err}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn acquire_request_permit_gives_up_after_queue_wait_timeout() {
+        let state = AppState::default();
+        let _running = state
+            .request_semaphore
+            .clone()
+            .try_acquire_many_owned(MAX_CONCURRENT_REQUESTS as u32)
+            .expect("fresh state");
+        let err = state.acquire_request_permit().await.unwrap_err();
+        assert!(err.to_string().contains("no slot became free"), "{err}");
+        assert_eq!(err.running, MAX_CONCURRENT_REQUESTS);
+        // The queue slot is released once the caller has been turned away.
+        assert_eq!(
+            state.queue_semaphore.available_permits(),
+            MAX_QUEUED_REQUESTS
+        );
+    }
+
+    #[test]
+    fn overloaded_errors_map_to_503() {
+        let state = AppState::default();
+        let message = state
+            .overload_error("the waiting queue is full")
+            .to_string();
+        assert_eq!(AppError::classify(&message), AppError::Overloaded);
+        assert_eq!(AppError::Overloaded.status(), 503);
+    }
+
+    #[tokio::test]
+    async fn get_api_for_wiki_error_names_the_wiki() {
+        let err = AppState::default()
+            .get_api_for_wiki("nosuchwiki".to_string())
+            .await
+            .unwrap_err();
+        // The wiki is named, and the underlying cause stays in the chain.
+        let chain = format!("{err:#}");
+        assert!(
+            chain.starts_with("Could not initialise the MediaWiki API client for nosuchwiki: "),
+            "{chain}"
+        );
+        assert!(err.chain().count() > 1, "{chain}");
+    }
+
+    #[test]
+    fn render_error_escapes_html() {
+        let state = AppState::for_test_with_main_page("<!--output-->");
+        let params =
+            FormParameters::new_from_pairs([("format".to_string(), "html".to_string())].into());
+        let response = state.render_error("Invalid PSID '<script>x</script>'".to_string(), &params);
+        assert!(!response.s.contains("<script>"), "{}", response.s);
+        assert!(response.s.contains("&lt;script&gt;"), "{}", response.s);
     }
 }
