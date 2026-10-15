@@ -80,6 +80,15 @@ impl WikidataEntityType {
     }
 }
 
+/// The error for a query that would load more than `limit` pages; `what`
+/// completes "Too many results: …", e.g. "this query yields".
+pub fn too_many_results(what: &str, limit: usize) -> anyhow::Error {
+    anyhow!(
+        "Too many results: {what} more than {limit} pages, the most PetScan handles in one query. \
+         Please narrow it down, e.g. with less category depth, more filters, or a more specific SPARQL query."
+    )
+}
+
 #[derive(Debug)]
 pub struct PageList {
     wiki: RwLock<Option<String>>,
@@ -205,6 +214,14 @@ impl PageList {
 
     pub fn len(&self) -> usize {
         read_lock(&self.entries).len()
+    }
+
+    /// Fails with [`too_many_results`] if this list holds more than `limit` pages.
+    pub fn ensure_at_most(&self, limit: usize) -> Result<()> {
+        if self.len() > limit {
+            return Err(too_many_results("this query yields", limit));
+        }
+        Ok(())
     }
 
     pub fn add_entry(&self, entry: PageListEntry) {
@@ -1178,5 +1195,22 @@ mod tests {
         pl.convert_to_wiki("enwiki", &platform).await.unwrap();
         assert_eq!(pl.wiki(), Some("enwiki".to_string()));
         assert!(pl.is_empty());
+    }
+
+    #[test]
+    fn ensure_at_most_rejects_only_beyond_the_limit() {
+        let pl = PageList::new_from_wiki("enwiki");
+        pl.add_entry(make_entry("A", 0));
+        pl.add_entry(make_entry("B", 0));
+        assert!(pl.ensure_at_most(2).is_ok());
+        let err = pl.ensure_at_most(1).unwrap_err().to_string();
+        assert!(
+            err.starts_with("Too many results: this query yields more than 1 pages"),
+            "{err}"
+        );
+        assert_eq!(
+            crate::app_state::AppError::classify(&err),
+            crate::app_state::AppError::BadRequest
+        );
     }
 }

@@ -835,6 +835,7 @@ impl SourceDatabase {
             .await;
         for pages in results {
             ret.union(&pages?, None).await?;
+            ret.ensure_at_most(state.max_result_entries())?;
         }
         Ok(ret)
     }
@@ -1126,10 +1127,12 @@ impl SourceDatabase {
         cats: &[String],
         out: &PageList,
     ) -> Result<()> {
-        let sql = helpers::category_members_query(cats);
+        let mut sql = helpers::category_members_query(cats);
         if sql.1.is_empty() {
             return Ok(()); // No real titles in this chunk; nothing to fetch.
         }
+        let limit = state.max_result_entries();
+        sql.0 += &format!(" LIMIT {}", limit + 1);
         let rows = state
             .get_wiki_db_connection_for_tables(wiki, helpers::CATEGORY_MEMBERS_TABLES)
             .await?
@@ -1144,6 +1147,12 @@ impl SourceDatabase {
             let mut entry = PageListEntry::new(Title::new(&page_title, page_namespace));
             entry.set_page_id(Some(page_id));
             out.add_entry(entry);
+        }
+        if out.len() > limit {
+            return Err(crate::pagelist::too_many_results(
+                "the categories to exclude hold",
+                limit,
+            ));
         }
         Ok(())
     }
@@ -1240,6 +1249,10 @@ impl SourceDatabase {
         let (inline, deferred) = params.filters.clone().split(state, &wiki, base_cluster)?;
         super::append_sql(&mut sql, inline);
         self.get_pages_for_primary_having(&mut sql);
+        // One row past the cap tells "too many" apart from "exactly the cap"
+        // without loading an unbounded result.
+        let limit = state.max_result_entries();
+        sql.0 += &format!(" LIMIT {}", limit + 1);
 
         let sql_1_len = sql.1.len();
         let mut conn = state
@@ -1247,6 +1260,12 @@ impl SourceDatabase {
             .await?;
         let rows = self.get_pages_for_primary_run_query(sql, &mut conn).await?;
         drop(conn);
+        if rows.len() > limit {
+            return Err(crate::pagelist::too_many_results(
+                "this query yields",
+                limit,
+            ));
+        }
         Platform::profile("DSDB::get_pages_for_primary RUN FINISHED", Some(sql_1_len));
 
         let rows = Self::apply_deferred_filters(state, &wiki, base_cluster, deferred, rows).await?;

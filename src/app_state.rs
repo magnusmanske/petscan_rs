@@ -98,6 +98,8 @@ pub struct AppState {
     queue_semaphore: Arc<Semaphore>,
     /// One API client per wiki, shared by every request in this process.
     api_cache: Arc<RwLock<HashMap<String, Api>>>,
+    /// See [`Config::max_result_entries`].
+    max_result_entries: usize,
 }
 
 impl Default for AppState {
@@ -112,6 +114,7 @@ impl Default for AppState {
             request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             queue_semaphore: Arc::new(Semaphore::new(MAX_QUEUED_REQUESTS)),
             api_cache: Arc::default(),
+            max_result_entries: crate::config::DEFAULT_MAX_RESULT_ENTRIES,
         }
     }
 }
@@ -149,8 +152,14 @@ impl AppState {
             db_manager,
             site_matrix,
             main_page,
+            max_result_entries: config.max_result_entries(),
             ..Self::default()
         })
+    }
+
+    /// The most pages one query may load. See [`Config::max_result_entries`].
+    pub const fn max_result_entries(&self) -> usize {
+        self.max_result_entries
     }
 
     /// Acquire a permit before doing heavy per-request work. The permit is
@@ -577,6 +586,10 @@ impl AppError {
         // Admission control turned the request away (503).
         if lc.contains("overloaded") {
             AppError::Overloaded
+        // The query asked for more than the result cap; checked before the
+        // upstream keywords, since its advice mentions SPARQL (400).
+        } else if lc.contains("too many results") {
+            AppError::BadRequest
         // Upstream / infrastructure failures (502).
         } else if lc.contains("max_user_connections")
             || lc.contains("connection refused")

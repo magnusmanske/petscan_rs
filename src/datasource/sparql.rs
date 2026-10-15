@@ -1,15 +1,21 @@
 use crate::datasource::DataSource;
-use crate::pagelist::PageList;
+use crate::pagelist::{PageList, too_many_results};
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use serde_json::value::Value;
+use serde::de::{Deserialize, DeserializeOwned, Deserializer, IgnoredAny, SeqAccess, Visitor};
+use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 use std::time::{self, Duration};
 use wikimisc::mediawiki::api::Api;
 use wikimisc::mediawiki::reqwest::{self, ClientBuilder};
 
 const SPARQL_TIMEOUT_SEC: u64 = 60 * 10; // 10 min
+/// Bytes a SPARQL response may average per allowed row before it is refused
+/// unread. Generous for `?item` plus a label or two; it bounds what is
+/// buffered before the rows can be counted.
+const MAX_SPARQL_BYTES_PER_ROW: usize = 300;
 const QLEVER_WD_PREFIX: &str = "PREFIX wikibase: <http://wikiba.se/ontology#>
 PREFIX wd: <http://www.wikidata.org/entity/>
 PREFIX wdt: <http://www.wikidata.org/prop/direct/>";
@@ -43,50 +49,145 @@ impl SparqlServer {
 
     /// Parse a standard SPARQL JSON response. Both WDQS and QLever emit the same
     /// W3C SPARQL 1.1 JSON format, so one parser handles both endpoints.
-    fn parse_response(response: &str, api: &Api) -> Result<PageList> {
-        Self::parse_response_standard(response, api)
+    fn parse_response(response: &str, api: &Api, limit: usize) -> Result<PageList> {
+        let ret = PageList::new_from_wiki("wikidatawiki");
+        Self::first_var_values(response, limit)?
+            .iter()
+            .filter_map(|uri| api.extract_entity_from_uri(uri).ok())
+            .filter_map(|entity| Platform::entry_from_entity(&entity))
+            .for_each(|entry| ret.add_entry(entry));
+        Ok(ret)
+    }
+
+    /// The values of the result's first variable, refused once there are
+    /// more than `limit` rows. The rows are counted before any is kept, so an
+    /// oversized result costs no more memory than its text.
+    fn first_var_values(response: &str, limit: usize) -> Result<Vec<String>> {
+        let response = Self::sanitize_control_chars(response);
+        let counted: SparqlJson<ArrayLen> = Self::parse_sparql_json(&response)?;
+        if counted.results.bindings.0 > limit {
+            return Err(too_many_results("the SPARQL result has", limit));
+        }
+        let first_var = counted
+            .head
+            .vars
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("No variables found in SPARQL result"))?;
+        let rows: SparqlJson<Vec<SparqlRow>> = Self::parse_sparql_json(&response)?;
+        Ok(rows
+            .results
+            .bindings
+            .into_iter()
+            .filter_map(|mut row| row.remove(&first_var))
+            .map(|binding| binding.value)
+            .collect())
     }
 
     /// Replace stray control characters (the endpoints occasionally emit them)
-    /// with spaces, keeping the JSON-significant whitespace intact.
-    fn sanitize_control_chars(response: &str) -> String {
-        response
-            .chars()
-            .map(|c| {
-                if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
-                    ' '
-                } else {
-                    c
-                }
-            })
-            .collect()
+    /// with spaces, keeping the JSON-significant whitespace intact. Borrows
+    /// the response when there is nothing to replace.
+    fn sanitize_control_chars(response: &str) -> Cow<'_, str> {
+        let is_bad = |c: char| c.is_control() && c != '\n' && c != '\r' && c != '\t';
+        if !response.contains(is_bad) {
+            return Cow::Borrowed(response);
+        }
+        Cow::Owned(
+            response
+                .chars()
+                .map(|c| if is_bad(c) { ' ' } else { c })
+                .collect(),
+        )
     }
 
     /// Parse the SPARQL endpoint's body as JSON, turning the opaque serde error
     /// (`expected value at line 1 column 1`, issue #209) into an actionable
     /// message: a non-JSON body almost always means a transient endpoint
     /// problem (timeout, throttling, maintenance, or an HTML error page).
-    fn parse_sparql_json(response: &str) -> Result<Value> {
-        let sanitized = Self::sanitize_control_chars(response);
-        serde_json::from_str(&sanitized).map_err(|e| {
-            let snippet: String = sanitized.trim().chars().take(200).collect();
+    fn parse_sparql_json<T: DeserializeOwned>(response: &str) -> Result<T> {
+        serde_json::from_str(response).map_err(|e| {
+            let snippet: String = response.trim().chars().take(200).collect();
             anyhow!(
                 "SPARQL endpoint did not return valid JSON ({e}). This is usually a transient endpoint error (timeout, rate limit, or maintenance); please retry. Response began: {snippet:?}"
             )
         })
     }
 
-    fn parse_response_standard(response: &str, api: &Api) -> Result<PageList> {
-        let result = Self::parse_sparql_json(response)?;
-        let first_var = result["head"]["vars"][0]
-            .as_str()
-            .ok_or_else(|| anyhow!("No variables found in SPARQL result"))?;
-        let ret = PageList::new_from_wiki("wikidatawiki");
-        api.entities_from_sparql_result(&result, first_var)
-            .iter()
-            .filter_map(|e| Platform::entry_from_entity(e))
-            .for_each(|entry| ret.add_entry(entry));
-        Ok(ret)
+    /// Reads the response body, refusing one larger than `limit` rows could
+    /// plausibly need before it is buffered in full.
+    async fn read_capped(mut response: reqwest::Response, limit: usize) -> Result<String> {
+        let max_bytes = limit.saturating_mul(MAX_SPARQL_BYTES_PER_ROW);
+        let too_large = || {
+            too_many_results(
+                &format!(
+                    "the SPARQL result exceeds {} MB, so it likely has",
+                    max_bytes / 1_000_000
+                ),
+                limit,
+            )
+        };
+        if response
+            .content_length()
+            .is_some_and(|n| n as usize > max_bytes)
+        {
+            return Err(too_large());
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if body.len() + chunk.len() > max_bytes {
+                return Err(too_large());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        String::from_utf8(body).map_err(|e| anyhow!("SPARQL response is not UTF-8: {e}"))
+    }
+}
+
+/// A SPARQL JSON result, with `bindings` read as `B`.
+#[derive(Debug, serde::Deserialize)]
+struct SparqlJson<B> {
+    head: SparqlHead,
+    results: SparqlResults<B>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SparqlHead {
+    vars: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SparqlResults<B> {
+    bindings: B,
+}
+
+type SparqlRow = HashMap<String, SparqlBinding>;
+
+#[derive(Debug, serde::Deserialize)]
+struct SparqlBinding {
+    value: String,
+}
+
+/// Reads a JSON array as just its length, skipping the elements.
+#[derive(Debug)]
+struct ArrayLen(usize);
+
+impl<'de> Deserialize<'de> for ArrayLen {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct LenVisitor;
+        impl<'de> Visitor<'de> for LenVisitor {
+            type Value = ArrayLen;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an array")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<ArrayLen, A::Error> {
+                let mut len = 0;
+                while seq.next_element::<IgnoredAny>()?.is_some() {
+                    len += 1;
+                }
+                Ok(ArrayLen(len))
+            }
+        }
+        deserializer.deserialize_seq(LenVisitor)
     }
 }
 
@@ -134,8 +235,9 @@ impl DataSource for SourceSparql {
             Err(e) => return Err(anyhow!("SPARQL: {e}")),
         };
 
-        let response = response.text().await?;
-        tokio::task::spawn_blocking(move || SparqlServer::parse_response(&response, &api))
+        let limit = platform.state().max_result_entries();
+        let response = SparqlServer::read_capped(response, limit).await?;
+        tokio::task::spawn_blocking(move || SparqlServer::parse_response(&response, &api, limit))
             .await
             .map_err(|e| anyhow!("SPARQL parse task failed: {e}"))?
     }
@@ -239,15 +341,55 @@ mod tests {
     #[test]
     fn test_parse_sparql_json_valid() {
         let json = r#"{"head":{"vars":["item"]},"results":{"bindings":[]}}"#;
-        let value = SparqlServer::parse_sparql_json(json).expect("valid JSON should parse");
-        assert_eq!(value["head"]["vars"][0], "item");
+        let parsed: SparqlJson<ArrayLen> =
+            SparqlServer::parse_sparql_json(json).expect("valid JSON should parse");
+        assert_eq!(parsed.head.vars, vec!["item"]);
+        assert_eq!(parsed.results.bindings.0, 0);
+    }
+
+    const TWO_ROWS: &str = r#"{"head":{"vars":["item","label"]},"results":{"bindings":[
+        {"item":{"type":"uri","value":"http://www.wikidata.org/entity/Q1"},"label":{"type":"literal","value":"say \"hi\""}},
+        {"label":{"type":"literal","value":"no item"}},
+        {"item":{"type":"uri","value":"http://www.wikidata.org/entity/Q2"}}
+    ]}}"#;
+
+    #[test]
+    fn test_first_var_values_keeps_bound_first_variable_only() {
+        let values = SparqlServer::first_var_values(TWO_ROWS, 10).unwrap();
+        assert_eq!(
+            values,
+            vec![
+                "http://www.wikidata.org/entity/Q1",
+                "http://www.wikidata.org/entity/Q2"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_first_var_values_refuses_more_rows_than_the_limit() {
+        // Three rows, counted before any is kept; two are allowed.
+        let err = SparqlServer::first_var_values(TWO_ROWS, 2)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with("Too many results: the SPARQL result has more than 2 pages"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_borrows_clean_input() {
+        assert!(matches!(
+            SparqlServer::sanitize_control_chars("clean"),
+            Cow::Borrowed("clean")
+        ));
     }
 
     #[test]
     fn test_parse_sparql_json_non_json_gives_actionable_error() {
         // An HTML error page (e.g. WDQS 429/503) — the exact failure behind #209.
         let html = "<html><body>429 Too Many Requests</body></html>";
-        let err = SparqlServer::parse_sparql_json(html)
+        let err = SparqlServer::parse_sparql_json::<SparqlJson<ArrayLen>>(html)
             .expect_err("non-JSON must be an error")
             .to_string();
         assert!(err.contains("did not return valid JSON"), "got: {err}");
@@ -258,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_parse_sparql_json_empty_body_is_error() {
-        let err = SparqlServer::parse_sparql_json("")
+        let err = SparqlServer::parse_sparql_json::<SparqlJson<ArrayLen>>("")
             .expect_err("empty body must be an error")
             .to_string();
         assert!(err.contains("did not return valid JSON"), "got: {err}");

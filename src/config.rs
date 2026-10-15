@@ -11,6 +11,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use wikimisc::telemetry::TelemetryConfig;
 
+/// Default for [`Config::max_result_entries`]. A million entries take about
+/// half a gigabyte while a query runs; the service's memory limit is 7 GB.
+pub const DEFAULT_MAX_RESULT_ENTRIES: usize = 1_000_000;
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -40,9 +44,17 @@ pub struct Config {
     /// Service-dashboard push target. Both fields are optional; without a
     /// token here or in `$DASHBOARD_TOKEN`, telemetry stays off.
     pub telemetry: TelemetryConfig,
+    /// The most pages a single query may load before it is refused with an
+    /// explanation. Defaults to [`DEFAULT_MAX_RESULT_ENTRIES`].
+    pub max_result_entries: Option<usize>,
 }
 
 impl Config {
+    pub fn max_result_entries(&self) -> usize {
+        self.max_result_entries
+            .unwrap_or(DEFAULT_MAX_RESULT_ENTRIES)
+    }
+
     /// Load the config from a JSON file. Unknown JSON fields are ignored.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -127,5 +139,13 @@ mod tests {
         let c: Config = serde_json::from_str(json).unwrap();
         assert_eq!(c.port_mapping.get("enwiki"), Some(&3309));
         assert_eq!(c.port_mapping.get("x3"), Some(&3310));
+    }
+
+    #[test]
+    fn max_result_entries_defaults_and_overrides() {
+        let default: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(default.max_result_entries(), DEFAULT_MAX_RESULT_ENTRIES);
+        let custom: Config = serde_json::from_str(r#"{"max_result_entries": 250000}"#).unwrap();
+        assert_eq!(custom.max_result_entries(), 250_000);
     }
 }

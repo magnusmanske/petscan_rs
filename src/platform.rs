@@ -229,6 +229,10 @@ impl Platform {
             .zip(source_results)
             .map(|(name, result)| result.map(|pl| (name, pl)))
             .collect::<Result<_, _>>()?;
+        let limit = self.state.max_result_entries();
+        for pagelist in results.values() {
+            pagelist.ensure_at_most(limit)?;
+        }
 
         self.wiki_by_source = results
             .iter()
@@ -244,6 +248,7 @@ impl Platform {
             .combine_results(&mut results, serialized_combination)
             .await?;
         drop(results);
+        result.ensure_at_most(limit)?;
 
         self.result = Some(result);
         Platform::profile("after combine_results", None);

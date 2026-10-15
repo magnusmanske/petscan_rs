@@ -33,9 +33,17 @@ impl DataSource for SourcePagePile {
             .ok_or(anyhow!("PagePile {pagepile} does not specify a wiki"))?;
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?; // Just because we need query_raw
         let ret = PageList::new_from_wiki(wiki);
-        v["pages"]
+        let pages = v["pages"]
             .as_array()
-            .ok_or(anyhow!("PagePile {pagepile} does not have a 'pages' array"))?
+            .ok_or(anyhow!("PagePile {pagepile} does not have a 'pages' array"))?;
+        let limit = platform.state().max_result_entries();
+        if pages.len() > limit {
+            return Err(crate::pagelist::too_many_results(
+                &format!("PagePile {pagepile} holds"),
+                limit,
+            ));
+        }
+        pages
             .iter()
             .filter_map(|title| title.as_str())
             .map(|title| PageListEntry::new(Title::new_from_full(title, &api)))
