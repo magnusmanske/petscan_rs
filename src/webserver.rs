@@ -13,7 +13,7 @@ use axum::routing::any;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use url::form_urlencoded;
@@ -173,7 +173,7 @@ impl WebServer {
             if let Some(config_code) = self.app_state.get_restart_code()
                 && given_code == config_code
             {
-                self.app_state.shut_down();
+                self.app_state.shut_down("restart requested");
             }
         }
 
@@ -266,6 +266,23 @@ impl WebServer {
             }
         };
 
+        let platform = Platform::new_from_parameters(&form_parameters, self.app_state.clone());
+        let format = platform.output_format();
+        let started = Instant::now();
+        let response = self
+            .run_query(platform, &form_parameters, single_psid)
+            .await;
+        crate::telemetry::record_query(format, started.elapsed());
+        response
+    }
+
+    /// Runs an admitted query and renders its result.
+    async fn run_query(
+        &self,
+        mut platform: Platform,
+        form_parameters: &FormParameters,
+        single_psid: Option<u64>,
+    ) -> MyResponse {
         // Logged only once the query actually starts, so queued requests
         // neither touch the tools DB nor show up as running.
         let started_query_id = match self
@@ -283,7 +300,6 @@ impl WebServer {
         // drop — including unwind — so a panic anywhere below cannot leave
         // the counter permanently inflated.
         let _thread_guard = self.app_state.track_thread();
-        let mut platform = Platform::new_from_parameters(&form_parameters, self.app_state.clone());
         Platform::profile("platform initialized", None);
         let platform_result = platform.run().await;
         match self.app_state.log_query_end(started_query_id).await {
@@ -303,7 +319,7 @@ impl WebServer {
                 // like reqwest's "builder error" arrives with its cause.
                 return self
                     .app_state
-                    .render_error(format!("{error:#}"), &form_parameters);
+                    .render_error(format!("{error:#}"), form_parameters);
             }
         }
 
@@ -321,7 +337,7 @@ impl WebServer {
                     // log_query_end was already called above after platform.run(); do not call it again
                     return self
                         .app_state
-                        .render_error(format!("{e:#}"), &form_parameters);
+                        .render_error(format!("{e:#}"), form_parameters);
                 }
             },
         };
@@ -332,7 +348,7 @@ impl WebServer {
             Ok(response) => response,
             Err(e) => self
                 .app_state
-                .render_error(format!("{e:#}"), &form_parameters),
+                .render_error(format!("{e:#}"), form_parameters),
         };
         drop(platform);
         response
@@ -354,9 +370,13 @@ impl WebServer {
 
 /// Axum entry point. Defers to [`WebServer::process_request`] so the handler
 /// body stays a method on `WebServer` rather than a free function juggling
-/// `State` everywhere.
+/// `State` everywhere. Every response, including 503 overload rejections and
+/// 504 timeouts, is counted for the service dashboard.
 async fn handle(State(server): State<WebServer>, req: Request) -> Response {
-    server.process_request(req).await
+    let started = Instant::now();
+    let response = server.process_request(req).await;
+    wikimisc::telemetry::record_http_request(response.status().as_u16(), started.elapsed());
+    response
 }
 
 /// Walks the `std::error::Error` source chain looking for a substring in any

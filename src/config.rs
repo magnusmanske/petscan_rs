@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
+use wikimisc::telemetry::TelemetryConfig;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -36,6 +37,9 @@ pub struct Config {
     /// Local-dev SSH-tunnel port overrides, keyed by wiki (e.g. `enwiki`) or
     /// the literal `x3` for the term-store cluster.
     pub port_mapping: HashMap<String, u16>,
+    /// Service-dashboard push target. Both fields are optional; without a
+    /// token here or in `$DASHBOARD_TOKEN`, telemetry stays off.
+    pub telemetry: TelemetryConfig,
 }
 
 impl Config {
@@ -66,6 +70,7 @@ mod tests {
         assert!(!c.use_file_table);
         assert_eq!(c.restart_code, None);
         assert!(c.port_mapping.is_empty());
+        assert_eq!(c.telemetry.token, None);
     }
 
     #[test]
@@ -107,6 +112,13 @@ mod tests {
         // Forward compatibility: deployments may add fields we don't yet read.
         let c: Config = serde_json::from_str(r#"{"completely_made_up": 42}"#).unwrap();
         assert_eq!(c.host, "");
+    }
+
+    #[test]
+    fn telemetry_block() {
+        let c: Config = serde_json::from_str(r#"{"telemetry":{"token":"t"}}"#).unwrap();
+        assert_eq!(c.telemetry.token.as_deref(), Some("t"));
+        assert_eq!(c.telemetry.url, None);
     }
 
     #[test]

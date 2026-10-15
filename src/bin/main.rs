@@ -15,6 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if args.len() > 1 {
         command_line_usage(app_state).await?;
     } else {
+        petscan_rs::telemetry::start(&petscan_config.telemetry, app_state.clone());
         spawn_shutdown_signal_handler(app_state.clone());
         let webserver = WebServer::new(app_state, petscan_config);
         webserver.run().await?;
@@ -25,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 /// Spawn a task that listens for SIGTERM/SIGINT and triggers the existing
 /// drain-shutdown logic on `AppState`. New requests after the signal arrives
 /// receive "Temporary maintenance"; the process exits via `try_shutdown`
-/// once in-flight requests drain to zero.
+/// once in-flight requests drain to zero, after the final telemetry push.
 #[cfg(unix)]
 fn spawn_shutdown_signal_handler(app_state: Arc<AppState>) {
     tokio::spawn(async move {
@@ -49,7 +50,7 @@ fn spawn_shutdown_signal_handler(app_state: Arc<AppState>) {
             _ = sigint.recv() => "SIGINT",
         };
         tracing::info!("Received {received}; draining in-flight requests");
-        app_state.shut_down();
+        app_state.shut_down(received);
         // If nothing is in flight right now, exit immediately; otherwise the
         // last decrement of `threads_running` will trip `try_shutdown`.
         app_state.try_shutdown();

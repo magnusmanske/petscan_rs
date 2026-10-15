@@ -9,12 +9,14 @@ use mysql_async as my;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use wikimisc::mediawiki::api::Api;
 use wikimisc::site_matrix::SiteMatrix;
+use wikimisc::telemetry::ExitReason;
 
 /// Inbound concurrency cap: at most this many `process_form` calls run at
 /// once. Excess requests queue on the semaphore, up to
@@ -83,7 +85,10 @@ where
 pub struct AppState {
     db_manager: DatabaseManager,
     threads_running: Arc<RwLock<i64>>,
-    shutting_down: Arc<RwLock<bool>>,
+    /// Set once a graceful shutdown starts; says why (e.g. `"SIGTERM"`).
+    shutdown_reason: Arc<OnceLock<String>>,
+    /// Set once the drained process has started exiting.
+    exiting: Arc<AtomicBool>,
     site_matrix: SiteMatrix,
     main_page: String,
     /// Caps inbound request concurrency. See [`MAX_CONCURRENT_REQUESTS`].
@@ -100,7 +105,8 @@ impl Default for AppState {
         Self {
             db_manager: DatabaseManager::default(),
             threads_running: Arc::new(RwLock::new(0)),
-            shutting_down: Arc::new(RwLock::new(false)),
+            shutdown_reason: Arc::default(),
+            exiting: Arc::default(),
             site_matrix: SiteMatrix::default(),
             main_page: String::default(),
             request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
@@ -176,10 +182,20 @@ impl AppState {
 
     fn overload_error(&self, reason: &str) -> OverloadError {
         OverloadError {
-            running: MAX_CONCURRENT_REQUESTS - self.request_semaphore.available_permits(),
-            waiting: MAX_QUEUED_REQUESTS - self.queue_semaphore.available_permits(),
+            running: self.requests_running(),
+            waiting: self.requests_waiting(),
             reason: reason.to_string(),
         }
+    }
+
+    /// Requests currently holding a permit, i.e. doing real work.
+    pub fn requests_running(&self) -> usize {
+        MAX_CONCURRENT_REQUESTS - self.request_semaphore.available_permits()
+    }
+
+    /// Requests currently queued for a permit.
+    pub fn requests_waiting(&self) -> usize {
+        MAX_QUEUED_REQUESTS - self.queue_semaphore.available_permits()
     }
 
     /// Test-only: occupy every running and queued slot, so the next
@@ -425,14 +441,20 @@ impl AppState {
     // Native AppState behaviour – thread / shutdown management
     // ------------------------------------------------------------------
 
+    /// Exits once a shutdown has been requested and nothing is in flight.
+    /// The exit waits (a few seconds at most) for the final telemetry push.
     pub fn try_shutdown(&self) {
-        if !self.is_shutting_down() {
+        let Some(reason) = self.shutdown_reason.get() else {
+            return;
+        };
+        if self.threads_running() != 0 || self.exiting.swap(true, Ordering::SeqCst) {
             return;
         }
-        if let Ok(tr) = self.threads_running.read()
-            && *tr == 0
-        {
-            ::std::process::exit(0);
+        tracing::info!("Nothing in flight; exiting ({reason})");
+        let exit = telemetry_shutdown_then_exit(reason.clone());
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => drop(runtime.spawn(exit)),
+            Err(_) => std::process::exit(0),
         }
     }
 
@@ -460,13 +482,13 @@ impl AppState {
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        self.shutting_down.read().is_ok_and(|x| *x)
+        self.shutdown_reason.get().is_some()
     }
 
-    pub fn shut_down(&self) {
-        if let Ok(mut sd) = self.shutting_down.write() {
-            *sd = true;
-        }
+    /// Starts a graceful shutdown; `reason` (e.g. `"SIGTERM"`) is reported
+    /// to the dashboard. The first reason given wins.
+    pub fn shut_down(&self, reason: &str) {
+        let _ = self.shutdown_reason.set(reason.to_string());
     }
 
     pub const fn site_matrix(&self) -> &SiteMatrix {
@@ -477,6 +499,11 @@ impl AppState {
     pub const fn db_manager(&self) -> &DatabaseManager {
         &self.db_manager
     }
+}
+
+async fn telemetry_shutdown_then_exit(reason: String) {
+    wikimisc::telemetry::shutdown(ExitReason::Shutdown(reason)).await;
+    std::process::exit(0);
 }
 
 /// RAII guard returned by [`AppState::track_thread`]. Decrements the
@@ -795,8 +822,24 @@ mod tests {
     fn test_shut_down() {
         let state = AppState::default();
         assert!(!state.is_shutting_down());
-        state.shut_down();
+        state.shut_down("SIGTERM");
         assert!(state.is_shutting_down());
+        state.shut_down("restart requested");
+        assert_eq!(
+            state.shutdown_reason.get().map(String::as_str),
+            Some("SIGTERM")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_requests_running_and_waiting() {
+        let state = AppState::default();
+        assert_eq!((state.requests_running(), state.requests_waiting()), (0, 0));
+        let _slots = state.saturate_for_test();
+        assert_eq!(
+            (state.requests_running(), state.requests_waiting()),
+            (MAX_CONCURRENT_REQUESTS, MAX_QUEUED_REQUESTS)
+        );
     }
 
     #[test]

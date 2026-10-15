@@ -55,6 +55,7 @@ pub mod pagelist_entry;
 pub mod platform;
 pub mod query_context;
 pub mod render;
+pub mod telemetry;
 pub mod wdfist;
 pub mod webserver;
 

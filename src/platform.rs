@@ -305,7 +305,7 @@ impl Platform {
         .map_err(|e| anyhow!("Sort task failed: {e}"))?;
         self.apply_results_limit(&mut pages);
 
-        match self.get_param_blank("format").as_str() {
+        match self.output_format() {
             "wiki" => RenderWiki::new().response(self, &wiki, pages).await,
             "csv" => RenderTSV::new(",").response(self, &wiki, pages).await,
             "tsv" => RenderTSV::new("\t").response(self, &wiki, pages).await,
@@ -315,6 +315,22 @@ impl Platform {
             "kml" => RenderKML::new().response(self, &wiki, pages).await,
             "plain" => RenderPlainText::new().response(self, &wiki, pages).await,
             _ => RenderHTML::new().response(self, &wiki, pages).await,
+        }
+    }
+
+    /// The output format, as one of a fixed set of names; anything
+    /// unknown renders as HTML.
+    pub fn output_format(&self) -> &'static str {
+        match self.get_param_blank("format").as_str() {
+            "wiki" => "wiki",
+            "csv" => "csv",
+            "tsv" => "tsv",
+            "json" => "json",
+            "jsonl" => "jsonl",
+            "pagepile" => "pagepile",
+            "kml" => "kml",
+            "plain" => "plain",
+            _ => "html",
         }
     }
 
@@ -433,6 +449,19 @@ mod tests {
         let warnings = p.warnings().unwrap();
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0], "test warning");
+    }
+
+    #[test]
+    fn test_output_format_is_bounded() {
+        assert_eq!(
+            make_platform(vec![("format", "tsv")]).output_format(),
+            "tsv"
+        );
+        assert_eq!(make_platform(vec![]).output_format(), "html");
+        assert_eq!(
+            make_platform(vec![("format", "<script>")]).output_format(),
+            "html"
+        );
     }
 
     #[test]
