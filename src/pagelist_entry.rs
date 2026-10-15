@@ -201,19 +201,29 @@ impl TriState {
 
 //________________________________________________________________________________________________________________________
 
+/// Entries are stored by value in a hash set, often millions per query, so
+/// the struct is kept small: the fields that only some output options fill
+/// live in [`EntryExtras`], allocated on first use. That cut the entry from
+/// 472 bytes to the size pinned in `test_entry_stays_small`.
 #[derive(Debug, Clone)]
 pub struct PageListEntry {
     title: Title,
     disambiguation: TriState,
     page_id: Option<u32>,
     page_bytes: Option<u32>,
+    page_timestamp: Option<String>,
+    wikidata_item: Option<String>,
+    extras: Option<Box<EntryExtras>>,
+}
+
+/// The rarely set fields of a [`PageListEntry`].
+#[derive(Debug, Clone, Default)]
+struct EntryExtras {
     incoming_links: Option<LinkCount>,
     link_count: Option<LinkCount>,
     redlink_count: Option<LinkCount>,
     sitelink_count: Option<LinkCount>,
-    page_timestamp: Option<String>,
     page_image: Option<String>,
-    wikidata_item: Option<String>,
     wikidata_label: Option<String>,
     wikidata_description: Option<String>,
     defaultsort: Option<String>,
@@ -240,72 +250,71 @@ impl PageListEntry {
     pub const fn new(title: Title) -> Self {
         Self {
             title,
-            wikidata_item: None,
+            disambiguation: TriState::Unknown,
             page_id: None,
             page_bytes: None,
             page_timestamp: None,
-            defaultsort: None,
-            disambiguation: TriState::Unknown,
-            incoming_links: None,
-            page_image: None,
-            coordinates: None,
-            link_count: None,
-            sitelink_count: None,
-            file_info: None,
-            wikidata_label: None,
-            wikidata_description: None,
-            redlink_count: None,
+            wikidata_item: None,
+            extras: None,
         }
     }
 
+    /// Reads one of the rarely set fields; `None` when none was ever set.
+    fn extra<T>(&self, field: impl FnOnce(&EntryExtras) -> Option<T>) -> Option<T> {
+        self.extras.as_deref().and_then(field)
+    }
+
+    /// Writes one of the rarely set fields, allocating [`EntryExtras`] only
+    /// for an actual value.
+    fn set_extra<T>(
+        &mut self,
+        value: Option<T>,
+        field: impl FnOnce(&mut EntryExtras) -> &mut Option<T>,
+    ) {
+        if value.is_none() && self.extras.is_none() {
+            return;
+        }
+        *field(self.extras.get_or_insert_with(Box::default)) = value;
+    }
+
     pub fn get_file_info(&self) -> Option<FileInfo> {
-        self.file_info
-            .as_ref()
-            .map(|file_info| file_info.to_owned())
+        self.extra(|e| e.file_info.clone())
     }
 
     pub fn set_file_info(&mut self, file_info_option: Option<FileInfo>) {
-        self.file_info = file_info_option;
+        self.set_extra(file_info_option, |e| &mut e.file_info);
     }
 
     pub fn get_coordinates(&self) -> Option<wikimisc::lat_lon::LatLon> {
-        self.coordinates
-            .as_ref()
-            .map(|coordinates| coordinates.to_owned())
+        self.extra(|e| e.coordinates.clone())
     }
 
-    pub const fn set_coordinates(&mut self, coordinates_option: Option<wikimisc::lat_lon::LatLon>) {
-        self.coordinates = coordinates_option;
+    pub fn set_coordinates(&mut self, coordinates_option: Option<wikimisc::lat_lon::LatLon>) {
+        self.set_extra(coordinates_option, |e| &mut e.coordinates);
     }
 
     pub fn get_defaultsort(&self) -> Option<String> {
-        self.defaultsort
-            .as_ref()
-            .map(|defaultsort| defaultsort.to_owned())
+        self.extra(|e| e.defaultsort.clone())
     }
 
     pub fn set_defaultsort(&mut self, defaultsort_option: Option<String>) {
-        self.defaultsort = defaultsort_option;
+        self.set_extra(defaultsort_option, |e| &mut e.defaultsort);
     }
 
     pub fn get_wikidata_description(&self) -> Option<String> {
-        self.wikidata_description
-            .as_ref()
-            .map(|wikidata_description| wikidata_description.to_owned())
+        self.extra(|e| e.wikidata_description.clone())
     }
 
     pub fn set_wikidata_description(&mut self, wikidata_description_option: Option<String>) {
-        self.wikidata_description = wikidata_description_option;
+        self.set_extra(wikidata_description_option, |e| &mut e.wikidata_description);
     }
 
     pub fn get_wikidata_label(&self) -> Option<String> {
-        self.wikidata_label
-            .as_ref()
-            .map(|wikidata_label| wikidata_label.to_owned())
+        self.extra(|e| e.wikidata_label.clone())
     }
 
     pub fn set_wikidata_label(&mut self, wikidata_label_option: Option<String>) {
-        self.wikidata_label = wikidata_label_option;
+        self.set_extra(wikidata_label_option, |e| &mut e.wikidata_label);
     }
 
     pub fn get_wikidata_item(&self) -> Option<String> {
@@ -319,13 +328,11 @@ impl PageListEntry {
     }
 
     pub fn get_page_image(&self) -> Option<String> {
-        self.page_image
-            .as_ref()
-            .map(|page_image| page_image.to_owned())
+        self.extra(|e| e.page_image.clone())
     }
 
     pub fn set_page_image(&mut self, page_image_option: Option<String>) {
-        self.page_image = page_image_option;
+        self.set_extra(page_image_option, |e| &mut e.page_image);
     }
 
     pub fn get_page_timestamp(&self) -> Option<String> {
@@ -382,7 +389,7 @@ impl PageListEntry {
         other: &PageListEntry,
         descending: bool,
     ) -> Ordering {
-        Self::compare_by_opt(&self.redlink_count, &other.redlink_count, descending)
+        Self::compare_by_opt(&self.redlink_count(), &other.redlink_count(), descending)
     }
 
     fn compare_by_size(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
@@ -394,20 +401,17 @@ impl PageListEntry {
         other: &PageListEntry,
         descending: bool,
     ) -> Ordering {
-        Self::compare_by_opt(&self.incoming_links, &other.incoming_links, descending)
+        Self::compare_by_opt(&self.incoming_links(), &other.incoming_links(), descending)
     }
 
     fn get_defaultsort_with_fallback(&self, is_wikidata: bool) -> Option<String> {
-        match &self.defaultsort {
-            Some(x) => Some(x.to_string()),
-            None => {
-                if is_wikidata {
-                    self.get_wikidata_label()
-                } else {
-                    Some(self.title.pretty().to_owned())
-                }
+        self.get_defaultsort().or_else(|| {
+            if is_wikidata {
+                self.get_wikidata_label()
+            } else {
+                Some(self.title.pretty().to_owned())
             }
-        }
+        })
     }
 
     fn compare_by_defaultsort(
@@ -426,7 +430,7 @@ impl PageListEntry {
         other: &PageListEntry,
         descending: bool,
     ) -> Ordering {
-        Self::compare_by_opt(&self.sitelink_count, &other.sitelink_count, descending)
+        Self::compare_by_opt(&self.sitelink_count(), &other.sitelink_count(), descending)
     }
 
     fn compare_by_date(self: &PageListEntry, other: &PageListEntry, descending: bool) -> Ordering {
@@ -527,20 +531,20 @@ impl PageListEntry {
         if descending { ret.reverse() } else { ret }
     }
 
-    pub const fn sitelink_count(&self) -> Option<u32> {
-        self.sitelink_count
+    pub fn sitelink_count(&self) -> Option<LinkCount> {
+        self.extra(|e| e.sitelink_count)
     }
 
-    pub const fn set_sitelink_count(&mut self, sitelink_count: Option<LinkCount>) {
-        self.sitelink_count = sitelink_count;
+    pub fn set_sitelink_count(&mut self, sitelink_count: Option<LinkCount>) {
+        self.set_extra(sitelink_count, |e| &mut e.sitelink_count);
     }
 
-    pub const fn redlink_count(&self) -> Option<u32> {
-        self.redlink_count
+    pub fn redlink_count(&self) -> Option<LinkCount> {
+        self.extra(|e| e.redlink_count)
     }
 
-    pub const fn set_redlink_count(&mut self, redlink_count: Option<LinkCount>) {
-        self.redlink_count = redlink_count;
+    pub fn set_redlink_count(&mut self, redlink_count: Option<LinkCount>) {
+        self.set_extra(redlink_count, |e| &mut e.redlink_count);
     }
 
     pub const fn page_bytes(&self) -> Option<u32> {
@@ -559,20 +563,20 @@ impl PageListEntry {
         self.disambiguation = disambiguation;
     }
 
-    pub const fn link_count(&self) -> Option<u32> {
-        self.link_count
+    pub fn link_count(&self) -> Option<LinkCount> {
+        self.extra(|e| e.link_count)
     }
 
-    pub const fn set_link_count(&mut self, link_count: Option<LinkCount>) {
-        self.link_count = link_count;
+    pub fn set_link_count(&mut self, link_count: Option<LinkCount>) {
+        self.set_extra(link_count, |e| &mut e.link_count);
     }
 
-    pub const fn incoming_links(&self) -> Option<u32> {
-        self.incoming_links
+    pub fn incoming_links(&self) -> Option<LinkCount> {
+        self.extra(|e| e.incoming_links)
     }
 
-    pub const fn set_incoming_links(&mut self, incoming_links: Option<LinkCount>) {
-        self.incoming_links = incoming_links;
+    pub fn set_incoming_links(&mut self, incoming_links: Option<LinkCount>) {
+        self.set_extra(incoming_links, |e| &mut e.incoming_links);
     }
 
     pub const fn page_id(&self) -> Option<u32> {
@@ -1232,5 +1236,23 @@ mod tests {
             .map(|e| e.title().pretty().to_string())
             .collect();
         assert_eq!(titles, vec!["Charlie", "Bravo", "Alpha"]);
+    }
+
+    #[test]
+    fn test_entry_stays_small() {
+        // Millions of entries per query are stored by value; see the
+        // `PageListEntry` docs before letting this grow.
+        assert!(std::mem::size_of::<PageListEntry>() <= 112);
+    }
+
+    #[test]
+    fn test_unset_extras_are_not_allocated() {
+        let mut entry = PageListEntry::new(Title::new("X", 0));
+        entry.set_wikidata_label(None);
+        entry.set_redlink_count(None);
+        assert!(entry.extras.is_none());
+        entry.set_redlink_count(Some(3));
+        assert_eq!(entry.redlink_count(), Some(3));
+        assert_eq!(entry.get_wikidata_label(), None);
     }
 }
