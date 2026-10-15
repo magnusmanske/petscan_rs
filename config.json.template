@@ -9,7 +9,7 @@
 "restart-code":"",
 "use_file_table": false,
 "use_new_categorylinks_table": false,
-"//telemetry":"service dashboard: add \"token\" (or set $DASHBOARD_TOKEN; an empty string here disables that fallback); \"url\" defaults to Buggregator",
+"//telemetry":"service dashboard: add \"token\" (or set $DASHBOARD_TOKEN, but run.sh starts PetScan via sudo, which drops the environment); \"url\" defaults to Buggregator",
 "telemetry":{},
 "//port_mapping":"local SSH-tunnel ports, keyed by the leading labels of the replica host; see connect_test_sql.sh",
 "port_mapping":{
