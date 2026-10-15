@@ -333,6 +333,12 @@ impl AppState {
         self.db_manager.log_query_end(query_id).await
     }
 
+    pub async fn take_orphaned_queries(&self, process_id: u32, since: &str) -> Result<Vec<String>> {
+        self.db_manager
+            .take_orphaned_queries(process_id, since)
+            .await
+    }
+
     pub async fn get_or_create_psid_for_query(&self, query_string: &str) -> Result<u64> {
         self.db_manager
             .get_or_create_psid_for_query(query_string)

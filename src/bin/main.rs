@@ -16,6 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         command_line_usage(app_state).await?;
     } else {
         petscan_rs::telemetry::start(&petscan_config.telemetry, app_state.clone());
+        tokio::spawn(petscan_rs::previous_run::report(app_state.clone()));
         spawn_shutdown_signal_handler(app_state.clone());
         let webserver = WebServer::new(app_state, petscan_config);
         webserver.run().await?;

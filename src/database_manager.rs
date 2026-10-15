@@ -506,8 +506,7 @@ impl DatabaseManager {
     }
 
     pub async fn log_query_start(&self, query_string: &str) -> Result<u64> {
-        let utc: DateTime<Utc> = Utc::now();
-        let now = utc.format("%Y-%m-%d %H:%M:%S").to_string();
+        let now = query_log_timestamp();
         let sql = (
             "INSERT INTO `started_queries` (querystring,created,process_id) VALUES (?,?,?)"
                 .to_string(),
@@ -537,6 +536,32 @@ impl DatabaseManager {
             .exec_drop(sql.0, mysql_async::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!(e))
+    }
+
+    /// Removes and returns the `started_queries` rows a process left behind,
+    /// i.e. the queries it was running when it ended. `since` (the process's
+    /// start, in [`query_log_timestamp`] form) keeps the rows of an older
+    /// process that had the same PID out.
+    pub async fn take_orphaned_queries(&self, process_id: u32, since: &str) -> Result<Vec<String>> {
+        let params = vec![
+            MyValue::UInt(process_id.into()),
+            MyValue::Bytes(since.into()),
+        ];
+        let mut conn = self.get_tool_db_connection().await?;
+        let queries = conn
+            .exec_iter(
+                "SELECT querystring FROM `started_queries` WHERE process_id=? AND created>=?",
+                mysql_async::Params::Positional(params.clone()),
+            )
+            .await?
+            .map_and_drop(|row| String::from_utf8_lossy(&from_row::<Vec<u8>>(row)).into_owned())
+            .await?;
+        conn.exec_drop(
+            "DELETE FROM `started_queries` WHERE process_id=? AND created>=?",
+            mysql_async::Params::Positional(params),
+        )
+        .await?;
+        Ok(queries)
     }
 
     #[instrument(skip_all, ret)]
@@ -582,6 +607,12 @@ impl DatabaseManager {
             )),
         }
     }
+}
+
+/// The current UTC time as stored in `started_queries.created`; the format
+/// sorts as text, so such values compare correctly in SQL.
+pub fn query_log_timestamp() -> String {
+    Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 #[cfg(test)]

@@ -53,6 +53,7 @@ pub mod form_parameters;
 pub mod pagelist;
 pub mod pagelist_entry;
 pub mod platform;
+pub mod previous_run;
 pub mod query_context;
 pub mod render;
 pub mod telemetry;
