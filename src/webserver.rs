@@ -8,6 +8,7 @@ use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{Request, State};
 use axum::http::{Method, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use std::collections::HashMap;
@@ -15,6 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
 use url::form_urlencoded;
 
@@ -25,9 +27,8 @@ static NOTFOUND: &[u8] = b"Not Found";
 /// legitimately heavy PetScan queries (category traversals across the
 /// English Wikipedia replica routinely take several minutes); short enough
 /// that nothing pins a worker indefinitely if the replica or an upstream
-/// API stalls. Note: orphaned `started_queries` rows whose corresponding
-/// request was cancelled mid-flight are not cleaned up here; operators
-/// should sweep them by `started` timestamp on a schedule.
+/// API stalls. A cancelled request's `started_queries` row is removed by its
+/// [`crate::app_state::QueryLogEntry`] guard.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Default)]
@@ -73,10 +74,7 @@ impl WebServer {
     /// so integration tests can drive it via `tower::ServiceExt::oneshot`
     /// without binding a real TCP listener.
     pub fn router(&self) -> Router {
-        Router::new()
-            .fallback(any(handle))
-            .layer(CorsLayer::permissive())
-            .with_state(self.clone())
+        with_service_layers(Router::new().fallback(any(handle))).with_state(self.clone())
     }
 
     async fn start_webserver(&self) -> Result<TcpListener> {
@@ -283,31 +281,21 @@ impl WebServer {
         form_parameters: &FormParameters,
         single_psid: Option<u64>,
     ) -> MyResponse {
+        // The guard increments the in-flight counter now and decrements on
+        // drop — including unwind and cancellation — so neither a panic nor
+        // a dropped request can leave the counter permanently inflated.
+        // Taken before the query log entry, so it is dropped after it and a
+        // graceful shutdown cannot exit while the entry is still open.
+        let _thread_guard = self.app_state.track_thread();
         // Logged only once the query actually starts, so queued requests
         // neither touch the tools DB nor show up as running.
-        let started_query_id = match self
+        let query_log = self
             .app_state
             .log_query_start(&form_parameters.to_string())
-            .await
-        {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!("Could not log query start: {e}\n{form_parameters}");
-                0
-            }
-        };
-        // The guard increments the in-flight counter now and decrements on
-        // drop — including unwind — so a panic anywhere below cannot leave
-        // the counter permanently inflated.
-        let _thread_guard = self.app_state.track_thread();
+            .await;
         Platform::profile("platform initialized", None);
         let platform_result = platform.run().await;
-        match self.app_state.log_query_end(started_query_id).await {
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!("Could not log query {started_query_id} end:{e}\n{form_parameters}");
-            }
-        }
+        query_log.finish().await;
         Platform::profile("platform run complete", None);
 
         // Successful run?
@@ -334,7 +322,6 @@ impl WebServer {
             {
                 Ok(psid) => Some(psid),
                 Err(e) => {
-                    // log_query_end was already called above after platform.run(); do not call it again
                     return self
                         .app_state
                         .render_error(format!("{e:#}"), form_parameters);
@@ -370,11 +357,27 @@ impl WebServer {
 
 /// Axum entry point. Defers to [`WebServer::process_request`] so the handler
 /// body stays a method on `WebServer` rather than a free function juggling
-/// `State` everywhere. Every response, including 503 overload rejections and
-/// 504 timeouts, is counted for the service dashboard.
+/// `State` everywhere.
 async fn handle(State(server): State<WebServer>, req: Request) -> Response {
+    server.process_request(req).await
+}
+
+/// The middleware around the handler; each `layer` wraps the ones before.
+/// A panicking request gets a 500 (the panic itself is reported by the
+/// panic hook) instead of a dropped connection, and the request metrics see
+/// that 500 like every other response, including 503 overload rejections
+/// and 504 timeouts.
+fn with_service_layers<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
+    router
+        .layer(CatchPanicLayer::new())
+        .layer(middleware::from_fn(record_request))
+        .layer(CorsLayer::permissive())
+}
+
+/// Counts every response for the service dashboard.
+async fn record_request(req: Request, next: Next) -> Response {
     let started = Instant::now();
-    let response = server.process_request(req).await;
+    let response = next.run(req).await;
     wikimisc::telemetry::record_http_request(response.status().as_u16(), started.elapsed());
     response
 }
@@ -592,6 +595,24 @@ mod tests {
             allow_origin == "*" || allow_origin == "https://example.test",
             "unexpected ACAO header: {allow_origin:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn panicking_handler_returns_500_and_later_requests_still_work() {
+        async fn panicking() -> Response {
+            panic!("simulated handler bug");
+        }
+        let router = with_service_layers(
+            Router::new()
+                .route("/panic", any(panicking))
+                .fallback(any(|| async { "fine" })),
+        );
+        let get = |uri: &str| AxumRequest::builder().uri(uri).body(Body::empty()).unwrap();
+
+        let panicked = router.clone().oneshot(get("/panic")).await.unwrap();
+        assert_eq!(panicked.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let next = router.oneshot(get("/")).await.unwrap();
+        assert_eq!(next.status(), StatusCode::OK);
     }
 
     #[tokio::test]

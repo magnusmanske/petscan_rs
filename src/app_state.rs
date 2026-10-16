@@ -325,12 +325,22 @@ impl AppState {
         self.db_manager.get_query_from_psid(psid).await
     }
 
-    pub async fn log_query_start(&self, query_string: &str) -> Result<u64> {
-        self.db_manager.log_query_start(query_string).await
-    }
-
-    pub async fn log_query_end(&self, query_id: u64) -> Result<()> {
-        self.db_manager.log_query_end(query_id).await
+    /// Records a query as running in `started_queries`. The row is removed
+    /// when the returned entry is finished or dropped, so a query that
+    /// fails, panics, times out or loses its client does not leave it behind.
+    /// A failure to log is only warned about: it must not fail the query.
+    pub async fn log_query_start(&self, query_string: &str) -> QueryLogEntry {
+        let id = match self.db_manager.log_query_start(query_string).await {
+            Ok(id) => Some(id),
+            Err(e) => {
+                tracing::warn!("Could not log query start: {e}\n{query_string}");
+                None
+            }
+        };
+        QueryLogEntry {
+            db_manager: self.db_manager.clone(),
+            id,
+        }
     }
 
     pub async fn take_orphaned_queries(&self, process_id: u32, since: &str) -> Result<Vec<String>> {
@@ -532,6 +542,51 @@ pub struct ThreadGuard {
 impl Drop for ThreadGuard {
     fn drop(&mut self) {
         self.app_state.modify_threads_running(-1);
+    }
+}
+
+/// A running query's `started_queries` row, returned by
+/// [`AppState::log_query_start`]. [`Self::finish`] removes it; if the entry
+/// is dropped instead (the request future was cancelled because the client
+/// went away or the time budget ran out, or a panic is unwinding), `Drop`
+/// removes it in the background. Only rows of a process that really died
+/// remain, for [`crate::previous_run`] to report.
+#[must_use = "dropping the entry ends the query log row at once"]
+#[derive(Debug)]
+pub struct QueryLogEntry {
+    db_manager: DatabaseManager,
+    /// `None` once finished, or if the row could not be inserted.
+    id: Option<u64>,
+}
+
+impl QueryLogEntry {
+    /// Removes the row, waiting until that is done.
+    pub async fn finish(mut self) {
+        if let Some(id) = self.id.take() {
+            Self::end(&self.db_manager, id).await;
+        }
+    }
+
+    async fn end(db_manager: &DatabaseManager, id: u64) {
+        if let Err(e) = db_manager.log_query_end(id).await {
+            tracing::warn!("Could not log query {id} end: {e}");
+        }
+    }
+}
+
+impl Drop for QueryLogEntry {
+    fn drop(&mut self) {
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        // `Drop` cannot await, so the DELETE runs as a task of its own.
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                let db_manager = std::mem::take(&mut self.db_manager);
+                drop(runtime.spawn(async move { Self::end(&db_manager, id).await }));
+            }
+            Err(_) => tracing::warn!("Query {id} stays in started_queries: no runtime"),
+        }
     }
 }
 
@@ -1022,6 +1077,20 @@ mod tests {
         }));
         assert!(result.is_err());
         assert_eq!(state.threads_running(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_query_log_entry_drop_never_panics() {
+        // `Drop` runs while unwinding from a panic, where a second panic
+        // would abort the process; with or without a runtime, it must not.
+        // (The DELETE itself needs the tools DB; here it just fails.)
+        let entry = || QueryLogEntry {
+            db_manager: DatabaseManager::default(),
+            id: Some(1),
+        };
+        drop(entry());
+        std::thread::spawn(move || drop(entry())).join().unwrap();
+        entry().finish().await;
     }
 
     #[tokio::test]

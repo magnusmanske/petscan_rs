@@ -20,9 +20,10 @@ use wikimisc::mediawiki::title::Title;
 ///
 /// The original code in this module called `.read().unwrap()` (and the
 /// matching `.write().unwrap()`) at ~33 sites with the rationale "die
-/// immediately on PoisonError". Combined with `panic = "abort"` that
-/// meant a stray panic anywhere in the request pipeline would crash the
-/// whole multi-tenant server. The audit (P1 #10) flagged this.
+/// immediately on PoisonError". Now that a panic fails only its own request
+/// (see `CatchPanicLayer` in `webserver.rs`), that would turn one panic into
+/// a second one for whoever touches the poisoned lock next. The audit
+/// (P1 #10) flagged this.
 ///
 /// The locks here only protect a `HashSet<PageListEntry>` (owned data,
 /// no internal pointers) and a couple of `Option<String>`/`bool` cells.

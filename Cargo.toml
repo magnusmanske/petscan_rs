@@ -23,7 +23,7 @@ async-trait = "0.1"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc" , features = ["sparql", "wikibase", "lat-lon", "site-matrix", "database", "telemetry"] }
 tokio = { version = "^1", features = ["macros", "fs", "sync", "signal", "test-util"] }
 axum = "0.8"
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.6", features = ["catch-panic", "cors"] }
 futures = "0.3"
 tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
 tracing = "0.1.40"
@@ -38,5 +38,6 @@ tower = { version = "0.5", features = ["util"] }
 lto = "fat"
 codegen-units = 1
 #target-cpu = "native"
-panic = "abort"
+# No `panic = "abort"`: a panic must fail only the request it happened in
+# (see `CatchPanicLayer` in src/webserver.rs), not the whole server.
 strip = "debuginfo"
