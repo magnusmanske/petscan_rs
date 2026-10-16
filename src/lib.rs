@@ -64,6 +64,8 @@ pub mod webserver;
 pub(crate) mod test_support;
 
 use tracing_subscriber as _;
+// The binary's global allocator.
+use tikv_jemallocator as _;
 
 /// Lift the soft open-file limit as far as the hard limit allows. Every
 /// queued request, replica connection and TLS client holds a descriptor;

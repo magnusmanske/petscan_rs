@@ -3,6 +3,14 @@ use petscan_rs::command_line::{command_line_usage, get_petscan_config};
 use petscan_rs::webserver::WebServer;
 use std::sync::Arc;
 
+/// glibc's malloc kept the memory of finished queries resident (3.8 GB on an
+/// idle server), so each big query started from an inflated baseline toward
+/// the 7 GB limit. jemalloc's background threads return freed memory to the
+/// OS within seconds, and its peaks under PetScan-like load were about half
+/// of glibc's.
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt::init();
