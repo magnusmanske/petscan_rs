@@ -3319,7 +3319,7 @@ dependencies = [
 [[package]]
 name = "wikimisc"
 version = "0.1.1"
-source = "git+https://github.com/magnusmanske/wikimisc#c8e2b6a7d582eddbca92b0ec76885f349398a811"
+source = "git+https://github.com/magnusmanske/wikimisc#7a8eef39260613150e5152003339d0d2b1c60637"
 dependencies = [
  "metrics",
  "metrics-util",
