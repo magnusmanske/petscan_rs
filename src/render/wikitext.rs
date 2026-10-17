@@ -33,7 +33,7 @@ impl Render for RenderWiki {
 
         rows.push(format!(
             "[{} Regenerate this table] or [{} edit the query].\n",
-            &petscan_query_url, &petscan_query_url_no_doit
+            petscan_query_url, petscan_query_url_no_doit
         ));
         rows.push("{| border=1 class='wikitable'".to_string());
         let mut header: Vec<(&str, &str)> = vec![
@@ -93,12 +93,12 @@ impl Render for RenderWiki {
         if entry.title().namespace_id() == 6 {
             if params.thumbnails_in_wiki_output() {
                 match params.ns().full_pretty(entry.title()) {
-                    Some(file) => format!("[[{}|120px|]]", &file),
+                    Some(file) => format!("[[{}|120px|]]", file),
                     None => format!("[[File:{}|120px|]]", entry.title().pretty()),
                 }
             } else {
                 match params.ns().full_pretty(entry.title()) {
-                    Some(file) => format!("[[:{}|]]", &file),
+                    Some(file) => format!("[[:{}|]]", file),
                     None => format!("[[:File:{}|]]", entry.title().pretty()),
                 }
             }
@@ -138,7 +138,7 @@ impl RenderWiki {
     fn render_wikilink(entry: &PageListEntry, params: &RenderParams) -> String {
         if params.is_wikidata() {
             match &entry.get_wikidata_label() {
-                Some(label) => format!("[[{}|{}]]", &entry.title().pretty(), label),
+                Some(label) => format!("[[{}|{}]]", entry.title().pretty(), label),
                 None => format!("[[{}]]", entry.title().pretty()),
             }
         } else {

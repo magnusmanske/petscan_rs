@@ -113,7 +113,7 @@ impl WDfist {
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = crate::datasource::prep_quote(chunk);
-            sql.0 = format!("SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN ({})",&sql.0) ;
+            sql.0 = format!("SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN ({})",sql.0) ;
             sql.1 = sql.1.par_iter().filter_map(|q|{
                 match q {
                     MyValue::Bytes(q) => Some(MyValue::Bytes(q[1..].into())),
@@ -166,7 +166,7 @@ impl WDfist {
         titles.dedup();
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = crate::datasource::prep_quote(chunk);
-            sql.0 = format!("SELECT page_title,pp_value FROM page,page_props WHERE page_id=pp_page AND page_namespace=0 AND pp_propname='page_image_free' AND page_title IN ({})",&sql.0) ;
+            sql.0 = format!("SELECT page_title,pp_value FROM page,page_props WHERE page_id=pp_page AND page_namespace=0 AND pp_propname='page_image_free' AND page_title IN ({})",sql.0) ;
             batches.push(sql);
         });
 
@@ -217,7 +217,7 @@ impl WDfist {
         let mut batches: Vec<SQLtuple> = vec![];
         titles.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = crate::datasource::prep_quote(chunk);
-            sql.0 = format!("SELECT DISTINCT gil_page_title AS page,gil_to AS image FROM page,globalimagelinks WHERE gil_wiki='{}' AND gil_page_title IN ({})",wiki,&sql.0) ;
+            sql.0 = format!("SELECT DISTINCT gil_page_title AS page,gil_to AS image FROM page,globalimagelinks WHERE gil_wiki='{}' AND gil_page_title IN ({})",wiki,sql.0) ;
             sql.0 += " AND gil_page_namespace_id=0 AND page_namespace=6 and page_title=gil_to AND page_is_redirect=0" ;
 			sql.0 += " AND NOT EXISTS (SELECT * FROM categorylinks,linktarget WHERE lt_id=cl_target_id AND page_id=cl_from AND lt_namespace=14 AND lt_title='Crop_for_Wikidata')" ; // To-be-cropped
             batches.push(sql);
@@ -253,7 +253,7 @@ impl WDfist {
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = crate::datasource::prep_quote(chunk);
-            sql.0 = format!("SELECT page_title,gt_lat,gt_lon FROM geo_tags,page WHERE page_namespace=0 AND page_id=gt_page_id AND gt_globe='earth' AND gt_primary=1 AND page_title IN ({})",&sql.0) ;
+            sql.0 = format!("SELECT page_title,gt_lat,gt_lon FROM geo_tags,page WHERE page_namespace=0 AND page_id=gt_page_id AND gt_globe='earth' AND gt_primary=1 AND page_title IN ({})",sql.0) ;
             batches.push(sql);
         });
 
@@ -335,7 +335,7 @@ impl WDfist {
         };
         format!(
             "{} -filemime:pdf -filemime:djvu -filemime:gif {}",
-            &label, svg
+            label, svg
         )
     }
 
@@ -375,7 +375,7 @@ impl WDfist {
               	INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id
                	INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language='en'
                 WHERE wbit_item_id IN ({})",
-                &sql.0
+                sql.0
             );
             batches.push(sql);
         });
@@ -517,7 +517,7 @@ impl WDfist {
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = crate::datasource::prep_quote(chunk);
-            sql.0 = format!("SELECT page_title FROM page WHERE page_namespace=0 AND page_is_redirect=0 AND page_title IN ({})",&sql.0) ;
+            sql.0 = format!("SELECT page_title FROM page WHERE page_namespace=0 AND page_is_redirect=0 AND page_title IN ({})",sql.0) ;
             if  wdf_only_items_without_p18 {sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=120 AND lt_title='P18')" ;}
             sql.0 += " AND NOT EXISTS (SELECT * FROM pagelinks,linktarget WHERE pl_target_id=lt_id AND pl_from=page_id AND lt_namespace=0 AND lt_title IN ('Q13406463','Q4167410'))" ; // No list/disambig
             batches.push(sql);
@@ -582,7 +582,7 @@ impl WDfist {
             let mut sql = crate::datasource::prep_quote(chunk);
             sql.0 = format!(
                 "SELECT concat('Q',q),CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files WHERE q IN ({})",
-                &sql.0
+                sql.0
             );
             batches.push(sql);
         });
@@ -696,7 +696,7 @@ impl WDfist {
                 AND il_from_namespace=0
                 AND lt_namespace=6
                 AND lt_title IN ({})",
-                &sql.0
+                sql.0
             );
             batches.push(sql);
         });

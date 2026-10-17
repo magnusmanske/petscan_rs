@@ -59,7 +59,7 @@ impl Render for RenderKML {
                     Some(ft) => ft,
                     None => format!("{title:?}"),
                 };
-                let url = format!("{}/wiki/{}", &server, &super::escape_attribute(&full_title));
+                let url = format!("{}/wiki/{}", server, super::escape_attribute(&full_title));
                 kml += format!(
                     "<Data name=\"url\"><value>{}</value></Data>",
                     Self::escape_xml(&url)
@@ -70,7 +70,7 @@ impl Render for RenderKML {
                     let file = super::escape_attribute(&img);
                     let src = format!(
                         "{}/wiki/Special:Redirect/file/{}?width={}",
-                        &server, &file, 120
+                        server, file, 120
                     );
                     kml += format!(
                         "<Data name=\"image\"><value>{}</value></Data>",

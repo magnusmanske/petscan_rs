@@ -22,7 +22,7 @@ use wikimisc::telemetry::ExitReason;
 /// once. Excess requests queue on the semaphore, up to
 /// [`MAX_QUEUED_REQUESTS`] of them for at most [`QUEUE_WAIT_TIMEOUT`].
 /// 50 is roughly 5× the per-user MySQL connection budget, so the
-/// max_user_connections backoff still has headroom and a request burst
+/// `max_user_connections` backoff still has headroom and a request burst
 /// cannot fork-bomb the worker pool.
 const MAX_CONCURRENT_REQUESTS: usize = 50;
 
@@ -37,7 +37,7 @@ const MAX_QUEUED_REQUESTS: usize = 200;
 /// up, so starting the query would only waste a slot.
 const QUEUE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Retry policy for startup network calls (Wikidata API + SiteMatrix).
+/// Retry policy for startup network calls (Wikidata API + `SiteMatrix`).
 /// 5 attempts with 1s → 2s → 4s → 8s → 16s exponential backoff (total
 /// worst-case ~31s). Long enough to ride out a transient blip on
 /// systemd restart; short enough that a real outage surfaces quickly.
@@ -59,7 +59,7 @@ where
             Err(e) if attempt + 1 < STARTUP_MAX_ATTEMPTS => {
                 let shift = attempt.min(20);
                 let delay = STARTUP_BASE_DELAY_MS
-                    .saturating_mul(1u64 << shift)
+                    .saturating_mul(1_u64 << shift)
                     .min(STARTUP_MAX_DELAY_MS);
                 tracing::warn!(
                     label,
@@ -239,7 +239,7 @@ impl AppState {
     // Delegating accessors – config feature flags
     // ------------------------------------------------------------------
 
-    pub fn using_file_table(&self) -> bool {
+    pub const fn using_file_table(&self) -> bool {
         self.db_manager.using_file_table()
     }
 
@@ -945,9 +945,9 @@ mod tests {
         let attempts = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_for_op = attempts.clone();
         let result = retry_with_backoff("test", move || {
-            let attempts = attempts_for_op.clone();
+            let counter = attempts_for_op.clone();
             async move {
-                let n = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if n < 3 {
                     Err(anyhow!("simulated transient failure {n}"))
                 } else {
@@ -967,9 +967,9 @@ mod tests {
         let attempts = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let attempts_for_op = attempts.clone();
         let result: Result<i32> = retry_with_backoff("test", move || {
-            let attempts = attempts_for_op.clone();
+            let counter = attempts_for_op.clone();
             async move {
-                attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Err(anyhow!("persistent failure"))
             }
         })

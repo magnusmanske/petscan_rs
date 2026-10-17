@@ -79,7 +79,7 @@ impl Platform {
             ("wikidata", _) => Some("wikidatawiki".to_string()),
             (_, "wikidata") => Some("wikidatawiki".to_string()),
             (l, p) => {
-                let url = format!("https://{}.{}.org", &l, &p);
+                let url = format!("https://{}.{}.org", l, p);
                 self.state().site_matrix().get_wiki_for_server_url(&url)
             }
         }

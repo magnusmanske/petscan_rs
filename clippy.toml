@@ -1,0 +1,3 @@
+# Product names that may appear in doc comments without backticks.
+# ".." keeps clippy's default list.
+doc-valid-idents = ["PetScan", "MediaWiki", "QLever", ".."]

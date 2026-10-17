@@ -21,7 +21,7 @@ use wikimisc::mediawiki::title::Title;
 
 /// Build a `Platform` for tests from a vec of `(key, value)` form-parameter
 /// pairs. The platform's `AppState` is `Default::default()` — no network,
-/// no DB, no SiteMatrix. Suitable for any test that doesn't call
+/// no DB, no `SiteMatrix`. Suitable for any test that doesn't call
 /// `platform.run()` or anything that reaches the real DB/API.
 pub(crate) fn make_platform(pairs: Vec<(&str, &str)>) -> Platform {
     let mut params = HashMap::new();

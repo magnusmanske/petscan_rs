@@ -19,7 +19,7 @@ const REPLICA_DOMAIN: &str = ".db.svc.wikimedia.cloud";
 /// Which replica service group serves a cluster.
 ///
 /// Everything uses `web`, whose short query timeout suits a user waiting for
-/// a result. The Wikidata term store is the exception: `PetScan` has always
+/// a result. The Wikidata term store is the exception: PetScan has always
 /// read it from the `analytics` host, whose longer timeout the label queries
 /// need.
 const fn server_group(cluster: DbCluster) -> DbServerGroup {
@@ -36,7 +36,7 @@ const MAX_RETRY_ATTEMPTS: u32 = 10;
 const BASE_DELAY_MS: u64 = 100;
 const MAX_DELAY_MS: u64 = 5000;
 
-/// Hard upper bound on a single `Conn::new` attempt. mysql_async 0.36 does
+/// Hard upper bound on a single `Conn::new` attempt. `mysql_async` 0.36 does
 /// not expose a connect-level timeout on `OptsBuilder`, so we wrap the call
 /// with `tokio::time::timeout`. Wikimedia replicas should always answer the
 /// TCP+TLS+auth handshake within a few seconds; anything longer means the
@@ -80,7 +80,7 @@ fn exponential_backoff_ms(attempt: u32) -> u64 {
     // Saturating shift so attempt values up to u32::MAX cannot overflow.
     let shift = attempt.min(20);
     BASE_DELAY_MS
-        .saturating_mul(1u64 << shift)
+        .saturating_mul(1_u64 << shift)
         .min(MAX_DELAY_MS)
 }
 

@@ -56,7 +56,7 @@ impl PageFields {
         let requested: [RequestedField; 6] = [
             (self.add_image, "page_props", |f| f.add_image = true),
             (self.add_coordinates, "geo_tags", |f| {
-                f.add_coordinates = true
+                f.add_coordinates = true;
             }),
             (self.add_defaultsort, "page_props", |f| {
                 f.add_defaultsort = true;
@@ -169,6 +169,29 @@ impl PageFields {
             };
             entry.set_sitelink_count(sc);
         }
+    }
+}
+
+/// The per-item conditions of the Wikidata filter (statement, sitelink and
+/// identifier counts), from the query's form parameters.
+#[derive(Debug, Default)]
+struct WikidataItemFilters {
+    no_statements: bool,
+    no_sitelinks: bool,
+    min_statements: Option<usize>,
+    max_statements: Option<usize>,
+    min_identifiers: Option<usize>,
+    max_identifiers: Option<usize>,
+}
+
+impl WikidataItemFilters {
+    const fn is_empty(&self) -> bool {
+        !self.no_statements
+            && !self.no_sitelinks
+            && self.min_statements.is_none()
+            && self.max_statements.is_none()
+            && self.min_identifiers.is_none()
+            && self.max_identifiers.is_none()
     }
 }
 
@@ -1012,7 +1035,7 @@ impl Platform {
             let placeholders = crate::datasource::get_placeholders(escaped.len());
             let query = format!(
                 "SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='{}' and ips_site_page IN ({})",
-                &wiki, &placeholders
+                wiki, placeholders
             );
             batches.push(SQLtuple(query, escaped));
         });
@@ -1242,40 +1265,35 @@ impl Platform {
     /// Builds the `sql_post` snippet that encodes all Wikidata property/item filters.
     fn build_filter_wikidata_sql_post(
         parts: &[SQLtuple],
-        no_statements: bool,
-        no_sitelinks: bool,
-        min_statements: Option<usize>,
-        max_statements: Option<usize>,
-        min_identifiers: Option<usize>,
-        max_identifiers: Option<usize>,
+        filters: &WikidataItemFilters,
         wpiu: &str,
     ) -> SQLtuple {
         let mut sql_post: SQLtuple = SQLtuple(String::new(), vec![]);
 
-        if let Some(m) = min_statements {
+        if let Some(m) = filters.min_statements {
             sql_post.0 += &format!(
                 " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_value*1>={m})"
             );
         }
-        if let Some(m) = max_statements {
+        if let Some(m) = filters.max_statements {
             sql_post.0 += &format!(
                 " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_value*1<={m})"
             );
         }
-        if let Some(m) = min_identifiers {
+        if let Some(m) = filters.min_identifiers {
             sql_post.0 += &format!(
                 " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-identifiers' AND pp_value*1>={m})"
             );
         }
-        if let Some(m) = max_identifiers {
+        if let Some(m) = filters.max_identifiers {
             sql_post.0 += &format!(
                 " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-identifiers' AND pp_value*1<={m})"
             );
         }
-        if no_statements {
+        if filters.no_statements {
             sql_post.0 += " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0)";
         }
-        if no_sitelinks {
+        if filters.no_sitelinks {
             sql_post.0 += " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page AND pp_propname='wb-sitelinks' AND pp_sortkey=0)";
         }
 
@@ -1311,24 +1329,19 @@ impl Platform {
         if result.is_empty() {
             return Ok(());
         }
-        let no_statements = self.has_param("wpiu_no_statements");
-        let no_sitelinks = self.has_param("wpiu_no_sitelinks");
+        let filters = WikidataItemFilters {
+            no_statements: self.has_param("wpiu_no_statements"),
+            no_sitelinks: self.has_param("wpiu_no_sitelinks"),
+            min_statements: self.usize_option_from_param("min_statements"),
+            max_statements: self.usize_option_from_param("max_statements"),
+            min_identifiers: self.usize_option_from_param("min_identifiers"),
+            max_identifiers: self.usize_option_from_param("max_identifiers"),
+        };
         let wpiu = self.get_param_default("wpiu", "any");
-        let min_statements = self.usize_option_from_param("min_statements");
-        let max_statements = self.usize_option_from_param("max_statements");
-        let min_identifiers = self.usize_option_from_param("min_identifiers");
-        let max_identifiers = self.usize_option_from_param("max_identifiers");
         let list = self.get_param_blank("wikidata_prop_item_use");
         let list = list.trim().to_string();
 
-        if list.is_empty()
-            && !no_statements
-            && !no_sitelinks
-            && min_statements.is_none()
-            && max_statements.is_none()
-            && min_identifiers.is_none()
-            && max_identifiers.is_none()
-        {
+        if list.is_empty() && filters.is_empty() {
             return Ok(());
         }
 
@@ -1360,16 +1373,7 @@ impl Platform {
             })
             .collect::<Vec<SQLtuple>>();
 
-        let sql_post = Self::build_filter_wikidata_sql_post(
-            &parts,
-            no_statements,
-            no_sitelinks,
-            min_statements,
-            max_statements,
-            min_identifiers,
-            max_identifiers,
-            &wpiu,
-        );
+        let sql_post = Self::build_filter_wikidata_sql_post(&parts, &filters, &wpiu);
 
         let batches: Vec<SQLtuple> = result
             .to_sql_batches(PAGE_BATCH_SIZE)
@@ -1795,32 +1799,19 @@ mod tests {
 
     #[test]
     fn test_build_filter_wikidata_sql_post_empty() {
-        let sql = Platform::build_filter_wikidata_sql_post(
-            &[],
-            false,
-            false,
-            None,
-            None,
-            None,
-            None,
-            "any",
-        );
+        let sql =
+            Platform::build_filter_wikidata_sql_post(&[], &WikidataItemFilters::default(), "any");
         assert!(sql.0.is_empty());
         assert!(sql.1.is_empty());
     }
 
     #[test]
     fn test_build_filter_wikidata_sql_post_min_statements() {
-        let sql = Platform::build_filter_wikidata_sql_post(
-            &[],
-            false,
-            false,
-            Some(3),
-            None,
-            None,
-            None,
-            "any",
-        );
+        let filters = WikidataItemFilters {
+            min_statements: Some(3),
+            ..Default::default()
+        };
+        let sql = Platform::build_filter_wikidata_sql_post(&[], &filters, "any");
         assert_eq!(
             sql.0,
             " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page \
@@ -1834,16 +1825,11 @@ mod tests {
         // Defense in depth for the third format-string interpolation site:
         // confirm that the max_identifiers branch produces the wb-identifiers
         // table and the correct comparison direction.
-        let sql = Platform::build_filter_wikidata_sql_post(
-            &[],
-            false,
-            false,
-            None,
-            None,
-            None,
-            Some(7),
-            "any",
-        );
+        let filters = WikidataItemFilters {
+            max_identifiers: Some(7),
+            ..Default::default()
+        };
+        let sql = Platform::build_filter_wikidata_sql_post(&[], &filters, "any");
         assert_eq!(
             sql.0,
             " AND EXISTS (SELECT * FROM page_props WHERE page_id=pp_page \
@@ -1853,16 +1839,11 @@ mod tests {
 
     #[test]
     fn test_build_filter_wikidata_sql_post_no_statements_flag() {
-        let sql = Platform::build_filter_wikidata_sql_post(
-            &[],
-            true,
-            false,
-            None,
-            None,
-            None,
-            None,
-            "any",
-        );
+        let filters = WikidataItemFilters {
+            no_statements: true,
+            ..Default::default()
+        };
+        let sql = Platform::build_filter_wikidata_sql_post(&[], &filters, "any");
         // `no_statements=true` adds the canonical NOT-EXISTS clause that
         // checks for `pp_sortkey=0` on the `wb-claims` row. Pin both the
         // table reference and the sortkey check.

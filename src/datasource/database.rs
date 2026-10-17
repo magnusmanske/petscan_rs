@@ -1576,7 +1576,7 @@ impl SourceDatabase {
 
         // Links to all
         for l in &self.params.links_to_all {
-            push(" AND p.page_id IN ", &[l.to_owned()]);
+            push(" AND p.page_id IN ", std::slice::from_ref(l));
         }
 
         // Links to any
@@ -1599,7 +1599,7 @@ impl SourceDatabase {
 
         // Links from all
         for l in &self.params.linked_from_all {
-            push(" AND p.page_id IN ", &[l.to_owned()]);
+            push(" AND p.page_id IN ", std::slice::from_ref(l));
         }
 
         // Links from any
@@ -1637,7 +1637,7 @@ impl SourceDatabase {
             filters.push(
                 TEMPLATELINKS,
                 self.template_subquery(
-                    &[t.to_string()],
+                    std::slice::from_ref(t),
                     self.params.templates_yes_talk_page,
                     false,
                 ),

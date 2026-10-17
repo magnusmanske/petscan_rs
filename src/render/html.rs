@@ -196,10 +196,10 @@ impl Render for RenderHTML {
                     _ => return String::new(),
                 };
                 let file = super::escape_attribute(img);
-                let url = format!("{}/wiki/File:{}", &server_url, &file);
+                let url = format!("{}/wiki/File:{}", server_url, file);
                 let src = format!(
                     "{}/wiki/Special:Redirect/file/{}?width={}",
-                    &server_url, &file, &thumnail_size
+                    server_url, file, thumnail_size
                 );
                 format!(
                     "<div class='card thumbcard'><a target='_blank' href='{url}'><img class='card-img thumbcard-img' src='{src}' loading='lazy' /></a></div>"
@@ -255,7 +255,7 @@ impl Render for RenderHTML {
                 let lang = "en"; // TODO
                 let mut url = format!(
                     "https://tools.wmflabs.org/geohack/geohack.php?language={}&params=",
-                    &lang
+                    lang
                 );
                 if coords.lat < 0.0 {
                     url += &format!("{}_S_", -coords.lat);
@@ -270,7 +270,7 @@ impl Render for RenderHTML {
                 url += "globe:earth";
                 format!(
                     "<a class='smaller' target='_blank' href='{}'>{}/{}</a>",
-                    url, &coords.lat, &coords.lon
+                    url, coords.lat, coords.lon
                 )
             }
             None => String::new(),
@@ -315,7 +315,7 @@ impl Render for RenderHTML {
         };
         format!(
             "<input type='checkbox' class='qcb' q='{}' id='autolist_checkbox_{}' {} />",
-            &q, &q, &checked
+            q, q, checked
         )
     }
 }
@@ -440,9 +440,9 @@ impl RenderHTML {
                 other => {
                     // File data etc.
                     if fdk.contains(&other) {
-                        format!("<th tt='h_{}'></th>", &other)
+                        format!("<th tt='h_{}'></th>", other)
                     } else {
-                        format!("<th>UNKNOWN:'{}'</th>", &other)
+                        format!("<th>UNKNOWN:'{}'</th>", other)
                     }
                 }
             };

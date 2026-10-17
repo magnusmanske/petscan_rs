@@ -11,7 +11,7 @@ use wikimisc::mediawiki::title::Title;
 /// using `PageListEntry::compare`. The shuffle path must not go through a
 /// comparator: a random comparator violates strict-weak-ordering and yields
 /// biased — and potentially incorrect — results.
-pub fn sort_or_shuffle(entries: &mut Vec<PageListEntry>, sorter: &PageListSort, is_wikidata: bool) {
+pub fn sort_or_shuffle(entries: &mut [PageListEntry], sorter: &PageListSort, is_wikidata: bool) {
     match sorter {
         PageListSort::Random(_) => {
             entries.shuffle(&mut rand::rng());
@@ -792,7 +792,7 @@ mod tests {
         assert_eq!(fi.file_usage, vec![fu]);
     }
 
-    /// Build a FileInfo with all `img_*` fields populated.
+    /// Build a `FileInfo` with all `img_*` fields populated.
     fn populated_file_info() -> FileInfo {
         let mut fi = FileInfo::new();
         fi.img_size = Some(2048);
@@ -852,8 +852,8 @@ mod tests {
     fn test_file_info_field_as_json_preserves_number_types() {
         let fi = populated_file_info();
         // Numeric fields come back as JSON numbers, not strings.
-        assert_eq!(fi.field_as_json("img_size"), Some(json!(2048u64)));
-        assert_eq!(fi.field_as_json("img_width"), Some(json!(800u64)));
+        assert_eq!(fi.field_as_json("img_size"), Some(json!(2048_u64)));
+        assert_eq!(fi.field_as_json("img_width"), Some(json!(800_u64)));
         // String fields come back as JSON strings.
         assert_eq!(fi.field_as_json("img_sha1"), Some(json!("abc123")));
     }
@@ -882,62 +882,29 @@ mod tests {
 
     #[test]
     fn test_page_list_sort_new_from_params() {
-        assert!(matches!(
-            PageListSort::new_from_params("title", false),
-            PageListSort::Title(false)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("title", true),
-            PageListSort::Title(true)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("ns_title", false),
-            PageListSort::NsTitle(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("size", false),
-            PageListSort::Size(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("date", false),
-            PageListSort::Date(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("redlinks", false),
-            PageListSort::RedlinksCount(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("incoming_links", false),
-            PageListSort::IncomingLinks(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("defaultsort", false),
-            PageListSort::DefaultSort(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("filesize", false),
-            PageListSort::FileSize(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("uploaddate", false),
-            PageListSort::UploadDate(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("sitelinks", false),
-            PageListSort::Sitelinks(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("random", false),
-            PageListSort::Random(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("bogus", false),
-            PageListSort::Default(_)
-        ));
-        assert!(matches!(
-            PageListSort::new_from_params("", false),
-            PageListSort::Default(_)
-        ));
+        let cases = [
+            ("title", false, PageListSort::Title(false)),
+            ("title", true, PageListSort::Title(true)),
+            ("ns_title", false, PageListSort::NsTitle(false)),
+            ("size", false, PageListSort::Size(false)),
+            ("date", false, PageListSort::Date(false)),
+            ("redlinks", false, PageListSort::RedlinksCount(false)),
+            ("incoming_links", false, PageListSort::IncomingLinks(false)),
+            ("defaultsort", false, PageListSort::DefaultSort(false)),
+            ("filesize", false, PageListSort::FileSize(false)),
+            ("uploaddate", false, PageListSort::UploadDate(false)),
+            ("sitelinks", false, PageListSort::Sitelinks(false)),
+            ("random", false, PageListSort::Random(false)),
+            ("bogus", false, PageListSort::Default(false)),
+            ("", false, PageListSort::Default(false)),
+        ];
+        for (param, descending, expected) in cases {
+            assert_eq!(
+                PageListSort::new_from_params(param, descending),
+                expected,
+                "{param:?}"
+            );
+        }
     }
 
     #[test]
@@ -967,9 +934,12 @@ mod tests {
             Ordering::Greater
         );
         // same namespace falls back to title
-        let entry_az = make_entry("Aardvark", 0);
-        let entry_bz = make_entry("Buffalo", 0);
-        assert_eq!(entry_az.compare(&entry_bz, &sorter, false), Ordering::Less);
+        let entry_aardvark = make_entry("Aardvark", 0);
+        let entry_buffalo = make_entry("Buffalo", 0);
+        assert_eq!(
+            entry_aardvark.compare(&entry_buffalo, &sorter, false),
+            Ordering::Less
+        );
     }
 
     #[test]

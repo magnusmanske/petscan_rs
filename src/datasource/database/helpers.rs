@@ -20,7 +20,7 @@ use super::SourceDatabaseCatDepth;
 pub(super) const MAX_CATEGORY_BATCH_SIZE: usize = 2500;
 
 /// Parse the `Foo|3` / `Foo` / `Foo|-1` category-with-depth syntax used in
-/// `PetScan`'s `categories=` field.
+/// PetScan's `categories=` field.
 ///
 /// - Bare names use `default_depth`.
 /// - Negative depths are interpreted as "unbounded" and capped at 999.

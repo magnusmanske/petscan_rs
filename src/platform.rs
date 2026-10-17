@@ -393,7 +393,7 @@ mod tests {
 
     async fn run_psid_ext(psid: usize, addendum: &str) -> Result<Platform> {
         let state = get_state().await;
-        let form_parameters = match state.get_query_from_psid(&format!("{}", &psid)).await {
+        let form_parameters = match state.get_query_from_psid(&format!("{}", psid)).await {
             Ok(psid_query) => {
                 let query = psid_query + addendum;
                 FormParameters::outcome_from_query(&query)?

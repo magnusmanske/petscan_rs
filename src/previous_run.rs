@@ -1,4 +1,4 @@
-//! Reports how the previous `PetScan` process ended. One killed by SIGKILL (in
+//! Reports how the previous PetScan process ended. One killed by SIGKILL (in
 //! practice the kernel enforcing the systemd unit's `MemoryMax`) cannot
 //! report that itself, so its successor does, naming the queries it was
 //! running, and then clears their `started_queries` rows.

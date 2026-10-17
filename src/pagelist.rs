@@ -20,7 +20,7 @@ use wikimisc::mediawiki::title::Title;
 ///
 /// The original code in this module called `.read().unwrap()` (and the
 /// matching `.write().unwrap()`) at ~33 sites with the rationale "die
-/// immediately on PoisonError". Now that a panic fails only its own request
+/// immediately on `PoisonError`". Now that a panic fails only its own request
 /// (see `CatchPanicLayer` in `webserver.rs`), that would turn one panic into
 /// a second one for whoever touches the poisoned lock next. The audit
 /// (P1 #10) flagged this.
