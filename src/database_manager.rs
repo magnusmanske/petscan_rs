@@ -7,6 +7,7 @@ use mysql_async::from_row;
 use mysql_async::prelude::Queryable;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{instrument, trace};
 pub use wikimisc::toolforge_db::{DbCluster, DbServerGroup};
@@ -56,6 +57,21 @@ const TOOL_DB_POOL_MAX: usize = 5;
 /// Idle pool connections older than this are closed and recreated. Avoids
 /// retaining sockets the upstream has silently dropped.
 const POOL_INACTIVE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+/// A per-wiki pool unused for this long is closed. Each pool keeps two
+/// background tasks alive for as long as it exists, so without this the
+/// task count grew with every wiki ever queried. Longer than
+/// [`POOL_INACTIVE_TTL`], so a closed pool never had an idle connection left
+/// to lose.
+const POOL_EVICT_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
+
+type PoolKey = (String, DbCluster);
+
+/// A per-wiki pool and when a connection was last leased from it.
+#[derive(Debug)]
+struct WikiPool {
+    pool: my::Pool,
+    last_used: Instant,
+}
 
 /// Deterministic exponential backoff (no jitter) capped at `MAX_DELAY_MS`.
 /// Pulled out as a free function so it is unit-testable; jitter is applied
@@ -89,9 +105,9 @@ pub struct DatabaseManager {
     /// Typed application config (feature flags, schema name, and local-dev
     /// fallback credentials / port-mapping).
     config: Config,
-    /// Per-`(wiki, cluster)` connection pools, lazily created. Pools live
-    /// for the lifetime of the manager and reuse TCP/TLS/auth handshakes.
-    wiki_pools: Arc<Mutex<HashMap<(String, DbCluster), my::Pool>>>,
+    /// Per-`(wiki, cluster)` connection pools, lazily created and closed
+    /// after [`POOL_EVICT_AFTER`] without use.
+    wiki_pools: Arc<Mutex<HashMap<PoolKey, WikiPool>>>,
     /// Shared pool for the tool DB (PSID + query log).
     tool_db_pool: Arc<Mutex<Option<my::Pool>>>,
 }
@@ -313,18 +329,29 @@ impl DatabaseManager {
         Ok(())
     }
 
-    /// Get or lazily create the connection pool for `(wiki, cluster)`.
-    /// Pools are kept for the lifetime of the manager so the TCP/TLS/auth
-    /// handshake is only paid once per replica per process.
+    /// Get or lazily create the connection pool for `(wiki, cluster)`, and
+    /// close the pools nobody has used for [`POOL_EVICT_AFTER`].
     async fn get_wiki_pool(&self, wiki: &str, cluster: DbCluster) -> Result<my::Pool> {
-        let key = (wiki.to_string(), cluster);
+        let now = Instant::now();
         let mut pools = self.wiki_pools.lock().await;
-        if let Some(p) = pools.get(&key) {
-            return Ok(p.clone());
+        for stale in take_stale_pools(&mut pools, now) {
+            // Waits for any connection still leased, then ends the pool's
+            // background tasks.
+            tokio::spawn(stale.disconnect());
         }
-        let opts = self.get_mysql_opts_for_wiki(wiki, cluster)?;
-        let pool = my::Pool::new(opts);
-        pools.insert(key, pool.clone());
+        let key = (wiki.to_string(), cluster);
+        if let Some(entry) = pools.get_mut(&key) {
+            entry.last_used = now;
+            return Ok(entry.pool.clone());
+        }
+        let pool = my::Pool::new(self.get_mysql_opts_for_wiki(wiki, cluster)?);
+        pools.insert(
+            key,
+            WikiPool {
+                pool: pool.clone(),
+                last_used: now,
+            },
+        );
         Ok(pool)
     }
 
@@ -615,6 +642,21 @@ pub fn query_log_timestamp() -> String {
     Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
+/// Removes and returns the pools last used [`POOL_EVICT_AFTER`] or longer
+/// before `now`.
+fn take_stale_pools(pools: &mut HashMap<PoolKey, WikiPool>, now: Instant) -> Vec<my::Pool> {
+    let stale: Vec<PoolKey> = pools
+        .iter()
+        .filter(|(_, entry)| now.duration_since(entry.last_used) >= POOL_EVICT_AFTER)
+        .map(|(key, _)| key.clone())
+        .collect();
+    stale
+        .iter()
+        .filter_map(|key| pools.remove(key))
+        .map(|entry| entry.pool)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -682,5 +724,31 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("Invalid PSID 'abc'"), "{err}");
+    }
+
+    #[test]
+    fn take_stale_pools_closes_only_long_unused_pools() {
+        let pool = || my::Pool::new(my::OptsBuilder::default());
+        let now = Instant::now();
+        let mut pools = HashMap::new();
+        pools.insert(
+            ("enwiki".to_string(), DbCluster::Core),
+            WikiPool {
+                pool: pool(),
+                last_used: now - POOL_EVICT_AFTER,
+            },
+        );
+        pools.insert(
+            ("dewiki".to_string(), DbCluster::Core),
+            WikiPool {
+                pool: pool(),
+                last_used: now - POOL_EVICT_AFTER / 2,
+            },
+        );
+        assert_eq!(take_stale_pools(&mut pools, now).len(), 1);
+        assert_eq!(
+            pools.keys().collect::<Vec<_>>(),
+            vec![&("dewiki".to_string(), DbCluster::Core)]
+        );
     }
 }
