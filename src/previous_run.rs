@@ -60,9 +60,13 @@ pub async fn report(app_state: Arc<AppState>) {
             }),
         None => vec![],
     };
-    if let Some(message) = report_message(previous.map(|p| p.pid), exit_status, &queries) {
+    let pid = previous.map(|p| p.pid);
+    if let Some(message) = report_message(pid, exit_status, &queries) {
         tracing::error!("{message}");
-        wikimisc::telemetry::event(Level::Error, message);
+    }
+    // The dashboard only gets the count: query strings can contain user names and titles.
+    if let Some(summary) = report_summary(pid, exit_status, queries.len()) {
+        wikimisc::telemetry::event(Level::Error, summary);
     }
 }
 
@@ -80,31 +84,38 @@ fn describe_exit(status: i32) -> Option<String> {
 }
 
 /// The report on the previous process, or `None` if there is nothing to say.
-fn report_message(
-    pid: Option<u32>,
-    exit_status: Option<i32>,
-    queries: &[String],
-) -> Option<String> {
+/// How the previous process ended and how many queries it was running; `None`
+/// for a clean exit with nothing running. Safe to send off the host.
+fn report_summary(pid: Option<u32>, exit_status: Option<i32>, running: usize) -> Option<String> {
     let ending = exit_status.and_then(describe_exit);
-    if ending.is_none() && queries.is_empty() {
+    if ending.is_none() && running == 0 {
         return None;
     }
     let who = match pid {
         Some(pid) => format!("The previous instance (pid {pid})"),
         None => "The previous instance".to_string(),
     };
-    let mut message = format!("{who} {}", ending.as_deref().unwrap_or("ended"));
+    let mut summary = format!("{who} {}", ending.as_deref().unwrap_or("ended"));
+    if running > 0 {
+        summary += &format!(" while running {running} queries");
+    }
+    Some(summary)
+}
+
+/// [`report_summary`] plus the interrupted queries themselves, for the local log.
+fn report_message(
+    pid: Option<u32>,
+    exit_status: Option<i32>,
+    queries: &[String],
+) -> Option<String> {
+    let mut message = report_summary(pid, exit_status, queries.len())?;
     if !queries.is_empty() {
         let shown: Vec<String> = queries
             .iter()
             .take(MAX_REPORTED_QUERIES)
             .map(|q| q.chars().take(MAX_REPORTED_QUERY_CHARS).collect())
             .collect();
-        message += &format!(
-            " while running {} queries: {}",
-            queries.len(),
-            shown.join(" | ")
-        );
+        message += &format!(": {}", shown.join(" | "));
         if queries.len() > MAX_REPORTED_QUERIES {
             message += " | …";
         }
@@ -137,6 +148,19 @@ mod tests {
             "was killed by signal 6 (exit status 134)"
         );
         assert_eq!(describe_exit(1).unwrap(), "exited with status 1");
+    }
+
+    #[test]
+    fn summary_for_the_dashboard_has_no_query_strings() {
+        let queries = vec!["user=SomeUser&title=Secret".to_string()];
+        let summary = report_summary(Some(7), Some(137), queries.len()).unwrap();
+        assert!(summary.ends_with("while running 1 queries"), "{summary}");
+        assert!(!summary.contains("SomeUser"), "{summary}");
+        assert!(
+            report_message(Some(7), Some(137), &queries)
+                .unwrap()
+                .contains("SomeUser")
+        );
     }
 
     #[test]
