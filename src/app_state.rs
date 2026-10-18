@@ -647,9 +647,10 @@ impl AppError {
         // Admission control turned the request away (503).
         if lc.contains("overloaded") {
             AppError::Overloaded
-        // The query asked for more than the result cap; checked before the
-        // upstream keywords, since its advice mentions SPARQL (400).
-        } else if lc.contains("too many results") {
+        // The query asked for more than the result cap, or the SPARQL
+        // endpoint rejected it as malformed; checked before the upstream
+        // keywords, since either message may mention SPARQL (400).
+        } else if lc.contains("too many results") || lc.contains("endpoint rejected the query") {
             AppError::BadRequest
         // Upstream / infrastructure failures (502).
         } else if lc.contains("max_user_connections")

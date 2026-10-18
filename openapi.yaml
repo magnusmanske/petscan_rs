@@ -183,6 +183,16 @@ paths:
           in: query
           schema:
             type: string
+        - name: sparql_server
+          in: query
+          description: >-
+            Where the `sparql` query runs. Wikidata keeps scholarly articles in a
+            graph of their own. `wikidata_v2*` is the Wikidata Query Service v2
+            (QLever); `qlever_wd` is QLever's own instance.
+          schema:
+            type: string
+            enum: [wikidata, wikidata_scholarly, wikidata_v2, wikidata_v2_scholarly, qlever_wd]
+            default: wikidata
         - name: manual_list
           in: query
           schema:
