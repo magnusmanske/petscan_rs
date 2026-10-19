@@ -9,8 +9,8 @@ pub mod wikidata;
 use crate::{pagelist::PageList, platform::Platform};
 use anyhow::Result;
 use async_trait::async_trait;
-use mysql_async::Value as MyValue;
 use rayon::prelude::*;
+use wikimisc::mysql_async::Value as MyValue;
 
 /// An SQL fragment plus the values bound to its `?` placeholders.
 ///
@@ -160,7 +160,7 @@ mod tests {
         let mut sql = SQLtuple("SELECT * FROM page WHERE ".to_string(), vec![]);
         let sub = SQLtuple(
             "page_title=?".to_string(),
-            vec![mysql_async::Value::Bytes("Foo".into())],
+            vec![MyValue::Bytes("Foo".into())],
         );
         append_sql(&mut sql, sub);
         assert_eq!(sql.0, "SELECT * FROM page WHERE page_title=?");
@@ -182,10 +182,7 @@ mod tests {
         assert!(prep_quote(&["a".to_string(), "b".to_string()]).placeholders_balanced());
         let missing_value = SQLtuple("x=?".to_string(), vec![]);
         assert!(!missing_value.placeholders_balanced());
-        let extra_value = SQLtuple(
-            "x=1".to_string(),
-            vec![mysql_async::Value::Bytes("y".into())],
-        );
+        let extra_value = SQLtuple("x=1".to_string(), vec![MyValue::Bytes("y".into())]);
         assert!(!extra_value.placeholders_balanced());
     }
 
@@ -195,9 +192,9 @@ mod tests {
         let SQLtuple(placeholders, values) = full_entity_id_to_number(&strings);
         assert_eq!(placeholders, "?,?,?");
         assert_eq!(values.len(), 3);
-        assert_eq!(values[0], mysql_async::Value::Bytes("123".into()));
-        assert_eq!(values[1], mysql_async::Value::Bytes("456".into()));
-        assert_eq!(values[2], mysql_async::Value::Bytes("789".into()));
+        assert_eq!(values[0], MyValue::Bytes("123".into()));
+        assert_eq!(values[1], MyValue::Bytes("456".into()));
+        assert_eq!(values[2], MyValue::Bytes("789".into()));
     }
 
     #[test]

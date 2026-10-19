@@ -4,9 +4,9 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use mysql_async::from_row;
-use mysql_async::prelude::Queryable;
 use wikimisc::mediawiki::title::Title;
+use wikimisc::mysql_async::from_row;
+use wikimisc::mysql_async::prelude::Queryable;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SourceSitelinks {
@@ -149,7 +149,10 @@ impl SourceSitelinks {
             .get_wiki_db_connection_for_tables(&self.main_wiki, &["page", "langlinks"])
             .await?;
         let rows = conn
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .exec_iter(
+                sql.0.as_str(),
+                wikimisc::mysql_async::Params::Positional(sql.1),
+            )
             .await
             .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<(Vec<u8>, u32)>)
@@ -237,11 +240,11 @@ mod tests {
     // the builder. Parameter values are also verified.
 
     /// Helper: extract `MyValue::Bytes` → String for ergonomic assertions.
-    fn params_as_strings(params: &[mysql_async::Value]) -> Vec<String> {
+    fn params_as_strings(params: &[wikimisc::mysql_async::Value]) -> Vec<String> {
         params
             .iter()
             .map(|v| match v {
-                mysql_async::Value::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+                wikimisc::mysql_async::Value::Bytes(b) => String::from_utf8_lossy(b).to_string(),
                 other => format!("{other:?}"),
             })
             .collect()

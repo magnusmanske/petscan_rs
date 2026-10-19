@@ -5,7 +5,6 @@ use crate::database_manager::DbCluster;
 use crate::form_parameters::FormParameters;
 use crate::platform::MyResponse;
 use anyhow::{Context, Result, anyhow};
-use mysql_async as my;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -15,6 +14,7 @@ use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use wikimisc::mediawiki::api::Api;
+use wikimisc::mysql_async as my;
 use wikimisc::site_matrix::SiteMatrix;
 use wikimisc::telemetry::ExitReason;
 
@@ -250,16 +250,6 @@ impl AppState {
     // ------------------------------------------------------------------
     // Delegating accessors – server / schema name resolution
     // ------------------------------------------------------------------
-
-    pub fn fix_wiki_name(&self, wiki: &str) -> String {
-        self.db_manager.fix_wiki_name(wiki)
-    }
-
-    /// Returns the canonical Toolforge host and `_p`-suffixed database name
-    /// for a wiki replica, as a `(host, schema)` tuple.
-    pub fn db_host_and_schema_for_wiki(&self, wiki: &str, cluster: DbCluster) -> (String, String) {
-        self.db_manager.db_host_and_schema_for_wiki(wiki, cluster)
-    }
 
     /// The single cluster able to serve a query reading all of `tables`.
     pub fn cluster_for_tables(&self, wiki: &str, tables: &[&str]) -> Result<DbCluster> {
@@ -723,24 +713,6 @@ mod tests {
     }
 
     #[test]
-    fn test_fix_wiki_name_be_tarask() {
-        let state = state_with_config(make_minimal_config());
-        assert_eq!(state.fix_wiki_name("be-taraskwiki"), "be_x_oldwiki");
-        assert_eq!(state.fix_wiki_name("be-x-oldwiki"), "be_x_oldwiki");
-        assert_eq!(state.fix_wiki_name("be_taraskwiki"), "be_x_oldwiki");
-        assert_eq!(state.fix_wiki_name("be_x_oldwiki"), "be_x_oldwiki");
-    }
-
-    #[test]
-    fn test_fix_wiki_name_normal() {
-        let state = state_with_config(make_minimal_config());
-        assert_eq!(state.fix_wiki_name("enwiki"), "enwiki");
-        assert_eq!(state.fix_wiki_name("wikidatawiki"), "wikidatawiki");
-        // Hyphens converted to underscores for non-special wikis
-        assert_eq!(state.fix_wiki_name("zh-min-nanwiki"), "zh_min_nanwiki");
-    }
-
-    #[test]
     fn test_using_file_table() {
         let state_true = state_with_config(Config {
             use_file_table: true,
@@ -768,28 +740,6 @@ mod tests {
 
         let state2 = state_with_config(Config::default());
         assert_eq!(state2.get_restart_code(), None);
-    }
-
-    #[test]
-    fn test_db_host_and_schema_for_wiki_web() {
-        let state = state_with_config(make_minimal_config());
-        let (host, schema) = state.db_host_and_schema_for_wiki("enwiki", DbCluster::Core);
-        assert_eq!(host, "enwiki.web.db.svc.wikimedia.cloud");
-        assert_eq!(schema, "enwiki_p");
-    }
-
-    #[test]
-    fn test_db_host_and_schema_for_wiki_links_cluster() {
-        let state = state_with_config(make_minimal_config());
-        // Commons' links tables moved to their own cluster in Sept 2026 ...
-        let (host, schema) = state.db_host_and_schema_for_wiki("commonswiki", DbCluster::Links);
-        assert_eq!(host, "links.commonswiki.web.db.svc.wikimedia.cloud");
-        assert_eq!(schema, "commonswiki_p");
-        // ... while every other wiki keeps serving them from its core cluster,
-        // so callers may always ask for `Links`.
-        let (en_host, en_schema) = state.db_host_and_schema_for_wiki("enwiki", DbCluster::Links);
-        assert_eq!(en_host, "enwiki.web.db.svc.wikimedia.cloud");
-        assert_eq!(en_schema, "enwiki_p");
     }
 
     #[test]
@@ -826,25 +776,6 @@ mod tests {
                 .cluster_for_tables("dewiki", &["categorylinks", "revision"])
                 .is_ok()
         );
-    }
-
-    #[test]
-    fn test_db_host_and_schema_for_wiki_x3() {
-        let state = state_with_config(make_minimal_config());
-        let (host, schema) =
-            state.db_host_and_schema_for_wiki("wikidatawiki", DbCluster::TermStore);
-        assert_eq!(
-            host,
-            "termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud"
-        );
-        assert_eq!(schema, "wikidatawiki_p");
-    }
-
-    #[test]
-    fn test_db_host_and_schema_normalises_wiki_name() {
-        let state = state_with_config(make_minimal_config());
-        let (_host, schema) = state.db_host_and_schema_for_wiki("be-taraskwiki", DbCluster::Core);
-        assert_eq!(schema, "be_x_oldwiki_p");
     }
 
     #[tokio::test]
@@ -1109,23 +1040,6 @@ mod tests {
                 .site_matrix
                 .get_wiki_for_server_url("https://outreach.wikimedia.org"),
             Some("outreachwiki".to_string())
-        );
-    }
-
-    #[test]
-    fn test_db_host_and_schema_for_wiki_schema_names() {
-        let state = state_with_config(make_minimal_config());
-        assert_eq!(
-            "enwiki_p".to_string(),
-            state
-                .db_host_and_schema_for_wiki("enwiki", DbCluster::Core)
-                .1
-        );
-        assert_eq!(
-            "be_x_oldwiki_p".to_string(),
-            state
-                .db_host_and_schema_for_wiki("be-taraskwiki", DbCluster::Core)
-                .1
         );
     }
 

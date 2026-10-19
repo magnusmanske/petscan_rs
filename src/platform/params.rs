@@ -1,5 +1,6 @@
 use crate::platform::Platform;
 use wikimisc::mediawiki::title::Title;
+use wikimisc::toolforge::db::normalize_dbname;
 
 impl Platform {
     /// Checks if a parameter is set and non-blank
@@ -68,7 +69,7 @@ impl Platform {
             .replace('_', "-");
         let project = self.get_param_default("project", "wikipedia");
         self.get_wiki_for_language_project(&language, &project)
-            .map(|wiki| self.state().fix_wiki_name(&wiki))
+            .map(|wiki| normalize_dbname(&wiki))
     }
 
     /// Maps a language + project pair to a wiki database name
@@ -185,6 +186,19 @@ mod tests {
         assert_eq!(p.usize_option_from_param("count"), Some(42));
         assert_eq!(p.usize_option_from_param("bad"), None);
         assert_eq!(p.usize_option_from_param("missing"), None);
+    }
+
+    #[test]
+    fn test_get_main_wiki_normalises_database_name() {
+        let main_wiki = |language| {
+            make_platform(vec![("language", language), ("project", "wikipedia")]).get_main_wiki()
+        };
+        assert_eq!(main_wiki("en"), Some("enwiki".to_string()));
+        assert_eq!(main_wiki("zh-min-nan"), Some("zh_min_nanwiki".to_string()));
+        assert_eq!(main_wiki("zh_min_nan"), Some("zh_min_nanwiki".to_string()));
+        assert_eq!(main_wiki("be-tarask"), Some("be_x_oldwiki".to_string()));
+        assert_eq!(main_wiki("be-x-old"), Some("be_x_oldwiki".to_string()));
+        assert_eq!(main_wiki("DE"), Some("dewiki".to_string()));
     }
 
     #[test]

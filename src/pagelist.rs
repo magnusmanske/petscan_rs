@@ -6,15 +6,15 @@ use crate::platform::{MAX_CONCURRENT_DB_BATCHES, PAGE_BATCH_SIZE, Platform};
 use crate::query_context::QueryContext;
 use anyhow::{Result, anyhow};
 use futures::stream::{StreamExt, iter};
-use mysql_async as my;
-use mysql_async::Value as MyValue;
-use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
+use wikimisc::mysql_async as my;
+use wikimisc::mysql_async::Value as MyValue;
+use wikimisc::mysql_async::prelude::Queryable;
 
 /// Acquire a read lock, transparently recovering from a poisoned lock.
 ///
@@ -38,10 +38,6 @@ fn read_lock<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
 fn write_lock<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     lock.write().unwrap_or_else(|p| p.into_inner())
 }
-
-/// Historical name for [`DbCluster`]; kept so existing callers of
-/// [`crate::app_state::AppState::db_host_and_schema_for_wiki`] keep compiling.
-pub use crate::database_manager::DbCluster as DatabaseCluster;
 
 /// Distinguishes Wikidata item entities (Q-prefixed, namespace 0) from
 /// property entities (P-prefixed, namespace 120). The two flavours map to
@@ -394,7 +390,7 @@ impl PageList {
             .await
             .map_err(|e| anyhow!(e))?;
         let rows = conn
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
             .await?
             .collect_and_drop()
             .await?;
@@ -420,7 +416,7 @@ impl PageList {
     ///
     /// Preferred over [`Self::run_batch_queries`] wherever a query reads
     /// tables that are not all on a wiki's core cluster: naming the tables
-    /// keeps the cluster mapping in one place (`wikimisc`'s `DbCluster`)
+    /// keeps the cluster mapping in one place (`toolforge`'s `ExtensionDb`)
     /// instead of spreading it over the call sites. Fails when the tables
     /// span clusters, which no single connection can join.
     pub async fn run_batch_queries_for_tables(

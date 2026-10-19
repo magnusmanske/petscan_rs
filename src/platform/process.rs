@@ -7,10 +7,6 @@ use crate::pagelist_entry::{FileInfo, LinkCount, PageListEntry, TriState};
 use crate::platform::{PAGE_BATCH_SIZE, Platform};
 use anyhow::{Result, anyhow};
 use my::Value::Bytes;
-use mysql_async as my;
-use mysql_async::Value as MyValue;
-use mysql_async::from_row;
-use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -18,6 +14,10 @@ use std::str::FromStr;
 use tokio::sync::Mutex as TokioMutex;
 use wikimisc::mediawiki::api::NamespaceID;
 use wikimisc::mediawiki::title::Title;
+use wikimisc::mysql_async as my;
+use wikimisc::mysql_async::Value as MyValue;
+use wikimisc::mysql_async::from_row;
+use wikimisc::mysql_async::prelude::Queryable;
 
 // ─── Page-fields flags ───────────────────────────────────────────────────────
 
@@ -512,7 +512,7 @@ impl Platform {
 
         for sql in batches {
             let rows = conn
-                .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+                .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
                 .await?
                 .map_and_drop(from_row::<Vec<u8>>)
                 .await?;
@@ -602,12 +602,12 @@ impl Platform {
 
     async fn process_redlinks_batch(
         &self,
-        conn: &mut mysql_async::Conn,
+        conn: &mut my::Conn,
         sql: SQLtuple,
         redlink_counter: &mut HashMap<Title, LinkCount>,
     ) -> Result<()> {
         let rows = conn
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!("{e}"))?
             .map_and_drop(from_row::<(Vec<u8>, i64, usize)>)
@@ -657,7 +657,7 @@ impl Platform {
             );
 
             let rows = conn
-                .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+                .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
                 .await
                 .map_err(|e| anyhow!("{e}"))?
                 .map_and_drop(from_row::<(Vec<u8>, i64)>)
@@ -1048,7 +1048,7 @@ impl Platform {
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             let mut subresult = conn
-                .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+                .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
                 .await
                 .map_err(|e| anyhow!("{e}"))?
                 .collect_and_drop()

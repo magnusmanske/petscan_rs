@@ -46,7 +46,7 @@ for tunnel in $TUNNELS; do
 done
 
 # Credentials: the same ones PetScan itself uses locally, i.e. the `user` /
-# `password` from config.json (see DatabaseManager::credentials).
+# `password` from config.json (see DatabaseManager::replica_server).
 USER=$(grep -o '"user": *"[^"]*"' config.json | head -1 | cut -d'"' -f4)
 PASS=$(grep -o '"password": *"[^"]*"' config.json | head -1 | cut -d'"' -f4)
 if [[ -z $USER ]]; then

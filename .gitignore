@@ -7,3 +7,6 @@ CLAUDE.md
 oauth.ini
 flickr.key
 petscan.pid
+
+# Database credentials, never commit
+replica.my.cnf

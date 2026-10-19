@@ -12,15 +12,15 @@ use chrono::Duration;
 use chrono::prelude::*;
 use core::ops::Sub;
 use futures::stream::{StreamExt, iter};
-use mysql_async as my;
-use mysql_async::Value as MyValue;
-use mysql_async::from_row;
-use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use tracing::debug;
 use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
+use wikimisc::mysql_async as my;
+use wikimisc::mysql_async::Value as MyValue;
+use wikimisc::mysql_async::from_row;
+use wikimisc::mysql_async::prelude::Queryable;
 
 mod helpers;
 use helpers::MAX_CATEGORY_BATCH_SIZE;
@@ -565,7 +565,7 @@ impl SourceDatabase {
         let rows = state
             .get_wiki_db_connection_for_tables(wiki, helpers::SUBCATEGORIES_TABLES)
             .await?
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<(u32, Vec<u8>)>)
@@ -948,7 +948,7 @@ impl SourceDatabase {
             .get_wiki_db_connection_for_cluster(wiki, cluster)
             .await?;
         let ids = conn
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<u32>)
@@ -1136,7 +1136,7 @@ impl SourceDatabase {
         let rows = state
             .get_wiki_db_connection_for_tables(wiki, helpers::CATEGORY_MEMBERS_TABLES)
             .await?
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<(u32, Vec<u8>, NamespaceID)>)
@@ -1371,7 +1371,7 @@ impl SourceDatabase {
             .get_wiki_db_connection_for_cluster(wiki, cluster)
             .await?;
         let rows = conn
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<(u32, Vec<u8>)>)
@@ -1745,7 +1745,7 @@ impl SourceDatabase {
             Some(sql.1.len()),
         );
         let rows = conn
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<(u32, Vec<u8>, NamespaceID, Vec<u8>, u32, LinkCount)>)

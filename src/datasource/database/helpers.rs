@@ -6,10 +6,10 @@
 //! unit-testable without a database.
 
 use crate::datasource::{SQLtuple, append_sql, prep_quote};
-use mysql_async::Value as MyValue;
 use std::collections::HashMap;
 use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
+use wikimisc::mysql_async::Value as MyValue;
 
 use super::SourceDatabaseCatDepth;
 

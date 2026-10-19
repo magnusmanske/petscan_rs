@@ -3,8 +3,8 @@ use crate::pagelist::PageList;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use mysql_async::from_row;
-use mysql_async::prelude::Queryable;
+use wikimisc::mysql_async::from_row;
+use wikimisc::mysql_async::prelude::Queryable;
 
 #[derive(Debug, Clone, PartialEq, Default, Copy)]
 pub struct SourceWikidata;

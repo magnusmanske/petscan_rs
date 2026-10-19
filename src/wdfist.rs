@@ -5,16 +5,16 @@ use crate::form_parameters::FormParameters;
 use crate::pagelist::PageList;
 use crate::platform::{PAGE_BATCH_SIZE, Platform};
 use anyhow::{Result, anyhow};
-use mysql_async as my;
-use mysql_async::Value as MyValue;
-use mysql_async::from_row;
-use mysql_async::prelude::Queryable;
 use rayon::prelude::*;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex};
 use wikimisc::mediawiki::api::Api;
+use wikimisc::mysql_async as my;
+use wikimisc::mysql_async::Value as MyValue;
+use wikimisc::mysql_async::from_row;
+use wikimisc::mysql_async::prelude::Queryable;
 
 static RE_FILETYPE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"^(.+)\.([^.]+)$"#).expect("WDfist::is_valid_filename RE_FILETYPE is invalid")
@@ -595,7 +595,7 @@ impl WDfist {
         sql: SQLtuple,
     ) -> Result<()> {
         let rows = conn
-            .exec_iter(sql.0.as_str(), mysql_async::Params::Positional(sql.1))
+            .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
             .await
             .map_err(|e| anyhow!("{e}"))?
             .map_and_drop(from_row::<(String, String)>)

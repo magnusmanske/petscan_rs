@@ -1,33 +1,27 @@
 use crate::config::Config;
 use anyhow::{Result, anyhow};
 use chrono::prelude::*;
-use mysql_async as my;
-use mysql_async::Value as MyValue;
-use mysql_async::from_row;
-use mysql_async::prelude::Queryable;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{instrument, trace};
-pub use wikimisc::toolforge_db::{DbCluster, DbServerGroup};
+use wikimisc::mysql_async;
+use wikimisc::mysql_async as my;
+use wikimisc::mysql_async::Value as MyValue;
+use wikimisc::mysql_async::from_row;
+use wikimisc::mysql_async::prelude::Queryable;
+use wikimisc::toolforge;
+use wikimisc::toolforge::db::{Cluster, DBConnectionInfo, ExtensionDb, normalize_dbname};
+use wikimisc::toolforge::pool::CustomPool;
 
-/// The DNS suffix shared by every Wiki Replica service. A replica host is
-/// `{cluster prefix}{wiki}.{server group}` plus this.
+/// The DNS suffix shared by every Wiki Replica service. Only needed for
+/// credentials from config.json; everywhere else `toolforge` names the host.
 const REPLICA_DOMAIN: &str = ".db.svc.wikimedia.cloud";
 
-/// Which replica service group serves a cluster.
-///
-/// Everything uses `web`, whose short query timeout suits a user waiting for
-/// a result. The Wikidata term store is the exception: PetScan has always
-/// read it from the `analytics` host, whose longer timeout the label queries
-/// need.
-const fn server_group(cluster: DbCluster) -> DbServerGroup {
-    match cluster {
-        DbCluster::TermStore => DbServerGroup::Analytics,
-        _ => DbServerGroup::Web,
-    }
-}
+/// Where the local SSH tunnels listen. A config `host` of this value routes
+/// every connection through the tunnels in `port_mapping`.
+const LOCALHOST: &str = "127.0.0.1";
 
 /// Retry policy for `max_user_connections` rejections. Wikimedia replicas
 /// enforce a per-user limit (typically 10 concurrent connections); a brief
@@ -36,18 +30,17 @@ const MAX_RETRY_ATTEMPTS: u32 = 10;
 const BASE_DELAY_MS: u64 = 100;
 const MAX_DELAY_MS: u64 = 5000;
 
-/// Hard upper bound on a single `Conn::new` attempt. `mysql_async` 0.36 does
-/// not expose a connect-level timeout on `OptsBuilder`, so we wrap the call
-/// with `tokio::time::timeout`. Wikimedia replicas should always answer the
-/// TCP+TLS+auth handshake within a few seconds; anything longer means the
-/// replica is unreachable and we should fail fast rather than pin a worker.
+/// Hard upper bound on leasing a pooled connection, including waiting for a
+/// free one. Wikimedia replicas should always answer the TCP+auth handshake
+/// within a few seconds; anything longer means the replica is unreachable and
+/// we should fail fast rather than pin a worker.
 const DB_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// TCP keepalive interval. Surfaces an OS-level error on dead sockets so a
 /// dropped connection cannot leave an `exec_*` call blocked forever.
 /// (True per-query read timeouts need `tokio::time::timeout` at each call
 /// site and belong with the request-level wall-clock budget — see P1 #7.)
-const TCP_KEEPALIVE_MS: u32 = 30_000;
+const TCP_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Maximum live connections held in any one per-wiki pool. Wikimedia
 /// replicas enforce ~10 connections per user; 5 leaves headroom for
@@ -64,12 +57,129 @@ const POOL_INACTIVE_TTL: std::time::Duration = std::time::Duration::from_secs(30
 /// to lose.
 const POOL_EVICT_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
 
+/// The replica database a query runs on: a wiki's core database, or one of
+/// the extension databases holding tables split off from it.
+///
+/// Which tables live where, and which wikis have which extension database,
+/// is `toolforge`'s [`ExtensionDb`]'s business; this only names the clusters
+/// PetScan routes queries to, so they can key pools and group clauses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DbCluster {
+    /// The wiki's core database, holding every table not split off elsewhere.
+    #[default]
+    Core,
+    /// The Commons links tables, split off in September 2026.
+    Links,
+    /// The Wikidata term store, i.e. the `wbt_*` tables (the legacy `x3`).
+    TermStore,
+}
+
+impl DbCluster {
+    const fn extension(self) -> Option<ExtensionDb> {
+        match self {
+            Self::Core => None,
+            Self::Links => Some(ExtensionDb::Links),
+            Self::TermStore => Some(ExtensionDb::TermStore),
+        }
+    }
+
+    fn from_extension(extension: Option<ExtensionDb>) -> Result<Self> {
+        match extension {
+            None => Ok(Self::Core),
+            Some(ExtensionDb::Links) => Ok(Self::Links),
+            Some(ExtensionDb::TermStore) => Ok(Self::TermStore),
+            Some(other) => Err(anyhow!("Unsupported extension database '{other}'")),
+        }
+    }
+
+    /// Which replica service group serves this cluster.
+    ///
+    /// Everything uses `web`, whose short query timeout suits a user waiting
+    /// for a result. The Wikidata term store is the exception: PetScan has
+    /// always read it from the `analytics` host, whose longer timeout the
+    /// label queries need.
+    const fn server_group(self) -> Cluster {
+        match self {
+            Self::TermStore => Cluster::Analytics,
+            _ => Cluster::Web,
+        }
+    }
+
+    /// A table only this cluster's extension database has (none for
+    /// [`Self::Core`]). `toolforge` picks the database to connect to by the
+    /// tables a query reads, so this is how to ask it for this cluster.
+    const fn routing_tables(self) -> &'static [&'static str] {
+        match self {
+            Self::Core => &[],
+            Self::Links => &["linktarget"],
+            Self::TermStore => &["wbt_text"],
+        }
+    }
+
+    /// The leading labels of the replica host serving this cluster of `wiki`
+    /// (e.g. `links.commonswiki`), which is also how `toolforge` and
+    /// `port_mapping` name its SSH tunnel.
+    fn tunnel_target(self, wiki: &str) -> String {
+        match self.extension() {
+            Some(extension) => format!("{extension}.{wiki}"),
+            None => wiki.to_string(),
+        }
+    }
+}
+
+/// A database server and the credentials to log in with. Deliberately not
+/// `Debug`, so the password cannot end up in a log.
+struct Server {
+    host: String,
+    port: u16,
+    user: String,
+    password: String,
+    database: String,
+}
+
+impl From<DBConnectionInfo> for Server {
+    fn from(info: DBConnectionInfo) -> Self {
+        Self {
+            host: info.host,
+            port: info.port,
+            user: info.user,
+            password: info.password,
+            database: info.database,
+        }
+    }
+}
+
+impl Server {
+    /// A connection pool for this server holding at most `pool_max`
+    /// connections, none of them while idle for [`POOL_INACTIVE_TTL`].
+    fn pool(self, pool_max: usize) -> Result<CustomPool> {
+        Ok(CustomPool::builder(self.host, self.user, self.password)
+            .port(self.port)
+            .database(self.database)
+            .pool_max(pool_max)
+            .inactive_connection_ttl(POOL_INACTIVE_TTL)
+            .connect_timeout(DB_CONNECT_TIMEOUT)
+            .tcp_keepalive(TCP_KEEPALIVE)
+            .build()?)
+    }
+}
+
+/// Whether `wiki` can be part of a replica host name: a wiki database name
+/// only consists of lowercase ASCII letters, digits and underscores, so
+/// anything else could send the connection, and the credentials, elsewhere.
+fn is_valid_wiki(wiki: &str) -> bool {
+    !wiki.is_empty()
+        && wiki
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
 type PoolKey = (String, DbCluster);
 
 /// A per-wiki pool and when a connection was last leased from it.
 #[derive(Debug)]
 struct WikiPool {
-    pool: my::Pool,
+    pool: CustomPool,
     last_used: Instant,
 }
 
@@ -85,18 +195,6 @@ fn exponential_backoff_ms(attempt: u32) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Credential source – toolforge (replica.my.cnf) or config.json fallback
-// ---------------------------------------------------------------------------
-
-/// A resolved user/password pair, obtained from either `~/replica.my.cnf`
-/// (via the `toolforge` crate) or the legacy `config.json` fields.
-#[derive(Debug, Clone)]
-struct Credentials {
-    user: String,
-    password: String,
-}
-
-// ---------------------------------------------------------------------------
 // DatabaseManager – owns all database-related state and logic
 // ---------------------------------------------------------------------------
 
@@ -109,17 +207,19 @@ pub struct DatabaseManager {
     /// after [`POOL_EVICT_AFTER`] without use.
     wiki_pools: Arc<Mutex<HashMap<PoolKey, WikiPool>>>,
     /// Shared pool for the tool DB (PSID + query log).
-    tool_db_pool: Arc<Mutex<Option<my::Pool>>>,
+    tool_db_pool: Arc<Mutex<Option<CustomPool>>>,
 }
 
 impl DatabaseManager {
     /// Initialise from the application config.
     ///
-    /// On Toolforge, database credentials are supplied by `~/replica.my.cnf`
-    /// (read on-demand by the `toolforge` crate).  When that file is absent
-    /// (local development), `config.user` / `config.password` and
-    /// `config.port_mapping` are used as a fallback so existing SSH-tunnel
-    /// workflows continue to work unchanged.
+    /// Database servers and credentials are found by the `toolforge` crate:
+    /// from the `TOOL_REPLICA_*` / `TOOL_TOOLSDB_*` environment variables, or
+    /// `replica.my.cnf` in `$TOOL_DATA_DIR` or the home directory. Without
+    /// them (local development, or a server outside Toolforge),
+    /// `config.user` / `config.password` are used instead, and
+    /// `config.port_mapping` so existing SSH-tunnel workflows continue to
+    /// work unchanged.
     pub fn new_from_config(config: &Config) -> Self {
         Self {
             config: config.clone(),
@@ -157,83 +257,23 @@ impl DatabaseManager {
     }
 
     // ------------------------------------------------------------------
-    // Credential resolution
+    // Wiki name and cluster resolution (credential-free helpers)
     // ------------------------------------------------------------------
-
-    /// Resolve database credentials.
-    ///
-    /// Tries `~/replica.my.cnf` first (standard Toolforge setup).  When that
-    /// file is absent – e.g. during local development – falls back to the
-    /// `user` / `password` fields in the JSON config.
-    fn credentials(&self) -> Result<Credentials> {
-        // Attempt toolforge / replica.my.cnf first.
-        if let Ok(info) = toolforge::connection_info!("enwiki") {
-            return Ok(Credentials {
-                user: info.user,
-                password: info.password,
-            });
-        }
-
-        // Fall back to config.json (local dev).
-        if self.config.user.is_empty() {
-            return Err(anyhow!(
-                "No ~/replica.my.cnf found and no 'user' key in config – \
-                 cannot resolve database credentials"
-            ));
-        }
-        Ok(Credentials {
-            user: self.config.user.clone(),
-            password: self.config.password.clone(),
-        })
-    }
-
-    // ------------------------------------------------------------------
-    // Server / schema name resolution (credential-free helpers)
-    // ------------------------------------------------------------------
-
-    pub fn fix_wiki_name(&self, wiki: &str) -> String {
-        match wiki {
-            "be-taraskwiki" | "be-x-oldwiki" | "be_taraskwiki" | "be_x_oldwiki" => "be_x_oldwiki",
-            other => other,
-        }
-        .to_string()
-        .replace('-', "_")
-    }
-
-    /// Returns the canonical Toolforge host and `_p`-suffixed database name
-    /// for a wiki replica, as a `(host, schema)` tuple.
-    ///
-    /// Hosts follow the Toolforge pattern
-    /// `{cluster prefix}{wiki}.{server group}.db.svc.wikimedia.cloud`, so the
-    /// core cluster of `enwiki` is `enwiki.web.…` and the Commons links
-    /// cluster is `links.commonswiki.web.…`. Asking for a cluster a wiki does
-    /// not have falls back to [`DbCluster::Core`], where those tables still
-    /// live — so a caller may always ask for [`DbCluster::Links`] when
-    /// reading `pagelinks`, whatever the wiki.
-    ///
-    /// This method is credential-free; use [`Self::get_wiki_db_connection`]
-    /// when you need an actual connection.
-    pub fn db_host_and_schema_for_wiki(&self, wiki: &str, cluster: DbCluster) -> (String, String) {
-        let wiki = self.fix_wiki_name(wiki);
-        let cluster = self.effective_cluster(&wiki, cluster);
-        let host = format!(
-            "{prefix}{wiki}.{group}{REPLICA_DOMAIN}",
-            prefix = cluster.host_prefix(),
-            group = server_group(cluster),
-        );
-        let schema = format!("{wiki}_p");
-        (host, schema)
-    }
 
     /// Whether `wiki` has this cluster at all. Every wiki has a
     /// [`DbCluster::Core`]; an extension database exists only for the wikis
     /// whose tables were actually split off.
     pub fn wiki_has_cluster(&self, wiki: &str, cluster: DbCluster) -> bool {
-        cluster.applies_to_wiki(&self.fix_wiki_name(wiki))
+        let wiki = normalize_dbname(wiki);
+        cluster
+            .extension()
+            .is_none_or(|extension| extension.exists_for(&wiki))
     }
 
     /// The cluster actually used for `wiki`: the requested one where the wiki
-    /// has it, [`DbCluster::Core`] otherwise.
+    /// has it, [`DbCluster::Core`] otherwise, where those tables still live.
+    /// So a caller may always ask for [`DbCluster::Links`] when reading
+    /// `pagelinks`, whatever the wiki.
     fn effective_cluster(&self, wiki: &str, cluster: DbCluster) -> DbCluster {
         if self.wiki_has_cluster(wiki, cluster) {
             cluster
@@ -249,8 +289,12 @@ impl DatabaseManager {
     /// clauses needs: `page` is on the Commons links cluster as well as its
     /// core one, so a clause reading only `page` fits either.
     pub fn cluster_hosts_tables(&self, wiki: &str, cluster: DbCluster, tables: &[&str]) -> bool {
-        let wiki = self.fix_wiki_name(wiki);
-        tables.iter().all(|table| cluster.hosts_table(&wiki, table))
+        let wiki = normalize_dbname(wiki);
+        match self.effective_cluster(&wiki, cluster).extension() {
+            Some(extension) => tables.iter().all(|table| extension.has_table(table)),
+            // The core database has every table not split off elsewhere.
+            None => ExtensionDb::for_tables(&wiki, tables).is_ok_and(|e| e.is_none()),
+        }
     }
 
     /// The single cluster able to serve a query reading all of `tables`.
@@ -259,66 +303,91 @@ impl DatabaseManager {
     /// September 2026 links-table split — which no one connection can join;
     /// such a query has to be run in parts and combined in code.
     pub fn cluster_for_tables(&self, wiki: &str, tables: &[&str]) -> Result<DbCluster> {
-        let wiki = self.fix_wiki_name(wiki);
-        DbCluster::for_tables(&wiki, tables).map_err(|e| anyhow!(e))
+        let wiki = normalize_dbname(wiki);
+        DbCluster::from_extension(ExtensionDb::for_tables(&wiki, tables)?)
     }
 
     // ------------------------------------------------------------------
     // Connection helpers
     // ------------------------------------------------------------------
 
-    /// The `MySQL` port for `(wiki, cluster)`.
+    /// The `MySQL` port for `(wiki, cluster)` with credentials from
+    /// config.json, or with `config.host` set to `127.0.0.1`.
     ///
-    /// On Toolforge every service listens on the default 3306; locally each
-    /// replica is reached through its own SSH tunnel, so `config.port_mapping`
-    /// maps the leading labels of the replica host — `commonswiki`,
-    /// `links.commonswiki`, `termstore.wikidatawiki` — to a local port. `x3`
-    /// is still accepted as a legacy alias for the term store.
+    /// Locally each replica is reached through its own SSH tunnel, so
+    /// `config.port_mapping` maps the leading labels of the replica host —
+    /// `commonswiki`, `links.commonswiki`, `termstore.wikidatawiki` — to a
+    /// local port. `x3` is still accepted as a legacy alias for the term
+    /// store.
     fn tunnel_port(&self, wiki: &str, cluster: DbCluster) -> u16 {
-        let wiki = self.fix_wiki_name(wiki);
+        let wiki = normalize_dbname(wiki);
         let cluster = self.effective_cluster(&wiki, cluster);
-        let key = format!("{}{wiki}", cluster.host_prefix());
         let legacy_key = matches!(cluster, DbCluster::TermStore).then_some("x3");
         self.config
             .port_mapping
-            .get(&key)
+            .get(&cluster.tunnel_target(&wiki))
             .or_else(|| legacy_key.and_then(|k| self.config.port_mapping.get(k)))
             .copied()
             .unwrap_or_else(|| self.config.db_port.unwrap_or(3306))
     }
 
-    /// Build [`my::Opts`] for a wiki-replica or termstore connection.
+    /// The server holding `cluster` of `wiki`, and the credentials for it.
     ///
-    /// On Toolforge, credentials come from `~/replica.my.cnf` (via the
-    /// `toolforge` crate).  Locally they fall back to `config["user"]` /
-    /// `config["password"]`, and the port is taken from `port_mapping` (for
-    /// SSH-tunnel setups) or `config["db_port"]`.
-    fn get_mysql_opts_for_wiki(&self, wiki: &str, cluster: DbCluster) -> Result<my::Opts> {
-        let creds = self.credentials()?;
-
-        let (host, schema) = self.db_host_and_schema_for_wiki(wiki, cluster);
-        let port = self.tunnel_port(wiki, cluster);
-
-        // When running locally (host = 127.0.0.1 in config), always bind to
-        // 127.0.0.1 regardless of what db_host_and_schema_for_wiki computed.
-        let effective_host = if self.config.host == "127.0.0.1" {
-            "127.0.0.1".to_string()
-        } else {
-            host
+    /// `toolforge` resolves both, including its own local mode and tunnels
+    /// (`local='true'` and `[tunnels]` in `replica.my.cnf`). When it finds no
+    /// credentials, those from config.json are used. A `config.host` of
+    /// `127.0.0.1` routes every replica through the SSH tunnels in
+    /// `config.port_mapping`, wherever the credentials came from.
+    fn replica_server(&self, wiki: &str, cluster: DbCluster) -> Result<Server> {
+        let wiki = normalize_dbname(wiki);
+        let cluster = self.effective_cluster(&wiki, cluster);
+        let info = toolforge::db::connection_info_for_tables(
+            &wiki,
+            cluster.server_group(),
+            cluster.routing_tables(),
+        );
+        let mut server = match info {
+            Ok(info) => Server::from(info),
+            Err(e) => self.config_replica_server(&wiki, cluster, e)?,
         };
+        if self.config.host == LOCALHOST {
+            server.host = LOCALHOST.to_string();
+            server.port = self.tunnel_port(&wiki, cluster);
+        }
+        Ok(server)
+    }
 
-        let pool_opts = my::PoolOpts::default()
-            .with_constraints(my::PoolConstraints::new(0, WIKI_POOL_MAX).expect("valid"))
-            .with_inactive_connection_ttl(POOL_INACTIVE_TTL);
-        Ok(my::OptsBuilder::default()
-            .ip_or_hostname(effective_host)
-            .db_name(Some(schema))
-            .user(Some(creds.user))
-            .pass(Some(creds.password))
-            .tcp_port(port)
-            .tcp_keepalive(Some(TCP_KEEPALIVE_MS))
-            .pool_opts(pool_opts)
-            .into())
+    /// The replica server for `cluster` of `wiki` (already normalised), with
+    /// the credentials from config.json, for when `toolforge` found none
+    /// (`error`).
+    fn config_replica_server(
+        &self,
+        wiki: &str,
+        cluster: DbCluster,
+        error: toolforge::Error,
+    ) -> Result<Server> {
+        if matches!(error, toolforge::Error::InvalidDatabase(_)) {
+            return Err(error.into());
+        }
+        if self.config.user.is_empty() {
+            return Err(anyhow!(error).context(
+                "Cannot resolve database credentials, and there is no 'user' key in config",
+            ));
+        }
+        if !is_valid_wiki(wiki) {
+            return Err(anyhow!("Invalid wiki database name {wiki:?}"));
+        }
+        Ok(Server {
+            host: format!(
+                "{target}.{group}{REPLICA_DOMAIN}",
+                target = cluster.tunnel_target(wiki),
+                group = cluster.server_group(),
+            ),
+            port: self.tunnel_port(wiki, cluster),
+            user: self.config.user.clone(),
+            password: self.config.password.clone(),
+            database: format!("{wiki}_p"),
+        })
     }
 
     async fn set_group_concat_max_len(&self, wiki: &str, conn: &mut my::Conn) -> Result<()> {
@@ -331,7 +400,7 @@ impl DatabaseManager {
 
     /// Get or lazily create the connection pool for `(wiki, cluster)`, and
     /// close the pools nobody has used for [`POOL_EVICT_AFTER`].
-    async fn get_wiki_pool(&self, wiki: &str, cluster: DbCluster) -> Result<my::Pool> {
+    async fn get_wiki_pool(&self, wiki: &str, cluster: DbCluster) -> Result<CustomPool> {
         let now = Instant::now();
         let mut pools = self.wiki_pools.lock().await;
         for stale in take_stale_pools(&mut pools, now) {
@@ -344,7 +413,7 @@ impl DatabaseManager {
             entry.last_used = now;
             return Ok(entry.pool.clone());
         }
-        let pool = my::Pool::new(self.get_mysql_opts_for_wiki(wiki, cluster)?);
+        let pool = self.replica_server(wiki, cluster)?.pool(WIKI_POOL_MAX)?;
         pools.insert(
             key,
             WikiPool {
@@ -385,48 +454,39 @@ impl DatabaseManager {
         wiki: &str,
         cluster: DbCluster,
     ) -> Result<my::Conn> {
+        // Normalised once here so that spellings of one wiki share a pool.
+        let wiki = normalize_dbname(wiki);
+        let wiki = wiki.as_str();
         let cluster = self.effective_cluster(wiki, cluster);
         let pool = self.get_wiki_pool(wiki, cluster).await?;
         trace!(wiki, ?cluster, "leasing connection from pool");
         let mut attempt: u32 = 0;
-        let mut conn;
-        loop {
-            let connect = tokio::time::timeout(DB_CONNECT_TIMEOUT, pool.get_conn());
-            let result: Result<my::Conn, String> = match connect.await {
-                Ok(Ok(c)) => Ok(c),
-                Ok(Err(e)) => Err(format!("{e:?}")),
-                Err(_) => Err(format!(
-                    "Pool::get_conn timed out after {DB_CONNECT_TIMEOUT:?} for wiki={wiki}"
-                )),
+        let mut conn = loop {
+            let error = match pool.connect().await {
+                Ok(conn) => break conn,
+                Err(e) => e.to_string(),
             };
-            conn = match result {
-                Ok(conn2) => conn2,
-                Err(s) => {
-                    // Retry when the per-user connection limit is momentarily
-                    // exceeded, but bound the retries so a chronically-full
-                    // pool can't pin a worker forever.
-                    if s.contains("max_user_connections") && attempt < MAX_RETRY_ATTEMPTS {
-                        let base = exponential_backoff_ms(attempt);
-                        // ±25% jitter to avoid lockstep retries across workers.
-                        let jitter: f64 = rand::random_range(0.75..1.25);
-                        let delay_ms = ((base as f64) * jitter) as u64;
-                        tracing::warn!(
-                            wiki,
-                            attempt = attempt + 1,
-                            max_attempts = MAX_RETRY_ATTEMPTS,
-                            delay_ms,
-                            "max_user_connections hit; backing off"
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        attempt += 1;
-                        continue;
-                    }
-                    return Err(anyhow!(s));
-                }
-            };
-            self.set_group_concat_max_len(wiki, &mut conn).await?;
-            break;
-        }
+            // Retry when the per-user connection limit is momentarily
+            // exceeded, but bound the retries so a chronically-full pool
+            // can't pin a worker forever.
+            if !error.contains("max_user_connections") || attempt >= MAX_RETRY_ATTEMPTS {
+                return Err(anyhow!("Cannot connect to {wiki} ({cluster:?}): {error}"));
+            }
+            let base = exponential_backoff_ms(attempt);
+            // ±25% jitter to avoid lockstep retries across workers.
+            let jitter: f64 = rand::random_range(0.75..1.25);
+            let delay_ms = ((base as f64) * jitter) as u64;
+            tracing::warn!(
+                wiki,
+                attempt = attempt + 1,
+                max_attempts = MAX_RETRY_ATTEMPTS,
+                delay_ms,
+                "max_user_connections hit; backing off"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            attempt += 1;
+        };
+        self.set_group_concat_max_len(wiki, &mut conn).await?;
         Ok(conn)
     }
 
@@ -436,74 +496,53 @@ impl DatabaseManager {
             .await
     }
 
-    /// Opens a connection to the tool database.
-    ///
-    /// The schema name is read from `config["schema"]`.  On Toolforge,
-    /// credentials come from `~/replica.my.cnf` via `toolforge::db::toolsdb`;
-    /// locally they fall back to `config["user"]` / `config["password"]` and
-    /// the port is taken from `config["db_port"]` (defaulting to 3308 when
-    /// the host is 127.0.0.1, matching the conventional local SSH-tunnel
-    /// mapping).
-    pub async fn get_tool_db_connection(&self) -> Result<my::Conn> {
-        if self.config.schema.is_empty() {
+    /// The tool database's server: `ToolsDB` as found by `toolforge`, or else
+    /// `config.host` with the credentials from config.json and the port from
+    /// `config.db_port` (defaulting to 3308 when the host is 127.0.0.1,
+    /// matching the conventional local SSH-tunnel mapping).
+    fn tool_db_server(&self) -> Result<Server> {
+        let schema = &self.config.schema;
+        if schema.is_empty() {
             return Err(anyhow!("No schema key in config file"));
         }
-        let schema = self.config.schema.clone();
-
-        // Try toolforge (replica.my.cnf) first.
-        let (host, user, password, port) = if let Ok(info) = toolforge::db::toolsdb(schema.clone())
-        {
-            let port = 3306_u16;
-            (info.host, info.user, info.password, port)
+        if let Ok(info) = toolforge::db::toolsdb(schema.as_str()) {
+            return Ok(info.into());
+        }
+        if self.config.host.is_empty() {
+            return Err(anyhow!("No host key in config file"));
+        }
+        if self.config.user.is_empty() {
+            return Err(anyhow!("No user key in config file"));
+        }
+        let default_port: u16 = if self.config.host == LOCALHOST {
+            3308
         } else {
-            // Local-dev fallback: use config.json credentials.
-            if self.config.host.is_empty() {
-                return Err(anyhow!("No host key in config file"));
-            }
-            if self.config.user.is_empty() {
-                return Err(anyhow!("No user key in config file"));
-            }
-            let host = self.config.host.clone();
-            let user = self.config.user.clone();
-            let password = self.config.password.clone();
-            // Conventional local SSH-tunnel port for tools-db is 3308.
-            let default_port: u16 = if host == "127.0.0.1" { 3308 } else { 3306 };
-            let port = self.config.db_port.unwrap_or(default_port);
-            (host, user, password, port)
+            3306
         };
+        Ok(Server {
+            host: self.config.host.clone(),
+            port: self.config.db_port.unwrap_or(default_port),
+            user: self.config.user.clone(),
+            password: self.config.password.clone(),
+            database: schema.clone(),
+        })
+    }
 
+    /// Opens a connection to the tool database (`config.schema`); see
+    /// [`Self::tool_db_server`] for where it is.
+    pub async fn get_tool_db_connection(&self) -> Result<my::Conn> {
         let pool = {
             let mut slot = self.tool_db_pool.lock().await;
-            if let Some(p) = slot.as_ref() {
-                p.clone()
-            } else {
-                let pool_opts = my::PoolOpts::default()
-                    .with_constraints(my::PoolConstraints::new(0, TOOL_DB_POOL_MAX).expect("valid"))
-                    .with_inactive_connection_ttl(POOL_INACTIVE_TTL);
-                let opts = my::OptsBuilder::default()
-                    .ip_or_hostname(host.clone())
-                    .db_name(Some(schema))
-                    .user(Some(user))
-                    .pass(Some(password))
-                    .tcp_port(port)
-                    .tcp_keepalive(Some(TCP_KEEPALIVE_MS))
-                    .pool_opts(pool_opts);
-                let pool = my::Pool::new(opts);
-                *slot = Some(pool.clone());
-                pool
+            match slot.as_ref() {
+                Some(pool) => pool.clone(),
+                None => slot
+                    .insert(self.tool_db_server()?.pool(TOOL_DB_POOL_MAX)?)
+                    .clone(),
             }
         };
-
-        match tokio::time::timeout(DB_CONNECT_TIMEOUT, pool.get_conn()).await {
-            Ok(Ok(conn)) => Ok(conn),
-            Ok(Err(e)) => Err(anyhow!(
-                "DatabaseManager::get_tool_db_connection cannot lease pooled connection to {host}:{port}: '{e}'"
-            )),
-            Err(_) => Err(anyhow!(
-                "DatabaseManager::get_tool_db_connection timed out leasing pooled connection to {host}:{port} after {:?}",
-                DB_CONNECT_TIMEOUT
-            )),
-        }
+        pool.connect()
+            .await
+            .map_err(|e| anyhow!("Cannot connect to the tool database: {e}"))
     }
 
     // ------------------------------------------------------------------
@@ -644,7 +683,7 @@ pub fn query_log_timestamp() -> String {
 
 /// Removes and returns the pools last used [`POOL_EVICT_AFTER`] or longer
 /// before `now`.
-fn take_stale_pools(pools: &mut HashMap<PoolKey, WikiPool>, now: Instant) -> Vec<my::Pool> {
+fn take_stale_pools(pools: &mut HashMap<PoolKey, WikiPool>, now: Instant) -> Vec<CustomPool> {
     let stale: Vec<PoolKey> = pools
         .iter()
         .filter(|(_, entry)| now.duration_since(entry.last_used) >= POOL_EVICT_AFTER)
@@ -691,6 +730,141 @@ mod tests {
     }
 
     #[test]
+    fn cluster_extension_round_trips() {
+        for cluster in [DbCluster::Core, DbCluster::Links, DbCluster::TermStore] {
+            assert_eq!(
+                DbCluster::from_extension(cluster.extension()).unwrap(),
+                cluster
+            );
+        }
+    }
+
+    #[test]
+    fn routing_tables_select_their_cluster() {
+        for (wiki, cluster) in [
+            ("enwiki", DbCluster::Core),
+            ("commonswiki", DbCluster::Links),
+            ("wikidatawiki", DbCluster::TermStore),
+        ] {
+            assert_eq!(
+                ExtensionDb::for_tables(wiki, cluster.routing_tables()).unwrap(),
+                cluster.extension()
+            );
+        }
+    }
+
+    #[test]
+    fn cluster_hosts_tables_per_cluster() {
+        let dbm = DatabaseManager::default();
+        let hosts =
+            |wiki, cluster, tables: &[&str]| dbm.cluster_hosts_tables(wiki, cluster, tables);
+        // `page` is on both Commons clusters, `revision` only on the core one,
+        // the links tables only on the links one.
+        assert!(hosts("commonswiki", DbCluster::Core, &["page", "revision"]));
+        assert!(!hosts("commonswiki", DbCluster::Core, &["pagelinks"]));
+        assert!(hosts("commonswiki", DbCluster::Links, &[]));
+        assert!(hosts("commonswiki", DbCluster::Links, &["page"]));
+        assert!(hosts(
+            "commonswiki",
+            DbCluster::Links,
+            &["categorylinks", "linktarget"]
+        ));
+        assert!(!hosts("commonswiki", DbCluster::Links, &["revision"]));
+        // Elsewhere the core cluster has everything.
+        assert!(hosts("enwiki", DbCluster::Core, &["pagelinks", "revision"]));
+        assert!(hosts(
+            "enwiki",
+            DbCluster::Links,
+            &["pagelinks", "revision"]
+        ));
+        // The term store has the `wbt_*` tables and nothing else.
+        assert!(hosts(
+            "wikidatawiki",
+            DbCluster::TermStore,
+            &["wbt_item_terms"]
+        ));
+        assert!(!hosts("wikidatawiki", DbCluster::TermStore, &["page"]));
+        assert!(!hosts("wikidatawiki", DbCluster::Core, &["wbt_item_terms"]));
+    }
+
+    #[test]
+    fn wiki_has_cluster_follows_extension_databases() {
+        let dbm = DatabaseManager::default();
+        assert!(dbm.wiki_has_cluster("enwiki", DbCluster::Core));
+        assert!(dbm.wiki_has_cluster("commonswiki", DbCluster::Links));
+        assert!(!dbm.wiki_has_cluster("enwiki", DbCluster::Links));
+        assert!(dbm.wiki_has_cluster("wikidatawiki", DbCluster::TermStore));
+        assert!(!dbm.wiki_has_cluster("commonswiki", DbCluster::TermStore));
+    }
+
+    fn manager_with_config_credentials(host: &str) -> DatabaseManager {
+        DatabaseManager::with_config(Config {
+            host: host.to_string(),
+            user: "u1234".to_string(),
+            password: "secret".to_string(),
+            port_mapping: [("links.commonswiki".to_string(), 3315)].into(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn config_credentials_reach_the_replica_hosts() {
+        let dbm = manager_with_config_credentials("tools.db.svc.wikimedia.cloud");
+        let server = |wiki, cluster| {
+            dbm.config_replica_server(wiki, cluster, toolforge::Error::NoHomeDir)
+                .unwrap()
+        };
+        let core = server("enwiki", DbCluster::Core);
+        assert_eq!(core.host, "enwiki.web.db.svc.wikimedia.cloud");
+        assert_eq!(core.database, "enwiki_p");
+        assert_eq!(core.user, "u1234");
+        assert_eq!(
+            server("commonswiki", DbCluster::Links).host,
+            "links.commonswiki.web.db.svc.wikimedia.cloud"
+        );
+        assert_eq!(
+            server("wikidatawiki", DbCluster::TermStore).host,
+            "termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud"
+        );
+    }
+
+    #[test]
+    fn config_credentials_refuse_invalid_wiki_names() {
+        let dbm = manager_with_config_credentials("tools.db.svc.wikimedia.cloud");
+        for wiki in ["", "EnWiki", "x.evil", "evil.example:3306/x#"] {
+            assert!(
+                dbm.config_replica_server(wiki, DbCluster::Core, toolforge::Error::NoHomeDir)
+                    .is_err(),
+                "{wiki:?} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn config_credentials_are_required_without_toolforge_ones() {
+        let dbm = DatabaseManager::default();
+        assert!(
+            dbm.config_replica_server("enwiki", DbCluster::Core, toolforge::Error::NoHomeDir)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn local_config_routes_replicas_through_port_mapping() {
+        // Whether or not toolforge finds credentials on this machine, a
+        // config host of 127.0.0.1 sends every replica to its local tunnel.
+        let dbm = manager_with_config_credentials(LOCALHOST);
+        let server = dbm.replica_server("commonswiki", DbCluster::Links).unwrap();
+        assert_eq!(server.host, LOCALHOST);
+        assert_eq!(server.port, 3315);
+        assert_eq!(server.database, "commonswiki_p");
+        let tarask = dbm
+            .replica_server("be-taraskwiki", DbCluster::Core)
+            .unwrap();
+        assert_eq!(tarask.database, "be_x_oldwiki_p");
+    }
+
+    #[test]
     fn exponential_backoff_starts_at_base() {
         assert_eq!(exponential_backoff_ms(0), BASE_DELAY_MS);
     }
@@ -728,7 +902,11 @@ mod tests {
 
     #[test]
     fn take_stale_pools_closes_only_long_unused_pools() {
-        let pool = || my::Pool::new(my::OptsBuilder::default());
+        let pool = || {
+            CustomPool::builder("localhost", "user", "password")
+                .build()
+                .unwrap()
+        };
         let now = Instant::now();
         let mut pools = HashMap::new();
         pools.insert(
