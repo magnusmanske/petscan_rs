@@ -1,9 +1,6 @@
 {
-"host":"127.0.0.1",
-"user":"s51156",
-"password":"",
+"//credentials":"database servers and credentials come from replica.my.cnf, found via $TOOL_DATA_DIR or the home directory; see README",
 "schema":"s51156__petscan",
-"db_port":3307,
 "http_port":3000,
 "timeout":60000,
 "restart-code":"",
@@ -12,17 +9,5 @@
 "//telemetry":"service dashboard: add \"token\" (or set $DASHBOARD_TOKEN, but run.sh starts PetScan via sudo, which drops the environment); \"url\" defaults to Buggregator",
 "telemetry":{},
 "//max_result_entries":"most pages one query may load before it is refused with an explanation; default 1000000",
-"max_result_entries":1000000,
-"//port_mapping":"local SSH-tunnel ports, keyed by the leading labels of the replica host; see connect_test_sql.sh",
-"port_mapping":{
-	"enwiki":3310,
-	"dewiki":3307,
-	"wikidatawiki":3309,
-	"commonswiki":3305,
-	"links.commonswiki":3315,
-	"termstore.wikidatawiki":3317
-},
-"mysql":[
-	["user_id","password"],...
-]
+"max_result_entries":1000000
 }

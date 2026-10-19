@@ -3,7 +3,7 @@
 # each one answers a query.
 #
 # Every entry below is `local_port remote_host`, where `local_port` is the port
-# the matching `port_mapping` key in config.json points at, and `remote_host`
+# the matching `[tunnels]` key in replica.my.cnf points at, and `remote_host`
 # is the Wiki Replica service. The Commons links tables (categorylinks,
 # pagelinks, templatelinks, langlinks, …) live on their own cluster since
 # September 2026, reached by prefixing the host with `links.`, so Commons needs
@@ -45,12 +45,16 @@ for tunnel in $TUNNELS; do
 	ssh $LOGIN -L $port:$host:3306 -N -f
 done
 
-# Credentials: the same ones PetScan itself uses locally, i.e. the `user` /
-# `password` from config.json (see DatabaseManager::replica_server).
-USER=$(grep -o '"user": *"[^"]*"' config.json | head -1 | cut -d'"' -f4)
-PASS=$(grep -o '"password": *"[^"]*"' config.json | head -1 | cut -d'"' -f4)
+# Credentials: the same ones PetScan itself uses locally, i.e. `user` /
+# `password` from replica.my.cnf (in $TOOL_DATA_DIR, else this directory).
+CNF=${TOOL_DATA_DIR:-.}/replica.my.cnf
+cnf_value() {
+	sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}[[:space:]]*$/\1/p" "$CNF" | head -1
+}
+USER=$(cnf_value user)
+PASS=$(cnf_value password)
 if [[ -z $USER ]]; then
-	echo "no \"user\" in config.json, cannot probe the tunnels" >&2
+	echo "no user in $CNF, cannot probe the tunnels" >&2
 	exit 1
 fi
 

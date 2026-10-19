@@ -19,6 +19,8 @@ Docs: https://meta.wikimedia.org/wiki/PetScan/en
 
 ### Setup local MySQL database on port 3308
 
+Or tunnel to the tool's database on ToolsDB instead (`connect_test_sql.sh` does).
+
 ```sql
 CREATE TABLE `query` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -64,46 +66,58 @@ with a query — start from that rather than the command above.
 🔗 https://wikitech.wikimedia.org/wiki/Help:Toolforge/Database
 
 
+### Create replica.my.cnf
+
+Database servers and credentials come from `replica.my.cnf`, read by the
+[`toolforge`](https://crates.io/crates/toolforge) crate from `$TOOL_DATA_DIR`
+or the home directory (it does not look in the working directory). Start from
+the `~/replica.my.cnf` of the Toolforge tool account, and for local development
+add `local='true'` and the ports of your SSH tunnels, keyed by the leading
+labels of the replica hostname (`toolsdb` for the tool database):
+
+```ini
+[client]
+user='<databaseusername>'
+password='<databasepassword>'
+local='true'
+
+[tunnels]
+<xxx> = 3306
+wikidatawiki = 3309
+links.commonswiki = 3315
+termstore.wikidatawiki = 3317
+toolsdb = 3308
+```
+
+Replicas without a tunnel entry use port 3306. A local MySQL server standing in
+for the tool database must accept the same user and password.
+
+`replica.my.cnf` is gitignored, so it can live in the repository; then run
+PetScan with `TOOL_DATA_DIR=.` (as `run.sh` does in production).
+
 ### Create config.json
-Put the ports from the above `ssh` command into `port_mapping`, keyed by the
-leading labels of the replica hostname:
 
 ```json
 {
-  "host": "127.0.0.1",
-  "user": "<databaseusername>",
-  "password": "<databasepassword>",
   "schema": "petscan",
   "http_port": 8000,
   "timeout": 30000,
-  "restart-code": "",
-  "port_mapping":{
-    "<xxx>":3306,
-    "wikidatawiki":3309,
-    "links.commonswiki":3315,
-    "termstore.wikidatawiki":3317
-  },
-  "mysql": [
-    [
-      "<replicausername>",
-      "<replicapassword>"
-    ]
-  ]
+  "restart-code": ""
 }
 ```
 
-The credentials to the database replicas can be found in `~/replica.my.cnf` of the Toolforge user account.
+`config.json.template` lists the remaining settings.
 
 
 ### Start server
 
 ```bash
-cargo run
+TOOL_DATA_DIR=. cargo run
 ```
 
 ### Run a query from command line
 
 You can run a query from command line using the URL parameters. Output will be in the specified format, except HTML whcih will be automatically rewritten to JSON.
 ```bash
-cargo run -- 'url_parameters'
+TOOL_DATA_DIR=. cargo run -- 'url_parameters'
 ```
