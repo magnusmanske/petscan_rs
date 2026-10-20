@@ -12,6 +12,7 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use tokio::sync::Mutex as TokioMutex;
+use wikimisc::entity_id::{EntityId, EntityKind};
 use wikimisc::mediawiki::api::NamespaceID;
 use wikimisc::mediawiki::title::Title;
 use wikimisc::mysql_async as my;
@@ -198,14 +199,23 @@ impl WikidataItemFilters {
 impl Platform {
     // ─── Entry helpers ───────────────────────────────────────────────────────
 
-    /// Converts a Wikidata entity ID string (e.g. "Q123", "P456") into a `PageListEntry`
+    /// Converts a Wikidata entity ID string in canonical form (e.g. "Q123",
+    /// "P456") into a `PageListEntry`
     pub fn entry_from_entity(entity: &str) -> Option<PageListEntry> {
-        match entity.chars().next() {
-            Some('Q') => Some(PageListEntry::new(Title::new(entity, 0))),
-            Some('P') => Some(PageListEntry::new(Title::new(entity, 120))),
-            Some('L') => Some(PageListEntry::new(Title::new(entity, 146))),
-            _ => None,
+        Self::entry_from_entity_id(entity.parse().ok()?)
+    }
+
+    /// The page of a Wikidata entity: a form or sense lives on its lexeme's
+    /// page. `None` for `MediaInfo`, whose page is on Commons.
+    pub fn entry_from_entity_id(entity: EntityId) -> Option<PageListEntry> {
+        if entity.kind() == EntityKind::MediaInfo {
+            return None;
         }
+        let page = entity.page_entity();
+        Some(PageListEntry::new(Title::new(
+            &page.to_string(),
+            page.namespace(),
+        )))
     }
 
     // ─── Label SQL (new wbt_ schema) ─────────────────────────────────────────
@@ -1443,6 +1453,27 @@ mod tests {
         assert!(Platform::entry_from_entity("X999").is_none());
         assert!(Platform::entry_from_entity("").is_none());
         assert!(Platform::entry_from_entity("42").is_none());
+        assert!(Platform::entry_from_entity("Q").is_none());
+        assert!(Platform::entry_from_entity("q42").is_none());
+        assert!(Platform::entry_from_entity("Q42 ").is_none());
+        // MediaInfo entities live on Commons, not on Wikidata.
+        assert!(Platform::entry_from_entity("M123").is_none());
+    }
+
+    #[test]
+    fn test_entry_from_entity_form_and_sense_give_the_lexeme() {
+        for id in ["L1234-F2", "L1234-S1"] {
+            let entry = Platform::entry_from_entity(id).unwrap();
+            assert_eq!(entry.title().pretty(), "L1234", "{id}");
+            assert_eq!(entry.title().namespace_id(), 146, "{id}");
+        }
+    }
+
+    #[test]
+    fn test_entry_from_entity_entity_schema() {
+        let entry = Platform::entry_from_entity("E10").unwrap();
+        assert_eq!(entry.title().pretty(), "E10");
+        assert_eq!(entry.title().namespace_id(), 640);
     }
 
     // ─── apply_results_limit ──────────────────────────────────────────────────

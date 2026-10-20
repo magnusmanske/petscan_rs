@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use std::io::Read;
 use std::sync::OnceLock;
 use std::time::Duration;
+use wikimisc::entity_id::EntityId;
 use wikimisc::mediawiki::reqwest;
 use wikimisc::sparql_client::{SparqlClient, SparqlError};
 use wikimisc::sparql_endpoint::SparqlEndpoint;
@@ -18,13 +19,10 @@ const SPARQL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// buffered before the rows can be counted.
 const MAX_SPARQL_BYTES_PER_ROW: usize = 300;
 /// What SPARQL requests say they are. Wikimedia asks for contact information.
-const USER_AGENT: &str = concat!(
-    "PetScan/",
-    env!("CARGO_PKG_VERSION"),
-    " (https://petscan.wmcloud.org; https://github.com/magnusmanske/petscan_rs)"
+const USER_AGENT: &str = wikimisc::user_agent!(
+    name = "PetScan",
+    "https://petscan.wmcloud.org; https://github.com/magnusmanske/petscan_rs"
 );
-/// Where Wikidata's entity URIs start.
-const ENTITY_PREFIX: &str = "http://www.wikidata.org/entity/";
 
 /// The endpoint a query goes to, from the `sparql_server` parameter.
 ///
@@ -88,8 +86,8 @@ fn entities_from_csv<R: Read>(mut reader: csv::Reader<R>, limit: usize) -> Resul
         }
         if let Some(entry) = record?
             .get(0)
-            .and_then(|uri| uri.strip_prefix(ENTITY_PREFIX))
-            .and_then(Platform::entry_from_entity)
+            .and_then(|uri| EntityId::from_uri(uri).ok())
+            .and_then(Platform::entry_from_entity_id)
         {
             ret.add_entry(entry);
         }
@@ -232,6 +230,26 @@ mod tests {
     fn test_entities_from_csv_keeps_entities_in_the_first_column() {
         let list = entities_from_csv(csv_reader(THREE_ROWS), 10).unwrap();
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_entities_from_csv_skips_what_is_not_a_wikidata_entity() {
+        let text = "item\r\n\
+            https://www.wikidata.org/entity/Q2\r\n\
+            http://www.wikidata.org/entity/L7-F2\r\n\
+            https://commons.wikimedia.org/entity/M5\r\n\
+            http://www.wikidata.org/entity/Q0\r\n\
+            Q3\r\n";
+        let list = entities_from_csv(csv_reader(text), 10).unwrap();
+        assert_eq!(list.len(), 2, "Q2 and the page of L7-F2");
+    }
+
+    #[test]
+    fn test_user_agent_names_petscan() {
+        assert!(USER_AGENT.starts_with(concat!("PetScan/", env!("CARGO_PKG_VERSION"), " (")));
+        assert!(USER_AGENT.ends_with(
+            " (https://petscan.wmcloud.org; https://github.com/magnusmanske/petscan_rs)"
+        ));
     }
 
     #[test]

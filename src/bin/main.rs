@@ -13,7 +13,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tracing_subscriber::fmt::init();
+    wikimisc::logging::init();
     petscan_rs::raise_open_file_limit();
 
     let petscan_config = get_petscan_config();
@@ -36,37 +36,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 /// drain-shutdown logic on `AppState`. New requests after the signal arrives
 /// receive "Temporary maintenance"; the process exits via `try_shutdown`
 /// once in-flight requests drain to zero, after the final telemetry push.
-#[cfg(unix)]
 fn spawn_shutdown_signal_handler(app_state: Arc<AppState>) {
     tokio::spawn(async move {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut sigterm = match signal(SignalKind::terminate()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to install SIGTERM handler: {e}");
-                return;
-            }
-        };
-        let mut sigint = match signal(SignalKind::interrupt()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to install SIGINT handler: {e}");
-                return;
-            }
-        };
-        let received = tokio::select! {
-            _ = sigterm.recv() => "SIGTERM",
-            _ = sigint.recv() => "SIGINT",
-        };
+        let received = wikimisc::shutdown::shutdown_signal().await;
         tracing::info!("Received {received}; draining in-flight requests");
-        app_state.shut_down(received);
+        app_state.shut_down(received.as_str());
         // If nothing is in flight right now, exit immediately; otherwise the
         // last decrement of `threads_running` will trip `try_shutdown`.
         app_state.try_shutdown();
     });
-}
-
-#[cfg(not(unix))]
-fn spawn_shutdown_signal_handler(_app_state: Arc<AppState>) {
-    tracing::warn!("Signal-based graceful shutdown is only wired on Unix targets");
 }

@@ -5,7 +5,7 @@ use crate::app_state::AppState;
 use std::sync::Arc;
 use std::time::Duration;
 use wikimisc::metrics::{counter, gauge, histogram};
-use wikimisc::telemetry::{Telemetry, TelemetryConfig, TelemetryError};
+use wikimisc::telemetry::{Telemetry, TelemetryConfig};
 
 /// How often the running/waiting request gauges are sampled.
 const LOAD_SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
@@ -19,11 +19,9 @@ pub fn start(config: &TelemetryConfig, app_state: Arc<AppState>) {
         .config(config)
         .version(env!("CARGO_PKG_VERSION"))
         .handle_signals(false)
-        .install();
-    match installed {
-        Ok(_) => spawn_load_gauges(app_state),
-        Err(TelemetryError::NoToken) => tracing::info!("telemetry disabled: no token configured"),
-        Err(e) => tracing::error!("Could not start telemetry: {e}"),
+        .install_or_log();
+    if installed.is_some() {
+        spawn_load_gauges(app_state);
     }
 }
 

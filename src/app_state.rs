@@ -6,15 +6,16 @@ use crate::form_parameters::FormParameters;
 use crate::platform::MyResponse;
 use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
+use wikimisc::jsonp::{self, CallbackRules};
 use wikimisc::mediawiki::api::Api;
 use wikimisc::mysql_async as my;
+use wikimisc::retry::{Retry, RetryPolicy};
 use wikimisc::site_matrix::SiteMatrix;
 use wikimisc::telemetry::ExitReason;
 
@@ -38,43 +39,51 @@ const MAX_QUEUED_REQUESTS: usize = 200;
 const QUEUE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Retry policy for startup network calls (Wikidata API + `SiteMatrix`).
-/// 5 attempts with 1s → 2s → 4s → 8s → 16s exponential backoff (total
-/// worst-case ~31s). Long enough to ride out a transient blip on
-/// systemd restart; short enough that a real outage surfaces quickly.
+/// 5 attempts with 1s → 2s → 4s → 8s exponential backoff, capped at 16s
+/// (total worst-case ~15s of waiting). Long enough to ride out a transient
+/// blip on systemd restart; short enough that a real outage surfaces quickly.
 const STARTUP_MAX_ATTEMPTS: u32 = 5;
-const STARTUP_BASE_DELAY_MS: u64 = 1_000;
-const STARTUP_MAX_DELAY_MS: u64 = 16_000;
+const STARTUP_BASE_DELAY: Duration = Duration::from_secs(1);
+const STARTUP_MAX_DELAY: Duration = Duration::from_secs(16);
 
 /// Retry an async operation that returns `Result<T, anyhow::Error>` with
-/// bounded exponential backoff. Logs each retry attempt at `warn` level.
-async fn retry_with_backoff<F, Fut, T>(label: &'static str, mut op: F) -> Result<T>
+/// bounded exponential backoff, whatever the error. Logs each retry at
+/// `warn` level.
+async fn retry_with_backoff<F, Fut, T>(label: &str, op: F) -> Result<T>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
-    let mut attempt: u32 = 0;
-    loop {
-        match op().await {
-            Ok(v) => return Ok(v),
-            Err(e) if attempt + 1 < STARTUP_MAX_ATTEMPTS => {
-                let shift = attempt.min(20);
-                let delay = STARTUP_BASE_DELAY_MS
-                    .saturating_mul(1_u64 << shift)
-                    .min(STARTUP_MAX_DELAY_MS);
-                tracing::warn!(
-                    label,
-                    attempt = attempt + 1,
-                    max_attempts = STARTUP_MAX_ATTEMPTS,
-                    delay_ms = delay,
-                    error = %e,
-                    "{label} startup failed; retrying"
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                attempt += 1;
-            }
-            Err(e) => return Err(e),
-        }
-    }
+    RetryPolicy::new(STARTUP_MAX_ATTEMPTS - 1)
+        .with_initial_backoff(STARTUP_BASE_DELAY)
+        .with_max_wait(STARTUP_MAX_DELAY)
+        .on_retry(|retry: &Retry<'_, anyhow::Error>| {
+            tracing::warn!(
+                label = retry.endpoint,
+                attempt = retry.retry,
+                max_attempts = STARTUP_MAX_ATTEMPTS,
+                delay_ms = retry.wait.as_millis(),
+                error = %retry.error,
+                "{} startup failed; retrying",
+                retry.endpoint
+            );
+        })
+        .run_if(label, |_| true, op)
+        .await
+}
+
+/// JSONP callback names PetScan accepts: dotted paths and indexes, such as
+/// jQuery's generated `jQuery123_456` or a gadget's `mw.foo.cb`.
+const JSONP_CALLBACK_RULES: CallbackRules = CallbackRules {
+    allow_dotted: true,
+    max_len: 256,
+};
+
+/// `callback` if it is a safe JSONP callback name. The name ends up verbatim
+/// in a script the browser runs, so a response with an invalid one is sent
+/// as plain JSON instead.
+pub fn valid_jsonp_callback(callback: &str) -> Option<&str> {
+    jsonp::is_valid_callback(callback, JSONP_CALLBACK_RULES).then_some(callback)
 }
 
 // ---------------------------------------------------------------------------
@@ -96,8 +105,6 @@ pub struct AppState {
     /// Caps how many requests may wait for `request_semaphore`. See
     /// [`MAX_QUEUED_REQUESTS`].
     queue_semaphore: Arc<Semaphore>,
-    /// One API client per wiki, shared by every request in this process.
-    api_cache: Arc<RwLock<HashMap<String, Api>>>,
     /// See [`Config::max_result_entries`].
     max_result_entries: usize,
 }
@@ -113,7 +120,6 @@ impl Default for AppState {
             main_page: String::default(),
             request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             queue_semaphore: Arc::new(Semaphore::new(MAX_QUEUED_REQUESTS)),
-            api_cache: Arc::default(),
             max_result_entries: crate::config::DEFAULT_MAX_RESULT_ENTRIES,
         }
     }
@@ -379,7 +385,7 @@ impl AppState {
                 // Error texts can echo user input (wiki names, PSIDs, …).
                 let output = format!(
                     "<div class='alert alert-danger' role='alert'>{}</div>",
-                    htmlescape::encode_minimal(&error)
+                    wikimisc::escape::html(&error)
                 );
                 let interface_language = form_parameters
                     .params
@@ -412,7 +418,7 @@ impl AppState {
     pub fn output_json(&self, value: &Value, callback: Option<&String>) -> MyResponse {
         let json_string = ::serde_json::to_string(&value)
             .unwrap_or_else(|e| format!("{{\"error\":\"JSON serialization failed: {e}\"}}"));
-        match callback {
+        match callback.and_then(|callback| valid_jsonp_callback(callback)) {
             Some(callback) => {
                 let text = format!("{callback}({json_string})");
                 MyResponse {
@@ -433,23 +439,10 @@ impl AppState {
     /// request. Building one costs a TLS client plus a `siteinfo` round trip,
     /// and a single query asks for the same wiki's client several times.
     pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api> {
-        let cached = self
-            .api_cache
-            .read()
-            .ok()
-            .and_then(|cache| cache.get(&wiki).cloned());
-        if let Some(api) = cached {
-            return Ok(api);
-        }
-        let api = self
-            .site_matrix
-            .get_api_for_wiki(&wiki)
+        self.site_matrix
+            .cached_api_for_wiki(&wiki)
             .await
-            .with_context(|| format!("Could not initialise the MediaWiki API client for {wiki}"))?;
-        if let Ok(mut cache) = self.api_cache.write() {
-            cache.insert(wiki, api.clone());
-        }
-        Ok(api)
+            .with_context(|| format!("Could not initialise the MediaWiki API client for {wiki}"))
     }
 
     // ------------------------------------------------------------------

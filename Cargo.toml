@@ -14,18 +14,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"
 rayon = "1"
-htmlescape = "0.3"
 rand = "0.9"
 percent-encoding = "2"
 async-trait = "0.1"
-wikimisc = { git = "https://github.com/magnusmanske/wikimisc" , features = ["sparql", "sparql-client", "wikibase", "lat-lon", "site-matrix", "database", "telemetry"] }
+wikimisc = { git = "https://github.com/magnusmanske/wikimisc" , features = ["sparql", "sparql-client", "wikibase", "lat-lon", "site-matrix", "database", "telemetry", "entity-id", "escape", "http", "jsonp", "logging", "retry", "shutdown", "title"] }
 # Reads SPARQL results, which `wikimisc` hands over as a CSV reader.
 csv = "1"
 tokio = { version = "^1", features = ["macros", "fs", "sync", "signal", "test-util"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["catch-panic", "cors"] }
 futures = "0.3"
-tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
 tracing = "0.1.40"
 rlimit = "0.10"
 # Returns freed memory to the OS; see the global allocator in src/bin/main.rs.

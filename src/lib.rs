@@ -63,7 +63,6 @@ pub mod webserver;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-use tracing_subscriber as _;
 // The binary's global allocator.
 use tikv_jemallocator as _;
 

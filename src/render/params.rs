@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppState, valid_jsonp_callback};
 use crate::platform::Platform;
 use crate::render::{AUTOLIST_WIKIDATA, ApiNamespaceContext, NamespaceContext};
 use anyhow::Result;
@@ -67,7 +67,9 @@ impl RenderParams {
             row_number: 0,
             json_output_compatability: platform
                 .get_param_default("output_compatability", "catscan"), // Default; "quick-intersection" ?
-            json_callback: platform.get_param_blank("callback"),
+            json_callback: valid_jsonp_callback(&platform.get_param_blank("callback"))
+                .unwrap_or_default()
+                .to_string(),
             json_sparse: platform.has_param("sparse"),
             json_pretty: platform.has_param("json-pretty"),
             giu: platform.has_param("giu"),

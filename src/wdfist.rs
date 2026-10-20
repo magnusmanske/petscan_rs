@@ -15,6 +15,7 @@ use wikimisc::mysql_async as my;
 use wikimisc::mysql_async::Value as MyValue;
 use wikimisc::mysql_async::from_row;
 use wikimisc::mysql_async::prelude::Queryable;
+use wikimisc::{commons, title};
 
 static RE_FILETYPE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"^(.+)\.([^.]+)$"#).expect("WDfist::is_valid_filename RE_FILETYPE is invalid")
@@ -300,8 +301,8 @@ impl WDfist {
                     .par_iter()
                     .filter_map(|j| match j["title"].as_str() {
                         Some(filename) => {
-                            let filename = Self::remove_leading_file_namespace(filename);
-                            let filename = Self::normalize_filename(&filename);
+                            let filename =
+                                Self::normalize_filename(commons::strip_file_prefix(filename));
                             if filename.is_empty() {
                                 None
                             } else {
@@ -316,15 +317,6 @@ impl WDfist {
             .flatten()
             .collect();
         add_item_file
-    }
-
-    // Remove leading "File:"
-    fn remove_leading_file_namespace(filename: &str) -> String {
-        if filename.len() < 6 {
-            String::new()
-        } else {
-            filename[5..].to_string()
-        }
     }
 
     fn get_commons_search_query(&self, label: &str) -> String {
@@ -419,8 +411,8 @@ impl WDfist {
                     .par_iter()
                     .filter_map(|j| match j["title"].as_str() {
                         Some(filename) => {
-                            let filename = Self::remove_leading_file_namespace(filename);
-                            let filename = Self::normalize_filename(&filename);
+                            let filename =
+                                Self::normalize_filename(commons::strip_file_prefix(filename));
                             if filename.is_empty() {
                                 None
                             } else {
@@ -719,7 +711,7 @@ impl WDfist {
     }
 
     fn normalize_filename(filename: &str) -> String {
-        filename.trim().replace(' ', "_")
+        title::to_db_key(filename.trim())
     }
 
     // Requires normalized filename
@@ -921,6 +913,17 @@ mod tests {
             json!(wdfist.item2files),
             json!({"Q5":{"This_is_a_test_no_such_file_exists.jpg":0}})
         );
+    }
+
+    #[test]
+    fn test_filename_from_commons_search_title() {
+        let filename = |title| WDfist::normalize_filename(commons::strip_file_prefix(title));
+        assert_eq!(filename("File:Foo bar.jpg"), "Foo_bar.jpg");
+        assert_eq!(filename(" File: Foo bar.jpg "), "Foo_bar.jpg");
+        assert_eq!(filename("Image:Foo.jpg"), "Foo.jpg");
+        // No prefix: nothing is cut off (this used to drop five bytes blindly).
+        assert_eq!(filename("Foo.jpg"), "Foo.jpg");
+        assert_eq!(filename("File:"), "");
     }
 
     #[tokio::test]

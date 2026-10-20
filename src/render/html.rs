@@ -5,11 +5,14 @@ use crate::render::params::RenderParams;
 use crate::render::{AUTOLIST_COMMONS, AUTOLIST_WIKIDATA, Render};
 use anyhow::Result;
 use async_trait::async_trait;
-use htmlescape::encode_minimal;
 use std::time::{SystemTime, UNIX_EPOCH};
+use wikimisc::commons;
+use wikimisc::escape;
 use wikimisc::mediawiki::title::Title;
 
 static MAX_HTML_RESULTS: usize = 10000;
+/// Width of the thumbnails in the image column, in pixels.
+const THUMBNAIL_WIDTH: u32 = 120;
 
 /// Renders HTML
 #[derive(Clone, Copy, Debug)]
@@ -125,7 +128,7 @@ impl Render for RenderHTML {
         let html = state.get_main_page(interface_language);
         let html = html.replace(
             "<!--querystring-->",
-            encode_minimal(&platform.form_parameters().to_string()).as_str(),
+            &escape::html(&platform.form_parameters().to_string()),
         );
         let mut html = html.replace("<!--output-->", &output);
         if let Some(psid) = platform.psid {
@@ -186,7 +189,6 @@ impl Render for RenderHTML {
     fn render_cell_image(&self, image: &Option<String>, params: &RenderParams) -> String {
         match image {
             Some(img) => {
-                let thumnail_size = "120px"; // TODO
                 let server_url = match params
                     .state()
                     .site_matrix()
@@ -195,12 +197,8 @@ impl Render for RenderHTML {
                     Ok(url) => url,
                     _ => return String::new(),
                 };
-                let file = super::escape_attribute(img);
-                let url = format!("{}/wiki/File:{}", server_url, file);
-                let src = format!(
-                    "{}/wiki/Special:Redirect/file/{}?width={}",
-                    server_url, file, thumnail_size
-                );
+                let url = format!("{}/wiki/File:{}", server_url, super::escape_attribute(img));
+                let src = commons::redirect_file_url(&server_url, img, Some(THUMBNAIL_WIDTH));
                 format!(
                     "<div class='card thumbcard'><a target='_blank' href='{url}'><img class='card-img thumbcard-img' src='{src}' loading='lazy' /></a></div>"
                 )
@@ -450,5 +448,35 @@ impl RenderHTML {
         }
         ret += "</tr></thead>";
         ret
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::StubNamespaceContext;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_render_cell_image_links_file_and_thumbnail() {
+        // `metawiki` resolves without a loaded site matrix.
+        let params = RenderParams::for_tests("metawiki", Arc::new(StubNamespaceContext::enwiki()));
+        let cell = RenderHTML.render_cell_image(&Some("Foo_bar.jpg".to_string()), &params);
+        assert!(
+            cell.contains("href='https://meta.wikimedia.org/wiki/File:Foo%5Fbar%2Ejpg'"),
+            "{cell}"
+        );
+        assert!(
+            cell.contains(
+                "src='https://meta.wikimedia.org/wiki/Special:Redirect/file/Foo_bar.jpg?width=120'"
+            ),
+            "{cell}"
+        );
+    }
+
+    #[test]
+    fn test_render_cell_image_without_image_is_empty() {
+        let params = RenderParams::for_tests("metawiki", Arc::new(StubNamespaceContext::enwiki()));
+        assert_eq!(RenderHTML.render_cell_image(&None, &params), "");
     }
 }

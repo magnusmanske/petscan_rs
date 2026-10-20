@@ -5,6 +5,10 @@ use crate::render::Render;
 use crate::render::params::RenderParams;
 use anyhow::Result;
 use async_trait::async_trait;
+use wikimisc::{commons, escape};
+
+/// Width of the placemark images, in pixels.
+const THUMBNAIL_WIDTH: u32 = 120;
 
 /// Renders KML
 #[derive(Clone, Copy, Debug)]
@@ -40,19 +44,15 @@ impl Render for RenderKML {
                     title.pretty().to_string()
                 };
                 kml += r#"<Placemark>"#;
-                kml += format!("<name>{}</name>", Self::escape_xml(&label)).as_str();
+                kml += format!("<name>{}</name>", escape::xml(&label)).as_str();
                 if let Some(desc) = entry.get_wikidata_description() {
-                    kml +=
-                        format!("<description>{}</description>", Self::escape_xml(&desc)).as_str();
+                    kml += format!("<description>{}</description>", escape::xml(&desc)).as_str();
                 }
 
                 kml += "<ExtendedData>";
                 if let Some(q) = entry.get_wikidata_item() {
-                    kml += format!(
-                        "<Data name=\"q\"><value>{}</value></Data>",
-                        Self::escape_xml(&q)
-                    )
-                    .as_str();
+                    kml += format!("<Data name=\"q\"><value>{}</value></Data>", escape::xml(&q))
+                        .as_str();
                 }
 
                 let full_title = match params.ns().full_with_underscores(title) {
@@ -62,19 +62,15 @@ impl Render for RenderKML {
                 let url = format!("{}/wiki/{}", server, super::escape_attribute(&full_title));
                 kml += format!(
                     "<Data name=\"url\"><value>{}</value></Data>",
-                    Self::escape_xml(&url)
+                    escape::xml(&url)
                 )
                 .as_str();
 
                 if let Some(img) = entry.get_page_image() {
-                    let file = super::escape_attribute(&img);
-                    let src = format!(
-                        "{}/wiki/Special:Redirect/file/{}?width={}",
-                        server, file, 120
-                    );
+                    let src = commons::redirect_file_url(&server, &img, Some(THUMBNAIL_WIDTH));
                     kml += format!(
                         "<Data name=\"image\"><value>{}</value></Data>",
-                        Self::escape_xml(&src)
+                        escape::xml(&src)
                     )
                     .as_str();
                 }
@@ -130,61 +126,14 @@ impl RenderKML {
     pub fn new() -> Box<Self> {
         Box::new(Self {})
     }
-
-    fn escape_xml(s: &str) -> String {
-        // `&` must be replaced first; otherwise the ampersands introduced by
-        // the other replacements get re-escaped on the final pass.
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&apos;")
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn test_escape_xml_all_specials() {
-        assert_eq!(RenderKML::escape_xml("<>&\"'"), "&lt;&gt;&amp;&quot;&apos;");
-    }
-
-    #[test]
-    fn test_escape_xml_ampersand_only() {
-        // Regression: previously this produced "&amp;amp;" because `&` was
-        // replaced last, re-escaping the `&` introduced by earlier replacements.
-        assert_eq!(RenderKML::escape_xml("&"), "&amp;");
-    }
-
-    #[test]
-    fn test_escape_xml_already_escaped_entity() {
-        // If the input already contains an entity, the leading `&` must be
-        // escaped exactly once — not turned into `&amp;amp;`.
-        assert_eq!(RenderKML::escape_xml("&amp;"), "&amp;amp;");
-    }
-
-    #[test]
-    fn test_escape_xml_plain_text_unchanged() {
-        assert_eq!(RenderKML::escape_xml("hello world"), "hello world");
-    }
-
-    #[test]
-    fn test_escape_xml_empty() {
-        assert_eq!(RenderKML::escape_xml(""), "");
-    }
-
-    #[test]
-    fn test_escape_xml_mixed() {
-        assert_eq!(
-            RenderKML::escape_xml("<a href=\"x\">&amp;</a>"),
-            "&lt;a href=&quot;x&quot;&gt;&amp;amp;&lt;/a&gt;"
-        );
-    }
+    use crate::render::escape_attribute;
 
     #[test]
     fn test_escape_attribute() {
-        assert_eq!(super::super::escape_attribute("<>&\"'"), "%3C%3E%26%22%27");
+        assert_eq!(escape_attribute("<>&\"'"), "%3C%3E%26%22%27");
     }
 }
