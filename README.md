@@ -41,13 +41,13 @@ CREATE TABLE `started_queries` (
 
 ### Forward replicas
 
-One tunnel per replica host you want to query:
+PetScan reaches each wiki through its section (`s1` to `s8`), so it needs one
+tunnel per section, including `s7`, whose `meta_p` tells which wiki is on which
+section:
 
 ```bash
-ssh login.toolforge.org -L 3306:XXX.web.db.svc.wikimedia.cloud:3306 -L 3309:wikidatawiki.web.db.svc.wikimedia.cloud:3306
+ssh login.toolforge.org -L 3401:s1.web.db.svc.wikimedia.cloud:3306 -L 3407:s7.web.db.svc.wikimedia.cloud:3306 ...
 ```
-
-XXX: wiki to be queried (e.g. commonswiki)
 
 Some wikis keep part of their tables in an *extension database* on a separate
 replica host, reached by prefixing the hostname. There are two of these:
@@ -82,14 +82,21 @@ password='<databasepassword>'
 local='true'
 
 [tunnels]
-<xxx> = 3306
-wikidatawiki = 3309
+s1 = 3401
+s2 = 3402
+s3 = 3403
+s4 = 3404
+s5 = 3405
+s6 = 3406
+s7 = 3407
+s8 = 3408
 links.commonswiki = 3315
 termstore.wikidatawiki = 3317
 toolsdb = 3308
 ```
 
-Replicas without a tunnel entry use port 3306. A local MySQL server standing in
+Sections without a tunnel entry use port 3306 + N (e.g. 3307 for `s1`), other
+replicas 3306. A local MySQL server standing in
 for the tool database must accept the same user and password.
 
 `replica.my.cnf` is gitignored, so it can live in the repository; then run

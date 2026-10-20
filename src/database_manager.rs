@@ -1,19 +1,16 @@
 use crate::config::Config;
 use anyhow::{Context, Result, anyhow};
 use chrono::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 use tracing::{instrument, trace};
 use wikimisc::mysql_async;
 use wikimisc::mysql_async as my;
 use wikimisc::mysql_async::Value as MyValue;
 use wikimisc::mysql_async::from_row;
 use wikimisc::mysql_async::prelude::Queryable;
-use wikimisc::toolforge;
-use wikimisc::toolforge::db::{Cluster, DBConnectionInfo, ExtensionDb, normalize_dbname};
-use wikimisc::toolforge::pool::CustomPool;
+use wikimisc::toolforge::db::{Cluster, ExtensionDb, normalize_dbname};
+use wikimisc::toolforge::pool::{ToolsDbPool, WikiPool};
 
 /// Where `toolforge` looks for database credentials, for error messages.
 const CREDENTIALS_HINT: &str =
@@ -38,27 +35,16 @@ const DB_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// site and belong with the request-level wall-clock budget — see P1 #7.)
 const TCP_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Maximum live connections held in any one per-wiki pool. Wikimedia
-/// replicas enforce ~10 connections per user; 5 leaves headroom for
-/// concurrent requests that hit the same wiki.
-const WIKI_POOL_MAX: usize = 5;
+/// Maximum live connections in the tool database pool. The replica pools
+/// keep `toolforge`'s default of 10 per section, the replicas' per-user limit.
 const TOOL_DB_POOL_MAX: usize = 5;
-/// Idle pool connections older than this are closed and recreated. Avoids
-/// retaining sockets the upstream has silently dropped.
-const POOL_INACTIVE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
-/// A per-wiki pool unused for this long is closed. Each pool keeps two
-/// background tasks alive for as long as it exists, so without this the
-/// task count grew with every wiki ever queried. Longer than
-/// [`POOL_INACTIVE_TTL`], so a closed pool never had an idle connection left
-/// to lose.
-const POOL_EVICT_AFTER: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// The replica database a query runs on: a wiki's core database, or one of
 /// the extension databases holding tables split off from it.
 ///
 /// Which tables live where, and which wikis have which extension database,
 /// is `toolforge`'s [`ExtensionDb`]'s business; this only names the clusters
-/// PetScan routes queries to, so they can key pools and group clauses.
+/// PetScan routes queries to, so they can group clauses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DbCluster {
     /// The wiki's core database, holding every table not split off elsewhere.
@@ -113,52 +99,6 @@ impl DbCluster {
     }
 }
 
-/// A database server and the credentials to log in with. Deliberately not
-/// `Debug`, so the password cannot end up in a log.
-struct Server {
-    host: String,
-    port: u16,
-    user: String,
-    password: String,
-    database: String,
-}
-
-impl From<DBConnectionInfo> for Server {
-    fn from(info: DBConnectionInfo) -> Self {
-        Self {
-            host: info.host,
-            port: info.port,
-            user: info.user,
-            password: info.password,
-            database: info.database,
-        }
-    }
-}
-
-impl Server {
-    /// A connection pool for this server holding at most `pool_max`
-    /// connections, none of them while idle for [`POOL_INACTIVE_TTL`].
-    fn pool(self, pool_max: usize) -> Result<CustomPool> {
-        Ok(CustomPool::builder(self.host, self.user, self.password)
-            .port(self.port)
-            .database(self.database)
-            .pool_max(pool_max)
-            .inactive_connection_ttl(POOL_INACTIVE_TTL)
-            .connect_timeout(DB_CONNECT_TIMEOUT)
-            .tcp_keepalive(TCP_KEEPALIVE)
-            .build()?)
-    }
-}
-
-type PoolKey = (String, DbCluster);
-
-/// A per-wiki pool and when a connection was last leased from it.
-#[derive(Debug)]
-struct WikiPool {
-    pool: CustomPool,
-    last_used: Instant,
-}
-
 /// Deterministic exponential backoff (no jitter) capped at `MAX_DELAY_MS`.
 /// Pulled out as a free function so it is unit-testable; jitter is applied
 /// at the callsite.
@@ -178,11 +118,12 @@ fn exponential_backoff_ms(attempt: u32) -> u64 {
 pub struct DatabaseManager {
     /// Typed application config (feature flags, the tool database's schema).
     config: Config,
-    /// Per-`(wiki, cluster)` connection pools, lazily created and closed
-    /// after [`POOL_EVICT_AFTER`] without use.
-    wiki_pools: Arc<Mutex<HashMap<PoolKey, WikiPool>>>,
-    /// Shared pool for the tool DB (PSID + query log).
-    tool_db_pool: Arc<Mutex<Option<CustomPool>>>,
+    /// Replica pools for the `web` and `analytics` service groups, created on
+    /// first use. Each shares one pool per section among all its wikis.
+    web_pool: Arc<OnceCell<WikiPool>>,
+    analytics_pool: Arc<OnceCell<WikiPool>>,
+    /// Pool for the tool DB (PSID + query log), created on first use.
+    tool_db_pool: Arc<OnceCell<ToolsDbPool>>,
 }
 
 impl DatabaseManager {
@@ -196,8 +137,7 @@ impl DatabaseManager {
     pub fn new_from_config(config: &Config) -> Self {
         Self {
             config: config.clone(),
-            wiki_pools: Arc::new(Mutex::new(HashMap::new())),
-            tool_db_pool: Arc::new(Mutex::new(None)),
+            ..Default::default()
         }
     }
 
@@ -210,11 +150,7 @@ impl DatabaseManager {
     /// needing a real database connection.
     #[cfg(test)]
     pub(crate) fn with_config(config: Config) -> Self {
-        Self {
-            config,
-            wiki_pools: Arc::new(Mutex::new(HashMap::new())),
-            tool_db_pool: Arc::new(Mutex::new(None)),
-        }
+        Self::new_from_config(&config)
     }
 
     // ------------------------------------------------------------------
@@ -284,22 +220,20 @@ impl DatabaseManager {
     // Connection helpers
     // ------------------------------------------------------------------
 
-    /// The server holding `cluster` of `wiki`, and the credentials for it,
-    /// as found by `toolforge` (see [`Self::new_from_config`]). `toolforge`
-    /// also refuses wiki names that are not valid database names, which
-    /// would otherwise end up in the host name.
-    fn replica_server(&self, wiki: &str, cluster: DbCluster) -> Result<Server> {
-        let wiki = normalize_dbname(wiki);
-        let cluster = self.effective_cluster(&wiki, cluster);
-        let info = toolforge::db::connection_info_for_tables(
-            &wiki,
-            cluster.server_group(),
-            cluster.routing_tables(),
-        )
-        .with_context(|| {
-            format!("Cannot resolve the replica server for {wiki}; {CREDENTIALS_HINT}")
-        })?;
-        Ok(info.into())
+    /// The replica pool for a service group, created on first use.
+    async fn replica_pool(&self, group: Cluster) -> Result<&WikiPool> {
+        let cell = match group {
+            Cluster::Analytics => &self.analytics_pool,
+            _ => &self.web_pool,
+        };
+        cell.get_or_try_init(|| async {
+            WikiPool::builder(group)
+                .connect_timeout(DB_CONNECT_TIMEOUT)
+                .tcp_keepalive(TCP_KEEPALIVE)
+                .build()
+                .with_context(|| format!("Cannot set up the replica pool; {CREDENTIALS_HINT}"))
+        })
+        .await
     }
 
     async fn set_group_concat_max_len(&self, wiki: &str, conn: &mut my::Conn) -> Result<()> {
@@ -308,32 +242,6 @@ impl DatabaseManager {
                 .await?;
         }
         Ok(())
-    }
-
-    /// Get or lazily create the connection pool for `(wiki, cluster)`, and
-    /// close the pools nobody has used for [`POOL_EVICT_AFTER`].
-    async fn get_wiki_pool(&self, wiki: &str, cluster: DbCluster) -> Result<CustomPool> {
-        let now = Instant::now();
-        let mut pools = self.wiki_pools.lock().await;
-        for stale in take_stale_pools(&mut pools, now) {
-            // Waits for any connection still leased, then ends the pool's
-            // background tasks.
-            tokio::spawn(stale.disconnect());
-        }
-        let key = (wiki.to_string(), cluster);
-        if let Some(entry) = pools.get_mut(&key) {
-            entry.last_used = now;
-            return Ok(entry.pool.clone());
-        }
-        let pool = self.replica_server(wiki, cluster)?.pool(WIKI_POOL_MAX)?;
-        pools.insert(
-            key,
-            WikiPool {
-                pool: pool.clone(),
-                last_used: now,
-            },
-        );
-        Ok(pool)
     }
 
     /// Connects to a wiki's core cluster. `"x3"` is a legacy alias for the
@@ -366,15 +274,18 @@ impl DatabaseManager {
         wiki: &str,
         cluster: DbCluster,
     ) -> Result<my::Conn> {
-        // Normalised once here so that spellings of one wiki share a pool.
         let wiki = normalize_dbname(wiki);
         let wiki = wiki.as_str();
         let cluster = self.effective_cluster(wiki, cluster);
-        let pool = self.get_wiki_pool(wiki, cluster).await?;
+        let pool = self.replica_pool(cluster.server_group()).await?;
         trace!(wiki, ?cluster, "leasing connection from pool");
         let mut attempt: u32 = 0;
         let mut conn = loop {
-            let error = match pool.connect().await {
+            // `toolforge` validates `wiki` against `meta_p` before using it.
+            let error = match pool
+                .connect_for_tables(wiki, cluster.routing_tables())
+                .await
+            {
                 Ok(conn) => break conn,
                 Err(e) => e.to_string(),
             };
@@ -408,32 +319,28 @@ impl DatabaseManager {
             .await
     }
 
-    /// The tool database's server: `ToolsDB`, as found by `toolforge` (see
-    /// [`Self::new_from_config`]); locally, its `toolsdb` tunnel.
-    fn tool_db_server(&self) -> Result<Server> {
+    /// Opens a connection to the tool database (`config.schema`) on
+    /// `ToolsDB`, as found by `toolforge` (see [`Self::new_from_config`]);
+    /// locally, through its `toolsdb` tunnel.
+    pub async fn get_tool_db_connection(&self) -> Result<my::Conn> {
         let schema = &self.config.schema;
         if schema.is_empty() {
             return Err(anyhow!("No schema key in config file"));
         }
-        let info = toolforge::db::toolsdb(schema.as_str()).with_context(|| {
-            format!("Cannot resolve the tool database server; {CREDENTIALS_HINT}")
-        })?;
-        Ok(info.into())
-    }
-
-    /// Opens a connection to the tool database (`config.schema`); see
-    /// [`Self::tool_db_server`] for where it is.
-    pub async fn get_tool_db_connection(&self) -> Result<my::Conn> {
-        let pool = {
-            let mut slot = self.tool_db_pool.lock().await;
-            match slot.as_ref() {
-                Some(pool) => pool.clone(),
-                None => slot
-                    .insert(self.tool_db_server()?.pool(TOOL_DB_POOL_MAX)?)
-                    .clone(),
-            }
-        };
-        pool.connect()
+        let pool = self
+            .tool_db_pool
+            .get_or_try_init(|| async {
+                ToolsDbPool::builder()
+                    .pool_max(TOOL_DB_POOL_MAX)
+                    .connect_timeout(DB_CONNECT_TIMEOUT)
+                    .tcp_keepalive(TCP_KEEPALIVE)
+                    .build()
+                    .with_context(|| {
+                        format!("Cannot set up the tool database pool; {CREDENTIALS_HINT}")
+                    })
+            })
+            .await?;
+        pool.connect(schema)
             .await
             .map_err(|e| anyhow!("Cannot connect to the tool database: {e}"))
     }
@@ -574,21 +481,6 @@ pub fn query_log_timestamp() -> String {
     Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-/// Removes and returns the pools last used [`POOL_EVICT_AFTER`] or longer
-/// before `now`.
-fn take_stale_pools(pools: &mut HashMap<PoolKey, WikiPool>, now: Instant) -> Vec<CustomPool> {
-    let stale: Vec<PoolKey> = pools
-        .iter()
-        .filter(|(_, entry)| now.duration_since(entry.last_used) >= POOL_EVICT_AFTER)
-        .map(|(key, _)| key.clone())
-        .collect();
-    stale
-        .iter()
-        .filter_map(|key| pools.remove(key))
-        .map(|entry| entry.pool)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,33 +589,12 @@ mod tests {
         assert!(err.to_string().contains("Invalid PSID 'abc'"), "{err}");
     }
 
-    #[test]
-    fn take_stale_pools_closes_only_long_unused_pools() {
-        let pool = || {
-            CustomPool::builder("localhost", "user", "password")
-                .build()
-                .unwrap()
-        };
-        let now = Instant::now();
-        let mut pools = HashMap::new();
-        pools.insert(
-            ("enwiki".to_string(), DbCluster::Core),
-            WikiPool {
-                pool: pool(),
-                last_used: now - POOL_EVICT_AFTER,
-            },
-        );
-        pools.insert(
-            ("dewiki".to_string(), DbCluster::Core),
-            WikiPool {
-                pool: pool(),
-                last_used: now - POOL_EVICT_AFTER / 2,
-            },
-        );
-        assert_eq!(take_stale_pools(&mut pools, now).len(), 1);
-        assert_eq!(
-            pools.keys().collect::<Vec<_>>(),
-            vec![&("dewiki".to_string(), DbCluster::Core)]
-        );
+    #[tokio::test]
+    async fn get_tool_db_connection_requires_a_schema() {
+        let err = DatabaseManager::default()
+            .get_tool_db_connection()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("No schema key"), "{err}");
     }
 }

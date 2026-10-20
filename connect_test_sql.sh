@@ -4,7 +4,8 @@
 #
 # Every entry below is `local_port remote_host`, where `local_port` is the port
 # the matching `[tunnels]` key in replica.my.cnf points at, and `remote_host`
-# is the Wiki Replica service. The Commons links tables (categorylinks,
+# is the Wiki Replica service. Wikis are reached through their section
+# (s1-s8), the one `toolforge` looks up in meta_p (on s7). The Commons links tables (categorylinks,
 # pagelinks, templatelinks, langlinks, …) live on their own cluster since
 # September 2026, reached by prefixing the host with `links.`, so Commons needs
 # two tunnels:
@@ -13,11 +14,15 @@
 LOGIN=magnus@login.toolforge.org
 
 TUNNELS=(
-	"3307 dewiki.web.db.svc.wikimedia.cloud"
-	"3309 wikidatawiki.web.db.svc.wikimedia.cloud"
-	"3305 commonswiki.web.db.svc.wikimedia.cloud"
+	"3401 s1.web.db.svc.wikimedia.cloud"
+	"3402 s2.web.db.svc.wikimedia.cloud"
+	"3403 s3.web.db.svc.wikimedia.cloud"
+	"3404 s4.web.db.svc.wikimedia.cloud"
+	"3405 s5.web.db.svc.wikimedia.cloud"
+	"3406 s6.web.db.svc.wikimedia.cloud"
+	"3407 s7.web.db.svc.wikimedia.cloud"
+	"3408 s8.web.db.svc.wikimedia.cloud"
 	"3315 links.commonswiki.web.db.svc.wikimedia.cloud"
-	"3310 enwiki.web.db.svc.wikimedia.cloud"
 	"3308 tools.db.svc.wikimedia.cloud"
 	"3317 termstore.wikidatawiki.analytics.db.svc.wikimedia.cloud"
 )
@@ -26,11 +31,15 @@ TUNNELS=(
 # the tunnel reaches the right cluster and not just some MySQL. Kept to a
 # single indexed row — a COUNT(*) over a replica table takes minutes.
 declare -A PROBE
-PROBE[3307]="SELECT page_id FROM dewiki_p.page LIMIT 1"
-PROBE[3309]="SELECT page_id FROM wikidatawiki_p.page LIMIT 1"
-PROBE[3305]="SELECT img_name FROM commonswiki_p.image LIMIT 1"
+PROBE[3401]="SELECT page_id FROM enwiki_p.page LIMIT 1"
+PROBE[3402]="SELECT page_id FROM itwiki_p.page LIMIT 1"
+PROBE[3403]="SELECT page_id FROM outreachwiki_p.page LIMIT 1"
+PROBE[3404]="SELECT img_name FROM commonswiki_p.image LIMIT 1"
+PROBE[3405]="SELECT page_id FROM dewiki_p.page LIMIT 1"
+PROBE[3406]="SELECT page_id FROM frwiki_p.page LIMIT 1"
+PROBE[3407]="SELECT dbname FROM meta_p.wiki LIMIT 1"
+PROBE[3408]="SELECT page_id FROM wikidatawiki_p.page LIMIT 1"
 PROBE[3315]="SELECT lt_id FROM commonswiki_p.linktarget LIMIT 1"
-PROBE[3310]="SELECT page_id FROM enwiki_p.page LIMIT 1"
 PROBE[3308]="SELECT 1"
 PROBE[3317]="SELECT wby_id FROM wikidatawiki_p.wbt_type LIMIT 1"
 
