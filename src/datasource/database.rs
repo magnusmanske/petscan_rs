@@ -32,6 +32,9 @@ fn sql_text(sql: &str) -> SQLtuple {
 
 const MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
 
+/// Excluded categories per statement when applying negative categories.
+const NEGATIVE_CATEGORY_BATCH_SIZE: usize = MAX_CATEGORY_BATCH_SIZE * 10;
+
 /// The most pages a [`Filter::seed`] may name and still restrict the base
 /// query.
 ///
@@ -1078,12 +1081,16 @@ impl SourceDatabase {
         Ok(result)
     }
 
-    /// Resolve the negative ("exclude") categories to their member pages and
-    /// remove those pages from `result`.
+    /// Remove the pages in the negative ("exclude") categories from `result`.
     ///
-    /// The excluded title list is chunked and queried in parallel batches; each
-    /// batch carries only its own placeholders, so no single statement can hit
-    /// the placeholder limit regardless of how deep the category tree is.
+    /// Loads whichever side is smaller: all members of the excluded
+    /// categories, or those result pages that sit in them. The latter keeps
+    /// queries like "not in Living people" (over a million members) within
+    /// the result cap and memory.
+    ///
+    /// The excluded title list is chunked; each batch carries only its own
+    /// placeholders, so no single statement can hit the placeholder limit
+    /// regardless of how deep the category tree is.
     async fn subtract_negative_categories(
         &self,
         state: &AppState,
@@ -1097,13 +1104,78 @@ impl SourceDatabase {
         })?;
 
         let mut cats: Vec<String> = self.cat_neg.iter().flatten().cloned().collect();
+        cats.retain(|cat| !cat.trim().is_empty());
         cats.sort_unstable();
         cats.dedup();
+        if cats.is_empty() {
+            return Ok(());
+        }
 
-        let excluded = PageList::new_from_wiki(&wiki);
+        let excluded = if Self::estimate_category_members(state, &wiki, &cats).await? > result.len()
+        {
+            Self::fetch_result_pages_in_categories(state, &wiki, &cats, result).await?
+        } else {
+            Self::fetch_all_category_members(state, &wiki, &cats).await?
+        };
+        result.difference(&excluded, None).await
+    }
+
+    /// Upper bound of how many pages are in `cats`, from `category.cat_pages`.
+    async fn estimate_category_members(
+        state: &AppState,
+        wiki: &str,
+        cats: &[String],
+    ) -> Result<usize> {
+        let mut conn = state
+            .get_wiki_db_connection_for_tables(wiki, &["category"])
+            .await?;
+        let mut total = 0;
+        for chunk in cats.chunks(NEGATIVE_CATEGORY_BATCH_SIZE) {
+            let sql = helpers::category_sizes_query(chunk);
+            let size: Option<i64> = conn
+                .exec_first(sql.0.as_str(), my::Params::Positional(sql.1))
+                .await?;
+            // `cat_pages` can drift below zero; count such sums as empty.
+            total += usize::try_from(size.unwrap_or(0)).unwrap_or(0);
+        }
+        Ok(total)
+    }
+
+    /// Those pages of `result` that are directly in any of `cats`.
+    async fn fetch_result_pages_in_categories(
+        state: &AppState,
+        wiki: &str,
+        cats: &[String],
+        result: &PageList,
+    ) -> Result<PageList> {
+        let batches: Vec<SQLtuple> = result
+            .to_sql_batches(PAGE_BATCH_SIZE)
+            .into_iter()
+            .flat_map(|pages| {
+                cats.chunks(NEGATIVE_CATEGORY_BATCH_SIZE)
+                    .map(move |chunk| helpers::pages_in_categories_query(chunk, pages.clone()))
+            })
+            .collect();
+        let rows = result
+            .run_batch_queries_for_tables(state, batches, helpers::CATEGORY_MEMBERS_TABLES)
+            .await?;
+        let excluded = PageList::new_from_wiki_with_capacity(wiki, rows.len());
+        rows.iter()
+            .filter_map(|row| result.entry_from_row(row, 0, 1))
+            .for_each(|entry| excluded.add_entry(entry));
+        Ok(excluded)
+    }
+
+    /// All member pages of `cats`.
+    async fn fetch_all_category_members(
+        state: &AppState,
+        wiki: &str,
+        cats: &[String],
+    ) -> Result<PageList> {
+        let excluded = PageList::new_from_wiki(wiki);
         let futures: Vec<_> = cats
-            .chunks(MAX_CATEGORY_BATCH_SIZE * 10)
-            .map(|chunk| self.fetch_category_members(state, &wiki, chunk, &excluded))
+            .chunks(NEGATIVE_CATEGORY_BATCH_SIZE)
+            .map(|chunk| Self::fetch_category_members(state, wiki, chunk, &excluded))
             .collect();
         let results: Vec<_> = iter(futures)
             .buffered(MAX_CONCURRENT_DB_BATCHES)
@@ -1112,16 +1184,13 @@ impl SourceDatabase {
         for r in results {
             r?;
         }
-
-        result.difference(&excluded, None).await?;
-        Ok(())
+        Ok(excluded)
     }
 
     /// Fetch all member pages of `cats` and append them (id + title + namespace)
     /// to `out`. Matches the old negative-category subquery exactly: every page
     /// directly in any of the categories, regardless of the member's namespace.
     async fn fetch_category_members(
-        &self,
         state: &AppState,
         wiki: &str,
         cats: &[String],
@@ -2000,6 +2069,29 @@ mod tests {
             with_negcats.len() < without_negcats.len(),
             "exclusion must shrink the result"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
+    async fn test_negative_category_larger_than_result_cap() {
+        // "Living people" holds more pages than the result cap; excluding it
+        // must check the (small) result against it rather than load it.
+        let result = simulate_category_query(vec![
+            ("categories", "German computer scientists"),
+            ("negcats", "Living people"),
+            ("language", "en"),
+            ("project", "wikipedia"),
+        ])
+        .await
+        .unwrap();
+        let has = |title: &str| {
+            result
+                .as_vec()
+                .iter()
+                .any(|entry| entry.title().pretty() == title)
+        };
+        assert!(has("Konrad Zuse"), "deceased member must remain");
+        assert!(!has("Matthias Ettrich"), "living member must be removed");
     }
 
     // ─── SQL snapshot tests ──────────────────────────────────────────────

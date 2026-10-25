@@ -127,6 +127,9 @@ pub(super) fn links_to_subquery(input: &[String], api: &Api) -> SQLtuple {
     sql
 }
 
+/// Tables read by [`category_members_query`] and [`pages_in_categories_query`].
+pub(super) const CATEGORY_MEMBERS_TABLES: &[&str] = &["page", "categorylinks", "linktarget"];
+
 /// Build the query that fetches all member pages (`page_id`, `page_title`,
 /// `page_namespace`) of the given categories.
 ///
@@ -139,12 +142,44 @@ pub(super) fn links_to_subquery(input: &[String], api: &Api) -> SQLtuple {
 ///
 /// Titles are bound as positional parameters (no string interpolation), so
 /// this is not an SQL-injection vector.
-/// Tables read by [`category_members_query`].
-pub(super) const CATEGORY_MEMBERS_TABLES: &[&str] = &["page", "categorylinks", "linktarget"];
-
 pub(super) fn category_members_query(cats: &[String]) -> SQLtuple {
     let mut sql: SQLtuple = SQLtuple(
         "SELECT DISTINCT p.page_id,p.page_title,p.page_namespace FROM page p,categorylinks,linktarget WHERE p.page_id=cl_from AND lt_id=cl_target_id AND lt_namespace=14 AND lt_title IN ("
+            .to_string(),
+        vec![],
+    );
+    append_sql(&mut sql, prep_quote(cats));
+    sql.0 += ")";
+    sql
+}
+
+/// Build the query that returns (`page_title`, `page_namespace`) of those
+/// pages in `pages` (a [`crate::pagelist::PageList::to_sql_batches`] clause)
+/// that sit directly in any of the given categories.
+///
+/// The counterpart of [`category_members_query`] for categories larger than
+/// the result: its cost follows the size of `pages`, not of the categories.
+/// `STRAIGHT_JOIN` keeps `MySQL` from starting at the (possibly huge)
+/// categories instead of at the pages.
+pub(super) fn pages_in_categories_query(cats: &[String], pages: SQLtuple) -> SQLtuple {
+    let mut sql = SQLtuple(
+        format!(
+            "SELECT DISTINCT STRAIGHT_JOIN page_title,page_namespace FROM page,categorylinks,linktarget WHERE {} AND page_id=cl_from AND lt_id=cl_target_id AND lt_namespace=14 AND lt_title IN (",
+            pages.0
+        ),
+        pages.1,
+    );
+    append_sql(&mut sql, prep_quote(cats));
+    sql.0 += ")";
+    sql
+}
+
+/// Build the query that adds up the member counts of the given categories:
+/// a cheap upper-bound estimate of what [`category_members_query`] returns
+/// (pages in several of the categories count more than once).
+pub(super) fn category_sizes_query(cats: &[String]) -> SQLtuple {
+    let mut sql = SQLtuple(
+        "SELECT CAST(COALESCE(SUM(cat_pages),0) AS SIGNED) FROM category WHERE cat_title IN ("
             .to_string(),
         vec![],
     );
@@ -451,5 +486,39 @@ mod tests {
         assert_eq!(batches[0].len(), 2);
         assert_eq!(batches[0][0], vec!["x1".to_string()]);
         assert_eq!(batches[0][1], vec!["y1".to_string(), "y2".to_string()]);
+    }
+
+    #[test]
+    fn pages_in_categories_query_starts_at_the_pages() {
+        let pages = SQLtuple(
+            "(page_namespace=0 AND page_title IN(?,?))".to_string(),
+            vec![MyValue::from("A"), MyValue::from("B")],
+        );
+        let cats = vec!["Living_people".to_string()];
+        let sql = pages_in_categories_query(&cats, pages);
+        assert_eq!(
+            sql.0,
+            "SELECT DISTINCT STRAIGHT_JOIN page_title,page_namespace FROM page,categorylinks,linktarget WHERE (page_namespace=0 AND page_title IN(?,?)) AND page_id=cl_from AND lt_id=cl_target_id AND lt_namespace=14 AND lt_title IN (?)"
+        );
+        // Page values bind first, in text order.
+        assert_eq!(
+            sql.1,
+            vec![
+                MyValue::from("A"),
+                MyValue::from("B"),
+                MyValue::from("Living_people")
+            ]
+        );
+    }
+
+    #[test]
+    fn category_sizes_query_binds_every_category() {
+        let cats = vec!["A".to_string(), "B".to_string()];
+        let sql = category_sizes_query(&cats);
+        assert_eq!(
+            sql.0,
+            "SELECT CAST(COALESCE(SUM(cat_pages),0) AS SIGNED) FROM category WHERE cat_title IN (?,?)"
+        );
+        assert!(sql.placeholders_balanced());
     }
 }
