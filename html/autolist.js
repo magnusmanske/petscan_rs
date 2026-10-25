@@ -450,7 +450,7 @@ function AutoList(callback) {
     h +=
       "<button id='al_do_stop' class='btn btn-outline-danger btn-sm' tt='al_stop' style='display:none'></button>";
     h +=
-      "<form style='display:none' id='qs_form' action='//tools.wmflabs.org/quickstatements/api.php' method='post' target='_blank'>";
+      "<form style='display:none' id='qs_form' action='https://quickstatements.toolforge.org/api.php' method='post' target='_blank'>";
     h += "<input type='hidden' name='action' value='import' />";
     h += "<input type='hidden' name='format' value='v1' />";
     h += "<input type='hidden' name='temporary' value='1' />";
@@ -610,7 +610,7 @@ function AutoList(callback) {
       tt.updateInterface(td);
       td.find('a[tt="check_wd"]').attr({
         href:
-          "https://tools.wmflabs.org/wikidata-todo/duplicity.php?wiki=" +
+          "https://wikidata-todo.toolforge.org/duplicity.php?wiki=" +
           output_wiki +
           "&norand=1&page=" +
           page,

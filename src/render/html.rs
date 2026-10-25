@@ -252,7 +252,7 @@ impl Render for RenderHTML {
             Some(coords) => {
                 let lang = "en"; // TODO
                 let mut url = format!(
-                    "https://tools.wmflabs.org/geohack/geohack.php?language={}&params=",
+                    "https://geohack.toolforge.org/geohack.php?language={}&params=",
                     lang
                 );
                 if coords.lat < 0.0 {

@@ -67,7 +67,7 @@ impl SourcePagePile {
             ("doit", "1"),
         ]);
         let text = api
-            .query_raw("https://tools.wmflabs.org/pagepile/api.php", &params, "GET")
+            .query_raw("https://pagepile.toolforge.org/api.php", &params, "GET")
             .await
             .map_err(|e| anyhow!("PagePile: {e}"))?;
         let v: Value = serde_json::from_str(&text).map_err(|e| anyhow!("PagePile JSON: {e}"))?;
