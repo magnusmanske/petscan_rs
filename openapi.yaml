@@ -4,8 +4,8 @@ info:
   title: PetScan
   description: A powerful querying tool for Wikimedia
 servers:
-  - url: 'https://petscan.wmflabs.org/'
-  - url: 'https://cors-anywhere.herokuapp.com/https://petscan.wmflabs.org/'
+  - url: 'https://petscan.toolforge.org/'
+  - url: 'https://cors-anywhere.herokuapp.com/https://petscan.toolforge.org/'
 paths:
   /:
     get:

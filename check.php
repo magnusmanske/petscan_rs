@@ -14,7 +14,7 @@ function restart_petscan () {
 
 while ( 1 ) {
 	$r = rand();
-	$url = "http://petscan.wmflabs.org/?psid=16306546&format=csv&killer=1&random={$r}" ;
+	$url = "http://petscan.toolforge.org/?psid=16306546&format=csv&killer=1&random={$r}" ;
 	$ok = false ;
 	try {
 		$csv = @file_get_contents($url) ;

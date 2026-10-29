@@ -107,7 +107,7 @@ impl RenderJSON {
     }
 
     fn get_query_string(platform: &Platform) -> String {
-        "https://petscan.wmflabs.org/?".to_string() + &platform.form_parameters().to_string()
+        "https://petscan.toolforge.org/?".to_string() + &platform.form_parameters().to_string()
     }
 
     fn cat_scan(
