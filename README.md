@@ -4,8 +4,7 @@
 
 PetScan is a powerful querying tool for Wikimedia. A query is prepared in the PetScan submission form.
 
-Live: https://petscan.wmflabs.org/ (a Cloud VPS instance, run by `run.sh`
-and `petscan.service`; see "Deploy on Toolforge" below for the alternative)
+Live: https://petscan.toolforge.org/ (see "Deploy on Toolforge" below)
 
 Docs: https://meta.wikimedia.org/wiki/PetScan/en
 
