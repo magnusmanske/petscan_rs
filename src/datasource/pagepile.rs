@@ -40,10 +40,7 @@ impl DataSource for SourcePagePile {
             .map_err(|_| anyhow!("Invalid PagePile ID '{param}'"))?;
         let limit = platform.state().max_result_entries();
         // One more than allowed, to tell a pile that is too large without loading it all.
-        let query = Query {
-            limit: Some(limit as u64 + 1),
-            ..Default::default()
-        };
+        let query = Query::default().limit(limit as u64 + 1);
         let pile = client()?
             .pile_with(id, &query)
             .await
