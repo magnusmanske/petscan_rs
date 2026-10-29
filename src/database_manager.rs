@@ -13,8 +13,8 @@ use wikimisc::toolforge::db::{Cluster, ExtensionDb, normalize_dbname};
 use wikimisc::toolforge::pool::{ToolsDbPool, WikiPool};
 
 /// Where `toolforge` looks for database credentials, for error messages.
-const CREDENTIALS_HINT: &str =
-    "credentials are read from replica.my.cnf in $TOOL_DATA_DIR or the home directory";
+const CREDENTIALS_HINT: &str = "credentials are read from the config's db_credentials_file, \
+    else from replica.my.cnf in $TOOL_DATA_DIR or the home directory";
 
 /// Retry policy for `max_user_connections` rejections. Wikimedia replicas
 /// enforce a per-user limit (typically 10 concurrent connections); a brief
@@ -133,7 +133,8 @@ impl DatabaseManager {
     /// from the `TOOL_REPLICA_*` / `TOOL_TOOLSDB_*` environment variables, or
     /// `replica.my.cnf` in `$TOOL_DATA_DIR` or the home directory. For local
     /// development, `local='true'` and a `[tunnels]` section in that file
-    /// route each server through its SSH tunnel.
+    /// route each server through its SSH tunnel. The config's
+    /// `db_credentials_file` overrides all of these.
     pub fn new_from_config(config: &Config) -> Self {
         Self {
             config: config.clone(),
@@ -227,9 +228,13 @@ impl DatabaseManager {
             _ => &self.web_pool,
         };
         cell.get_or_try_init(|| async {
-            WikiPool::builder(group)
+            let mut builder = WikiPool::builder(group)
                 .connect_timeout(DB_CONNECT_TIMEOUT)
-                .tcp_keepalive(TCP_KEEPALIVE)
+                .tcp_keepalive(TCP_KEEPALIVE);
+            if let Some(path) = &self.config.db_credentials_file {
+                builder = builder.my_cnf_path(path);
+            }
+            builder
                 .build()
                 .with_context(|| format!("Cannot set up the replica pool; {CREDENTIALS_HINT}"))
         })
@@ -330,14 +335,16 @@ impl DatabaseManager {
         let pool = self
             .tool_db_pool
             .get_or_try_init(|| async {
-                ToolsDbPool::builder()
+                let mut builder = ToolsDbPool::builder()
                     .pool_max(TOOL_DB_POOL_MAX)
                     .connect_timeout(DB_CONNECT_TIMEOUT)
-                    .tcp_keepalive(TCP_KEEPALIVE)
-                    .build()
-                    .with_context(|| {
-                        format!("Cannot set up the tool database pool; {CREDENTIALS_HINT}")
-                    })
+                    .tcp_keepalive(TCP_KEEPALIVE);
+                if let Some(path) = &self.config.db_credentials_file {
+                    builder = builder.my_cnf_path(path);
+                }
+                builder.build().with_context(|| {
+                    format!("Cannot set up the tool database pool; {CREDENTIALS_HINT}")
+                })
             })
             .await?;
         pool.connect(schema)

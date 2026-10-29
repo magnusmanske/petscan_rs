@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use wikimisc::telemetry::TelemetryConfig;
 
 /// Default for [`Config::max_result_entries`]. A million entries take about
@@ -21,6 +21,11 @@ pub struct Config {
     /// and credentials come from `replica.my.cnf`, see
     /// [`crate::database_manager::DatabaseManager::new_from_config`].
     pub schema: String,
+    /// A `replica.my.cnf`-style file to read the database credentials from,
+    /// instead of looking them up. Lets a Toolforge tool use another
+    /// account's credentials, overriding the `TOOL_*` variables Toolforge
+    /// sets for its own.
+    pub db_credentials_file: Option<PathBuf>,
     /// HTTP listen port. Default 80 is applied at the webserver call site.
     pub http_port: Option<u16>,
     /// HTTP bind address. Default `0.0.0.0` is applied at the webserver call site.
@@ -64,6 +69,7 @@ mod tests {
         assert_eq!(c.schema, "");
         assert_eq!(c.http_port, None);
         assert_eq!(c.http_server, None);
+        assert_eq!(c.db_credentials_file, None);
         assert!(!c.use_file_table);
         assert_eq!(c.restart_code, None);
         assert_eq!(c.telemetry.token, None);
@@ -92,6 +98,12 @@ mod tests {
         assert_eq!(c.http_port, Some(3000));
         assert_eq!(c.restart_code.as_deref(), Some("abc"));
         assert!(!c.use_file_table);
+    }
+
+    #[test]
+    fn db_credentials_file() {
+        let c: Config = serde_json::from_str(r#"{"db_credentials_file":"/x/s1.my.cnf"}"#).unwrap();
+        assert_eq!(c.db_credentials_file, Some(PathBuf::from("/x/s1.my.cnf")));
     }
 
     #[test]

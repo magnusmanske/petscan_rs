@@ -58,14 +58,14 @@ pub async fn command_line_usage(app_state: Arc<AppState>) -> Result<()> {
     Ok(())
 }
 
+/// Names the config file; `config.json` in the working directory if unset.
+const CONFIG_PATH_VAR: &str = "PETSCAN_CONFIG";
+
+/// Loads the config file named by [`CONFIG_PATH_VAR`].
+///
 /// # Panics
 /// Panics if the config file can not be opened or parsed.
 pub fn get_petscan_config() -> Config {
-    let basedir = env::current_dir()
-        .expect("Can't get CWD")
-        .to_str()
-        .expect("Can't convert CWD to_str")
-        .to_string();
-    let path = basedir.to_owned() + "/config.json";
-    Config::from_file(&path).expect("config.json load failed")
+    let path = env::var(CONFIG_PATH_VAR).unwrap_or_else(|_| "config.json".to_string());
+    Config::from_file(path).expect("config load failed")
 }
