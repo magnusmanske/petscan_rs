@@ -21,7 +21,7 @@ const MAX_SPARQL_BYTES_PER_ROW: usize = 300;
 /// What SPARQL requests say they are. Wikimedia asks for contact information.
 const USER_AGENT: &str = wikimisc::user_agent!(
     name = "PetScan",
-    "https://petscan.wmcloud.org; https://github.com/magnusmanske/petscan_rs"
+    "https://petscan.toolforge.org; https://github.com/magnusmanske/petscan_rs"
 );
 
 /// The endpoint a query goes to, from the `sparql_server` parameter.
@@ -248,7 +248,7 @@ mod tests {
     fn test_user_agent_names_petscan() {
         assert!(USER_AGENT.starts_with(concat!("PetScan/", env!("CARGO_PKG_VERSION"), " (")));
         assert!(USER_AGENT.ends_with(
-            " (https://petscan.wmcloud.org; https://github.com/magnusmanske/petscan_rs)"
+            " (https://petscan.toolforge.org; https://github.com/magnusmanske/petscan_rs)"
         ));
     }
 
