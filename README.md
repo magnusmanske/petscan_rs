@@ -4,7 +4,8 @@
 
 PetScan is a powerful querying tool for Wikimedia. A query is prepared in the PetScan submission form.
 
-Live: https://petscan.wmflabs.org/
+Live: https://petscan.wmflabs.org/ (a Cloud VPS instance, run by `run.sh`
+and `petscan.service`; see "Deploy on Toolforge" below for the alternative)
 
 Docs: https://meta.wikimedia.org/wiki/PetScan/en
 
@@ -128,3 +129,27 @@ You can run a query from command line using the URL parameters. Output will be i
 ```bash
 TOOL_DATA_DIR=. cargo run -- 'url_parameters'
 ```
+
+
+## Deploy on Toolforge
+
+PetScan can also run as the `petscan` tool's web service, built by the
+[Toolforge Build Service](https://wikitech.wikimedia.org/wiki/Help:Toolforge/Building_container_images)
+from the `Procfile`. As the tool (`become petscan`):
+
+1. Put a `config.json` into the tool's home directory, `/data/project/petscan/`
+   (the `Procfile` points `PETSCAN_CONFIG` there), with `"http_port": 8000`,
+   the port Toolforge expects a web service on. Memory is tighter than on the
+   VPS, so consider a lower `max_result_entries` (about 2 GB per million).
+2. For now PetScan keeps using the VPS's database account (tool account
+   `s51156`, whose ToolsDB holds `s51156__petscan`), not the `petscan` tool's
+   own. Copy its credentials into e.g. `/data/project/petscan/s51156.my.cnf`,
+   without `local` or `[tunnels]`, and set `"db_credentials_file"` in
+   `config.json` to that path. Without it, PetScan would use the credentials
+   Toolforge provides the `petscan` tool. `chmod 600` both files.
+3. Push the code to GitHub, then run `./build.sh` to build the image and
+   `./restart.sh` to (re)start the web service. Logs:
+   `toolforge webservice logs -f`.
+
+While both deployments use the same database account, they share its limit
+of concurrent connections per replica.

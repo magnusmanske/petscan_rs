@@ -1,5 +1,6 @@
 {
 "//credentials":"database servers and credentials come from replica.my.cnf, found via $TOOL_DATA_DIR or the home directory; see README",
+"//db_credentials_file":"optional: read them from this replica.my.cnf-style file instead, e.g. on Toolforge to use another tool account's credentials",
 "schema":"s51156__petscan",
 "http_port":3000,
 "timeout":60000,
