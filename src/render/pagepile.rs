@@ -4,7 +4,7 @@ use crate::render::Render;
 use crate::{pagelist_entry::PageListEntry, platform::Platform};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use std::collections::HashMap;
+use pagepile::client::NewPage;
 
 /// Renders `PagePile`
 #[derive(Clone, Copy, Debug)]
@@ -14,49 +14,22 @@ pub struct RenderPagePile;
 impl Render for RenderPagePile {
     async fn response(
         &self,
-        platform: &Platform,
+        _platform: &Platform,
         wiki: &str,
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse> {
-        let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
-        let url = "https://pagepile.toolforge.org/api.php";
-        let data: String = entries
+        let pages: Vec<NewPage> = entries
             .iter()
-            .map(|e| format!("{}\t{}", e.title().pretty(), e.title().namespace_id()))
-            .collect::<Vec<String>>()
-            .join("\n");
-        let mut params: HashMap<String, String> =
-            [("action", "create_pile_with_data"), ("wiki", wiki)]
-                .iter()
-                .map(|x| (x.0.to_string(), x.1.to_string()))
-                .collect();
-        params.insert("data".to_string(), data);
-
-        let result = match api.query_raw(url, &params, "POST").await {
-            Ok(r) => r,
-            Err(e) => return Err(anyhow!("PagePile generation failed: {e}")),
-        };
-        let json: serde_json::value::Value = match serde_json::from_str(&result) {
-            Ok(j) => j,
-            Err(e) => {
-                return Err(anyhow!(
-                    "PagePile generation did not return valid JSON: {e}"
-                ));
-            }
-        };
-        let pagepile_id = match json["pile"]["id"].as_u64() {
-            Some(id) => id,
-            None => {
-                return Err(anyhow!(
-                    "PagePile generation did not return a pagepile ID: {json}"
-                ));
-            }
-        };
-        let url_get_data =
-            format!("https://pagepile.toolforge.org/api.php?action=get_data&id={pagepile_id}");
+            .map(|e| NewPage::new(e.title().pretty(), e.title().namespace_id()))
+            .collect();
+        let client = crate::datasource::pagepile::client()?;
+        let id = client
+            .create(wiki, &pages)
+            .await
+            .map_err(|e| anyhow!("PagePile generation failed: {e}"))?;
+        let url = client.view_url(id);
         let html = format!(
-            "<html><head><meta http-equiv=\"refresh\" content=\"0; url={}\" /></head><BODY><H1>Redirect</H1>The document can be found <A HREF='{}'>here</A>.</BODY></html>",
-            url_get_data, url_get_data
+            "<html><head><meta http-equiv=\"refresh\" content=\"0; url={url}\" /></head><BODY><H1>Redirect</H1>The document can be found <A HREF='{url}'>here</A>.</BODY></html>"
         );
         Ok(MyResponse {
             s: html,

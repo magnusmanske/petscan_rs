@@ -4,11 +4,18 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use serde_json::value::Value;
-use std::time;
-use wikimisc::mediawiki::api::Api;
-use wikimisc::mediawiki::reqwest::ClientBuilder;
+use pagepile::client::{Client, Query};
+use std::sync::LazyLock;
 use wikimisc::mediawiki::title::Title;
+
+/// One client for all `PagePile` requests, for its connection pool.
+static CLIENT: LazyLock<Result<Client, String>> =
+    LazyLock::new(|| Client::new().map_err(|e| e.to_string()));
+
+/// The `PagePile` client.
+pub fn client() -> Result<&'static Client> {
+    CLIENT.as_ref().map_err(|e| anyhow!("PagePile client: {e}"))
+}
 
 #[derive(Debug, Clone, PartialEq, Default, Copy)]
 pub struct SourcePagePile;
@@ -24,54 +31,38 @@ impl DataSource for SourcePagePile {
     }
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList> {
-        let pagepile = platform
+        let param = platform
             .get_param("pagepile")
             .ok_or_else(|| anyhow!("Missing parameter 'pagepile'"))?;
-        let v = self.get_pagepile_json(&pagepile).await?;
-        let wiki = v["wiki"]
-            .as_str()
-            .ok_or(anyhow!("PagePile {pagepile} does not specify a wiki"))?;
-        let api = platform.state().get_api_for_wiki(wiki.to_string()).await?; // Just because we need query_raw
-        let ret = PageList::new_from_wiki(wiki);
-        let pages = v["pages"]
-            .as_array()
-            .ok_or(anyhow!("PagePile {pagepile} does not have a 'pages' array"))?;
+        let id: u64 = param
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("Invalid PagePile ID '{param}'"))?;
         let limit = platform.state().max_result_entries();
-        if pages.len() > limit {
+        // One more than allowed, to tell a pile that is too large without loading it all.
+        let query = Query {
+            limit: Some(limit as u64 + 1),
+            ..Default::default()
+        };
+        let pile = client()?
+            .pile_with(id, &query)
+            .await
+            .map_err(|e| anyhow!("PagePile fetch failed: {e}"))?;
+        if pile.pages_total > limit as u64 {
             return Err(crate::pagelist::too_many_results(
-                &format!("PagePile {pagepile} holds"),
+                &format!("PagePile {id} holds"),
                 limit,
             ));
         }
-        pages
+        let ret = PageList::new_from_wiki(&pile.wiki);
+        pile.pages
             .iter()
-            .filter_map(|title| title.as_str())
-            .map(|title| PageListEntry::new(Title::new_from_full(title, &api)))
+            .map(|page| PageListEntry::new(Title::new(&page.text(), page.namespace)))
             .for_each(|entry| ret.add_entry(entry));
         if ret.is_empty() {
             platform.warn("<span tt=\'warn_pagepile\'></span>".to_string())?;
         }
         Ok(ret)
-    }
-}
-
-impl SourcePagePile {
-    async fn get_pagepile_json(&self, pagepile: &str) -> Result<Value> {
-        let timeout = time::Duration::from_secs(240);
-        let builder = ClientBuilder::new().timeout(timeout);
-        let api = Api::new_from_builder("https://www.wikidata.org/w/api.php", builder).await?;
-        let params = api.params_into(&[
-            ("id", pagepile),
-            ("action", "get_data"),
-            ("format", "json"),
-            ("doit", "1"),
-        ]);
-        let text = api
-            .query_raw("https://pagepile.toolforge.org/api.php", &params, "GET")
-            .await
-            .map_err(|e| anyhow!("PagePile: {e}"))?;
-        let v: Value = serde_json::from_str(&text).map_err(|e| anyhow!("PagePile JSON: {e}"))?;
-        Ok(v)
     }
 }
 

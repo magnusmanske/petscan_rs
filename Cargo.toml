@@ -7,6 +7,7 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+pagepile = { git = "https://codeberg.org/magnusmanske/pagepile", default-features = false }
 anyhow = "1"
 regex = "1"
 chrono = "0.4"
