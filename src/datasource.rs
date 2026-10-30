@@ -73,7 +73,15 @@ pub fn full_entity_id_to_number(strings: &[String]) -> SQLtuple {
         .par_iter()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|s| s[1..].to_string())
+        // Entity IDs are one type letter followed by a number ("Q42", "P31").
+        // Strip only a leading ASCII letter: `s[1..]` panics when the first
+        // character is multi-byte (`é`, `Ω`) and mangles input that has no
+        // prefix at all. Unprefixed values are bound unchanged; they are SQL
+        // parameters, so there is nothing to sanitise.
+        .map(|s| {
+            s.strip_prefix(|c: char| c.is_ascii_alphabetic())
+                .unwrap_or(s)
+        })
         .map(|s| MyValue::Bytes(s.into()))
         .collect();
     SQLtuple(get_placeholders(escaped.len()), escaped)
@@ -203,5 +211,35 @@ mod tests {
         let SQLtuple(placeholders, values) = full_entity_id_to_number(&strings);
         assert_eq!(placeholders, "?");
         assert_eq!(values.len(), 1);
+    }
+
+    /// Regression: `s[1..]` panicked on any non-ASCII first character, because
+    /// index 1 is not a char boundary there.
+    #[test]
+    fn test_full_entity_id_to_number_multibyte_prefix_does_not_panic() {
+        let strings = vec!["é".to_string(), "Ω123".to_string(), "𝔔7".to_string()];
+        let SQLtuple(placeholders, values) = full_entity_id_to_number(&strings);
+        assert_eq!(placeholders, "?,?,?");
+        assert_eq!(
+            values,
+            vec![
+                MyValue::Bytes("é".into()),
+                MyValue::Bytes("Ω123".into()),
+                MyValue::Bytes("𝔔7".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_full_entity_id_to_number_keeps_unprefixed_value() {
+        // Nothing to strip; the old byte slice turned "123" into "23".
+        let SQLtuple(_, values) = full_entity_id_to_number(&["123".to_string()]);
+        assert_eq!(values, vec![MyValue::Bytes("123".into())]);
+    }
+
+    #[test]
+    fn test_full_entity_id_to_number_trims_whitespace() {
+        let SQLtuple(_, values) = full_entity_id_to_number(&["  Q42  ".to_string()]);
+        assert_eq!(values, vec![MyValue::Bytes("42".into())]);
     }
 }
