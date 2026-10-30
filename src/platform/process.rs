@@ -1101,12 +1101,12 @@ impl Platform {
                 } else {
                     return None;
                 }
-                sql.0 += &titles
-                    .par_iter()
-                    .map(|title| title[1..].to_string())
-                    .collect::<Vec<String>>()
-                    .join(",");
+                // Bind the numeric IDs rather than splicing them into the SQL:
+                // the titles are data, and a byte slice is not char-safe.
+                let mut ids = crate::datasource::full_entity_id_to_number(titles);
+                sql.0 += &ids.0;
                 sql.0 += ")";
+                sql.1.append(&mut ids.1);
                 Some(sql)
             })
             .collect();

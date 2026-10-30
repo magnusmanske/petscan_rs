@@ -13,7 +13,6 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use wikimisc::mediawiki::api::Api;
 use wikimisc::mysql_async as my;
-use wikimisc::mysql_async::Value as MyValue;
 use wikimisc::mysql_async::from_row;
 use wikimisc::mysql_async::prelude::Queryable;
 use wikimisc::{commons, title};
@@ -123,14 +122,11 @@ impl WDfist {
         // Prepare batches to get item/wiki/title triples
         let mut batches: Vec<SQLtuple> = vec![];
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = crate::datasource::prep_quote(chunk);
-            sql.0 = format!("SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN ({})",sql.0) ;
-            sql.1 = sql.1.par_iter().filter_map(|q|{
-                match q {
-                    MyValue::Bytes(q) => Some(MyValue::Bytes(q[1..].into())),
-                    _ => None
-                }
-            }).collect();
+            let mut sql = crate::datasource::full_entity_id_to_number(chunk);
+            sql.0 = format!(
+                "SELECT ips_item_id,ips_site_id,ips_site_page FROM wb_items_per_site WHERE ips_item_id IN ({})",
+                sql.0
+            );
             batches.push(sql);
         });
 
@@ -574,22 +570,18 @@ impl WDfist {
     }
 
     fn filter_files_from_ignore_database_prepare_batches(&mut self) -> Vec<SQLtuple> {
-        // Prepare batches
-        let mut batches: Vec<SQLtuple> = vec![];
-        let items: Vec<String> = self
-            .item2files
-            .par_iter()
-            .map(|(q, _files)| q[1..].to_string())
-            .collect();
-        items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
-            let mut sql = crate::datasource::prep_quote(chunk);
-            sql.0 = format!(
-                "SELECT concat('Q',q),CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files WHERE q IN ({})",
-                sql.0
-            );
-            batches.push(sql);
-        });
-        batches
+        let items: Vec<String> = self.item2files.keys().cloned().collect();
+        items
+            .chunks(PAGE_BATCH_SIZE)
+            .map(|chunk| {
+                let mut sql = crate::datasource::full_entity_id_to_number(chunk);
+                sql.0 = format!(
+                    "SELECT concat('Q',q),CONVERT(`file` USING utf8) FROM s51218__wdfist_p.ignore_files WHERE q IN ({})",
+                    sql.0
+                );
+                sql
+            })
+            .collect()
     }
 
     async fn filter_files_from_ignore_database_run_batch(
