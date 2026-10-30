@@ -10,6 +10,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
 use wikimisc::mediawiki::api::Api;
 use wikimisc::mysql_async as my;
 use wikimisc::mysql_async::Value as MyValue;
@@ -32,6 +33,15 @@ pub const MIN_IGNORE_DB_FILE_COUNT: usize = 3;
 pub const MAX_FILE_COUNT_IN_RESULT_SET: usize = 5;
 pub const NEARBY_FILES_RADIUS_IN_METERS: usize = 100;
 pub const MAX_WIKI_API_THREADS: usize = 10;
+/// Attempts per Commons API query. `CirrusSearch` regularly answers
+/// `cirrussearch-too-busy-error` under load, and the same request usually
+/// succeeds when repeated a moment later.
+const COMMONS_API_ATTEMPTS: usize = 3;
+/// Delay before the second Commons API attempt; the third waits twice as long.
+const COMMONS_API_RETRY_DELAY: Duration = Duration::from_millis(500);
+/// Language for the Commons file search based on Wikidata labels. `mul` is used
+/// as a fallback, as Wikidata merges labels identical in all languages into it.
+const COMMONS_SEARCH_LANGUAGE: &str = "en";
 
 #[derive(Debug, Clone)]
 pub struct WDfist {
@@ -274,10 +284,7 @@ impl WDfist {
 
         let mut results: Vec<_> = vec![];
         for param in params {
-            match api.get_query_api_json(&param).await {
-                Ok(x) => results.push(x),
-                _ => results.push(json!({})), // Ignore
-            }
+            results.push(Self::commons_api_query(&api, &param).await);
         }
 
         let add_item_file = Self::follow_coords_get_item_files(results, page_coords);
@@ -337,7 +344,10 @@ impl WDfist {
         let rows = pagelist
             .run_batch_queries_with_cluster(&self.state, batches, DbCluster::TermStore)
             .await?;
-        let item2label = Self::follow_search_commons_get_item2label(rows);
+        let item2label = Self::pick_preferred_label_per_item(
+            rows.into_iter()
+                .filter_map(|row| my::from_row_opt::<(String, String, String)>(row).ok()),
+        );
 
         // Get search results
         let api = self.get_commons_api().await?;
@@ -360,14 +370,15 @@ impl WDfist {
         self.items.chunks(PAGE_BATCH_SIZE).for_each(|chunk| {
             let mut sql = crate::datasource::full_entity_id_to_number(chunk);
             sql.0 = format!(
-                "SELECT concat('Q',wbit_item_id) AS term_full_entity_id, wbx_text as term_text
+                "SELECT concat('Q',wbit_item_id) AS term_full_entity_id, wbx_text as term_text,
+                	wbxl_language as term_language
             	FROM wbt_item_terms
              	INNER JOIN wbt_term_in_lang ON wbit_term_in_lang_id = wbtl_id
              	INNER JOIN wbt_type ON wbtl_type_id = wby_id AND wby_name='label'
               	INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id
-               	INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language='en'
+               	INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language IN ('{}','mul')
                 WHERE wbit_item_id IN ({})",
-                sql.0
+                COMMONS_SEARCH_LANGUAGE, sql.0
             );
             batches.push(sql);
         });
@@ -765,6 +776,39 @@ impl WDfist {
         }
     }
 
+    /// Runs one Commons API query. One failed request must only cost that item's
+    /// file candidates, not the whole `WDfist` run, so after a few attempts the
+    /// error is logged and an empty response returned. Note that the API reports
+    /// some failures (e.g. `cirrussearch-too-busy-error`) as an `error` object in
+    /// a successful HTTP response, so a returned value needs checking as well.
+    async fn commons_api_query(api: &Api, param: &HashMap<String, String>) -> Value {
+        let mut last_error = String::new();
+        for attempt in 1..=COMMONS_API_ATTEMPTS {
+            if attempt > 1 {
+                tokio::time::sleep(COMMONS_API_RETRY_DELAY * (attempt as u32 - 1)).await;
+            }
+            match api.get_query_api_json(param).await {
+                Ok(v) => match Self::api_error_message(&v) {
+                    None => return v,
+                    Some(error) => last_error = error,
+                },
+                Err(e) => last_error = e.to_string(),
+            }
+        }
+        tracing::warn!(
+            "Commons API query failed after {COMMONS_API_ATTEMPTS} attempts: {last_error}; parameters: {param:?}"
+        );
+        json!({})
+    }
+
+    /// Extracts the error from an API response. The Commons API reports some
+    /// failures (e.g. `cirrussearch-too-busy-error`) with HTTP 200 and an
+    /// `error` object, so a successful call does not guarantee usable data.
+    fn api_error_message(response: &Value) -> Option<String> {
+        let error = response.get("error")?;
+        Some(format!("API error {error}"))
+    }
+
     async fn follow_search_commons_get_results(
         &self,
         params: Vec<HashMap<String, String>>,
@@ -772,10 +816,7 @@ impl WDfist {
     ) -> Vec<Value> {
         let mut results: Vec<_> = vec![];
         for param in params {
-            match api.get_query_api_json(&param).await {
-                Ok(x) => results.push(x),
-                _ => results.push(json!({})), // Ignore
-            }
+            results.push(Self::commons_api_query(&api, &param).await);
         }
         results
     }
@@ -786,11 +827,29 @@ impl WDfist {
             .map_err(|e| anyhow!("{e}"))
     }
 
-    fn follow_search_commons_get_item2label(rows: Vec<my::Row>) -> Vec<(String, String)> {
-        let item2label: Vec<(String, String)> = rows
-            .par_iter()
-            .map(|row| my::from_row::<(String, String)>(row.to_owned()))
+    /// Collapses `(item, label, language)` rows into one label per item,
+    /// preferring [`COMMONS_SEARCH_LANGUAGE`] over the `mul` fallback. Sorted by
+    /// item, so the subsequent API queries are in a predictable order.
+    fn pick_preferred_label_per_item(
+        rows: impl IntoIterator<Item = (String, String, String)>,
+    ) -> Vec<(String, String)> {
+        // item -> (is preferred language, label)
+        let mut item2label: HashMap<String, (bool, String)> = HashMap::new();
+        for (item, label, language) in rows {
+            let is_preferred = language == COMMONS_SEARCH_LANGUAGE;
+            let better = match item2label.get(&item) {
+                None => true,
+                Some((has_preferred, _label)) => is_preferred && !*has_preferred,
+            };
+            if better {
+                item2label.insert(item, (is_preferred, label));
+            }
+        }
+        let mut item2label: Vec<(String, String)> = item2label
+            .into_iter()
+            .map(|(item, (_is_preferred, label))| (item, label))
             .collect();
+        item2label.sort();
         item2label
     }
 
@@ -824,6 +883,8 @@ mod tests {
     use std::env;
 
     async fn get_state() -> Arc<AppState> {
+        // So warnings from the tests against live Wikimedia APIs are visible.
+        wikimisc::logging::init();
         let basedir = env::current_dir()
             .expect("Can't get CWD")
             .to_str()
@@ -949,16 +1010,118 @@ mod tests {
         assert!(!wdfist.is_valid_filename("foobar.svg"));
     }
 
+    /// Which of the Commons-following steps [`follow_with_retry`] runs.
+    #[derive(Clone, Copy)]
+    enum Follow {
+        Coords,
+        SearchCommons,
+    }
+
+    /// Runs a Commons-following step, retrying while it finds no files. The
+    /// Commons search backend sometimes answers "too busy" for a burst of
+    /// requests (see [`WDfist::commons_api_query`]), which would otherwise turn
+    /// into a spurious test failure.
+    async fn follow_with_retry(wdfist: &mut WDfist, follow: Follow) {
+        for attempt in 1..=3 {
+            match follow {
+                Follow::Coords => wdfist.follow_coords().await.unwrap(),
+                Follow::SearchCommons => wdfist.follow_search_commons().await.unwrap(),
+            }
+            if !wdfist.item2files.is_empty() {
+                return;
+            }
+            if attempt < 3 {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires live config.json + Wikimedia APIs (Wikidata/Commons); run with --ignored"]
     async fn test_follow_coords() {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec!["Q350"]).await;
-        wdfist.follow_coords().await.unwrap();
-        assert!(wdfist.item2files.get("Q350").unwrap().len() > 40);
-        assert!(wdfist.item2files.get("Q350").unwrap().contains_key(
+        follow_with_retry(&mut wdfist, Follow::Coords).await;
+        let files = wdfist
+            .item2files
+            .get("Q350")
+            .expect("follow_coords found no files");
+        assert!(files.len() > 40);
+        assert!(files.contains_key(
             &"Cycling_down_Malcolm_Street_-_geograph.org.uk_-_3751839.jpg".to_string()
         ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live config.json + Wikimedia APIs (Wikidata/Commons); run with --ignored"]
+    async fn test_follow_search_commons_mul_label_fallback() {
+        // Q42's redundant English label was merged into `mul`; the Commons search
+        // has to use that label, or it would find no files at all.
+        let params: Vec<(&str, &str)> = vec![];
+        let mut wdfist = get_wdfist(params, vec!["Q42"]).await;
+        follow_with_retry(&mut wdfist, Follow::SearchCommons).await;
+        let files = wdfist
+            .item2files
+            .get("Q42")
+            .expect("follow_search_commons found no files via the mul label");
+        assert!(!files.is_empty());
+    }
+
+    #[test]
+    fn test_api_error_message() {
+        assert_eq!(
+            WDfist::api_error_message(&json!({"query": {"geosearch": []}})),
+            None
+        );
+        let message = WDfist::api_error_message(&json!({
+            "error": {"code": "cirrussearch-too-busy-error", "info": "Search is currently too busy."}
+        }))
+        .expect("API error not detected");
+        assert!(message.contains("cirrussearch-too-busy-error"));
+    }
+
+    #[test]
+    fn test_pick_preferred_label_per_item() {
+        let row = |item: &str, label: &str, language: &str| {
+            (item.to_string(), label.to_string(), language.to_string())
+        };
+
+        // No label in the preferred language: `mul` is the fallback.
+        assert_eq!(
+            WDfist::pick_preferred_label_per_item([row("Q1", "Mul label", "mul")]),
+            vec![("Q1".to_string(), "Mul label".to_string())]
+        );
+
+        // The preferred language wins over `mul`, whatever the row order.
+        let expected = vec![("Q1".to_string(), "English label".to_string())];
+        assert_eq!(
+            WDfist::pick_preferred_label_per_item([
+                row("Q1", "English label", "en"),
+                row("Q1", "Mul label", "mul"),
+            ]),
+            expected
+        );
+        assert_eq!(
+            WDfist::pick_preferred_label_per_item([
+                row("Q1", "Mul label", "mul"),
+                row("Q1", "English label", "en"),
+            ]),
+            expected
+        );
+
+        // One label per item, sorted by item.
+        assert_eq!(
+            WDfist::pick_preferred_label_per_item([
+                row("Q3", "Three", "en"),
+                row("Q1", "One", "mul"),
+                row("Q2", "Two", "en"),
+            ]),
+            vec![
+                ("Q1".to_string(), "One".to_string()),
+                ("Q2".to_string(), "Two".to_string()),
+                ("Q3".to_string(), "Three".to_string()),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -966,15 +1129,13 @@ mod tests {
     async fn test_follow_search_commons() {
         let params: Vec<(&str, &str)> = vec![];
         let mut wdfist = get_wdfist(params, vec!["Q66711783"]).await;
-        wdfist.follow_search_commons().await.unwrap();
-        assert!(wdfist.item2files.get("Q66711783").unwrap().len() > 3);
-        assert!(
-            wdfist
-                .item2files
-                .get("Q66711783")
-                .unwrap()
-                .contains_key(&"Walter_Rueth.jpg".to_string())
-        );
+        follow_with_retry(&mut wdfist, Follow::SearchCommons).await;
+        let files = wdfist
+            .item2files
+            .get("Q66711783")
+            .expect("follow_search_commons found no files");
+        assert!(files.len() > 3);
+        assert!(files.contains_key(&"Walter_Rueth.jpg".to_string()));
     }
 
     #[tokio::test]
