@@ -31,6 +31,15 @@ static NOTFOUND: &[u8] = b"Not Found";
 /// [`crate::app_state::QueryLogEntry`] guard.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
+/// A rendered response plus the size of the result list that produced it.
+/// `result_entries` is captured before rendering drains the list, so the
+/// metrics reflect what the query loaded rather than what a format truncated.
+#[derive(Debug)]
+struct QueryOutcome {
+    response: MyResponse,
+    result_entries: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct WebServer {
     app_state: Arc<AppState>,
@@ -267,11 +276,17 @@ impl WebServer {
         let platform = Platform::new_from_parameters(&form_parameters, self.app_state.clone());
         let format = platform.output_format();
         let started = Instant::now();
-        let response = self
+        let rss_sampler = crate::telemetry::RssSampler::start();
+        let outcome = self
             .run_query(platform, &form_parameters, single_psid)
             .await;
-        crate::telemetry::record_query(format, started.elapsed());
-        response
+        crate::telemetry::record_query(
+            format,
+            started.elapsed(),
+            outcome.result_entries,
+            rss_sampler.peak_bytes(),
+        );
+        outcome.response
     }
 
     /// Runs an admitted query and renders its result.
@@ -280,7 +295,7 @@ impl WebServer {
         mut platform: Platform,
         form_parameters: &FormParameters,
         single_psid: Option<u64>,
-    ) -> MyResponse {
+    ) -> QueryOutcome {
         // The guard increments the in-flight counter now and decrements on
         // drop — including unwind and cancellation — so neither a panic nor
         // a dropped request can leave the counter permanently inflated.
@@ -305,11 +320,17 @@ impl WebServer {
                 drop(platform);
                 // `{:#}` keeps the context chain, so a bare upstream message
                 // like reqwest's "builder error" arrives with its cause.
-                return self
-                    .app_state
-                    .render_error(format!("{error:#}"), form_parameters);
+                return QueryOutcome {
+                    response: self
+                        .app_state
+                        .render_error(format!("{error:#}"), form_parameters),
+                    result_entries: 0,
+                };
             }
         }
+
+        // Captured before `get_response` drains the list.
+        let result_entries = platform.result().as_ref().map_or(0, |result| result.len());
 
         // Generate and store a new PSID
 
@@ -322,9 +343,12 @@ impl WebServer {
             {
                 Ok(psid) => Some(psid),
                 Err(e) => {
-                    return self
-                        .app_state
-                        .render_error(format!("{e:#}"), form_parameters);
+                    return QueryOutcome {
+                        response: self
+                            .app_state
+                            .render_error(format!("{e:#}"), form_parameters),
+                        result_entries,
+                    };
                 }
             },
         };
@@ -338,7 +362,10 @@ impl WebServer {
                 .render_error(format!("{e:#}"), form_parameters),
         };
         drop(platform);
-        response
+        QueryOutcome {
+            response,
+            result_entries,
+        }
     }
 
     /// Serve a static file from the in-memory cache populated at startup.
