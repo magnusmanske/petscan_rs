@@ -629,7 +629,10 @@ impl PageList {
         wikidata_language: &str,
         platform: &dyn QueryContext,
     ) -> Result<()> {
-        // wbt_ done
+        // Wikidata is migrating labels/descriptions that are identical in all
+        // languages to the `mul` language, deleting the per-language copies.
+        // MediaWiki falls back to `mul`, so we fetch it as well and only use it
+        // where the requested language has no term.
         let prefix = entity_type.prefix();
         let table = entity_type.terms_table();
         let field_name = entity_type.id_field();
@@ -663,12 +666,13 @@ impl PageList {
 					 (case when wbtl_type_id = 1 then 'label'
              			when wbtl_type_id = 2 then 'description'
                 		when wbtl_type_id = 3 then 'alias'
-                		end) AS term_type
+                		end) AS term_type,
+					 wbxl_language as term_language
 					 FROM {table}
 					 INNER JOIN wbt_term_in_lang ON {term_in_lang_id} = wbtl_id
 					 INNER JOIN wbt_type ON wbtl_type_id = wby_id
 					 INNER JOIN wbt_text_in_lang ON wbtl_text_in_lang_id = wbxl_id
-					 INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language=?
+					 INNER JOIN wbt_text ON wbxl_text_id = wbx_id AND wbxl_language IN (?,'mul')
 					 WHERE {field_name} IN ({id_placeholders})"
                 );
                 Some(sql_batch.to_owned())
@@ -676,15 +680,16 @@ impl PageList {
             .collect::<Vec<SQLtuple>>();
 
         let the_f = |row: my::Row, entry: &mut PageListEntry| {
-            if let Ok((_page_title, _page_namespace, term_text, term_type)) =
-                my::from_row_opt::<(Vec<u8>, NamespaceID, Vec<u8>, Vec<u8>)>(row)
+            if let Ok((_page_title, _page_namespace, term_text, term_type, term_language)) =
+                my::from_row_opt::<(Vec<u8>, NamespaceID, Vec<u8>, Vec<u8>, Vec<u8>)>(row)
             {
-                let term_text = String::from_utf8_lossy(&term_text).into_owned();
-                match String::from_utf8_lossy(&term_type).into_owned().as_str() {
-                    "label" => entry.set_wikidata_label(Some(term_text)),
-                    "description" => entry.set_wikidata_description(Some(term_text)),
-                    _ => {}
-                }
+                Self::apply_wikidata_term(
+                    entry,
+                    &String::from_utf8_lossy(&term_text),
+                    &String::from_utf8_lossy(&term_type),
+                    &String::from_utf8_lossy(&term_language),
+                    wikidata_language,
+                );
             }
         };
         let col_title = 0;
@@ -708,6 +713,30 @@ impl PageList {
         })
         .await?;
         Ok(())
+    }
+
+    /// Stores one term-store row on `entry`. The `mul` fallback row must never
+    /// overwrite a term in the preferred language, and must only fill in for a
+    /// term the preferred language does not have; the row order is unspecified.
+    fn apply_wikidata_term(
+        entry: &mut PageListEntry,
+        term_text: &str,
+        term_type: &str,
+        term_language: &str,
+        preferred_language: &str,
+    ) {
+        let is_preferred_language = term_language == preferred_language;
+        match term_type {
+            "label" if is_preferred_language || entry.get_wikidata_label().is_none() => {
+                entry.set_wikidata_label(Some(term_text.to_string()));
+            }
+            "description"
+                if is_preferred_language || entry.get_wikidata_description().is_none() =>
+            {
+                entry.set_wikidata_description(Some(term_text.to_string()));
+            }
+            _ => {}
+        }
     }
 
     pub async fn convert_to_wiki(&self, wiki: &str, platform: &dyn QueryContext) -> Result<()> {
@@ -927,6 +956,51 @@ mod tests {
 
     fn make_entry(title: &str, ns: i64) -> PageListEntry {
         PageListEntry::new(Title::new(title, ns))
+    }
+
+    #[test]
+    fn wikidata_mul_label_fallback() {
+        // `mul` arrives first: it fills the gap, then the preferred language wins.
+        let mut mul_first = make_entry("Q42", 0);
+        PageList::apply_wikidata_term(&mut mul_first, "Douglas Adams", "label", "mul", "en");
+        PageList::apply_wikidata_term(&mut mul_first, "Douglas Adams (en)", "label", "en", "en");
+        assert_eq!(
+            mul_first.get_wikidata_label().as_deref(),
+            Some("Douglas Adams (en)")
+        );
+
+        // Preferred language arrives first: `mul` must not overwrite it.
+        let mut preferred_first = make_entry("Q42", 0);
+        PageList::apply_wikidata_term(
+            &mut preferred_first,
+            "Douglas Adams (en)",
+            "label",
+            "en",
+            "en",
+        );
+        PageList::apply_wikidata_term(&mut preferred_first, "Douglas Adams", "label", "mul", "en");
+        assert_eq!(
+            preferred_first.get_wikidata_label().as_deref(),
+            Some("Douglas Adams (en)")
+        );
+
+        // Only `mul` available: used as fallback; descriptions independent.
+        let mut mul_only = make_entry("Q42", 0);
+        PageList::apply_wikidata_term(&mut mul_only, "Douglas Adams", "label", "mul", "en");
+        PageList::apply_wikidata_term(&mut mul_only, "English writer", "description", "mul", "en");
+        assert_eq!(
+            mul_only.get_wikidata_label().as_deref(),
+            Some("Douglas Adams")
+        );
+        assert_eq!(
+            mul_only.get_wikidata_description().as_deref(),
+            Some("English writer")
+        );
+
+        // Aliases are ignored.
+        let mut alias_only = make_entry("Q42", 0);
+        PageList::apply_wikidata_term(&mut alias_only, "DNA", "alias", "en", "en");
+        assert_eq!(alias_only.get_wikidata_label(), None);
     }
 
     #[test]

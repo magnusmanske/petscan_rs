@@ -895,7 +895,9 @@ mod tests {
             "Q3",
             vec![
                 ("More_than_5.jpg", 0),
-                ("Douglas_adams_portrait_cropped.jpg", 0),
+                // Widely used on Wikidata (e.g. as P41); unlike a single item's
+                // image, this stays in `imagelinks` and won't invalidate the test.
+                ("Flag_of_the_United_States.svg", 0),
             ],
         );
         set_item2files(&mut wdfist, "Q4", vec![("More_than_5.jpg", 0)]);
