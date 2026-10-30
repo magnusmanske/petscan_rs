@@ -189,17 +189,17 @@ impl Platform {
                 }
                 CombinationSequential::Union => {
                     let (r1, r2) = Self::pop_two_registers(&mut registers, "Union").await?;
-                    r1.union(&r2, Some(self)).await?;
+                    r1.union(r2, Some(self)).await?;
                     registers.push(r1);
                 }
                 CombinationSequential::Intersection => {
                     let (r1, r2) = Self::pop_two_registers(&mut registers, "Intersection").await?;
-                    r1.intersection(&r2, Some(self)).await?;
+                    r1.intersection(r2, Some(self)).await?;
                     registers.push(r1);
                 }
                 CombinationSequential::Not => {
                     let (r1, r2) = Self::pop_two_registers(&mut registers, "Not").await?;
-                    r1.difference(&r2, Some(self)).await?;
+                    r1.difference(r2, Some(self)).await?;
                     registers.push(r1);
                 }
             }

@@ -8,7 +8,6 @@ use crate::platform::{PAGE_BATCH_SIZE, Platform};
 use anyhow::{Result, anyhow};
 use my::Value::Bytes;
 use rayon::prelude::*;
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use tokio::sync::Mutex as TokioMutex;
@@ -373,27 +372,7 @@ impl Platform {
         Platform::profile("after load_missing_metadata", Some(result.len()));
 
         if let Some(regexp) = self.get_param("rxp_filter") {
-            let is_wikidata = result.is_wikidata();
-            let entries = result.drain_into_vec();
-            let filtered = tokio::task::spawn_blocking(move || {
-                let regexp_all = format!("^{regexp}$");
-                match Regex::new(&regexp_all) {
-                    Ok(re) => entries
-                        .into_iter()
-                        .filter(|entry| match is_wikidata {
-                            true => match entry.get_wikidata_label() {
-                                Some(s) => re.is_match(s.as_str()),
-                                None => false,
-                            },
-                            false => re.is_match(entry.title().pretty()),
-                        })
-                        .collect::<HashSet<_>>(),
-                    Err(_) => entries.into_iter().collect::<HashSet<_>>(),
-                }
-            })
-            .await
-            .map_err(|e| anyhow!("regexp filter task failed: {e}"))?;
-            result.set_entries(filtered);
+            result.regexp_filter(&regexp);
         }
         if let Some(search) = self.get_param("search_filter") {
             result.search_filter(self, &search).await?;
@@ -846,18 +825,13 @@ impl Platform {
         }
         if let Some(allowed) = media_type_filter {
             let allowed: HashSet<String> = allowed.into_iter().collect();
-            let entries = result.drain_into_vec();
-            let filtered: HashSet<PageListEntry> = entries
-                .into_iter()
-                .filter(|e| match e.get_file_info() {
-                    Some(fi) => match &fi.img_media_type {
-                        Some(mt) => allowed.contains(mt),
-                        None => false,
-                    },
+            result.retain_entries(&|e: &PageListEntry| match e.get_file_info() {
+                Some(fi) => match &fi.img_media_type {
+                    Some(mt) => allowed.contains(mt),
                     None => false,
-                })
-                .collect();
-            result.set_entries(filtered);
+                },
+                None => false,
+            });
         }
         Ok(())
     }

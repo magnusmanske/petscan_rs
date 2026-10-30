@@ -112,7 +112,7 @@ impl PageList {
 
     pub fn set_from(&self, other: Self) {
         *write_lock(&self.wiki) = read_lock(&other.wiki).clone();
-        *write_lock(&self.entries) = read_lock(&other.entries).clone();
+        *write_lock(&self.entries) = other.take_entries();
         self.set_has_sitelink_counts(other.has_sitelink_counts());
     }
 
@@ -126,6 +126,12 @@ impl PageList {
 
     pub fn set_entries(&self, entries: HashSet<PageListEntry>) {
         *write_lock(&self.entries) = entries;
+    }
+
+    /// Moves the entries out, leaving this list empty. Lets callers that own
+    /// another list take its set instead of cloning it.
+    fn take_entries(&self) -> HashSet<PageListEntry> {
+        std::mem::take(&mut *write_lock(&self.entries))
     }
 
     pub fn retain_entries(&self, f: &dyn Fn(&PageListEntry) -> bool) {
@@ -252,44 +258,49 @@ impl PageList {
         Ok(())
     }
 
+    /// Merges `pagelist`'s entries into this one, consuming them. On a title
+    /// collision the entry already in `self` wins.
     pub async fn union(
         &self,
-        pagelist: &PageList,
+        pagelist: PageList,
         platform: Option<&dyn QueryContext>,
     ) -> Result<()> {
-        self.check_before_merging(pagelist, platform).await?;
+        self.check_before_merging(&pagelist, platform).await?;
         Platform::profile("PageList::union START UNION/1", None);
-        // Clone the other list's entries so they can be moved into the blocking task.
-        let other: HashSet<PageListEntry> = read_lock(&pagelist.entries).clone();
-        // Fast path: if self is empty just replace with the clone we already have.
-        let is_self_empty = read_lock(&self.entries).is_empty();
-        let merged = if is_self_empty {
-            other
-        } else {
-            Platform::profile("PageList::union START UNION/2", None);
-            let self_set: HashSet<PageListEntry> = write_lock(&self.entries).drain().collect();
-            tokio::task::spawn_blocking(move || {
-                let mut result = self_set;
-                result.extend(other);
-                result
-            })
-            .await
-            .map_err(|e| anyhow!("{e}"))?
-        };
+        // Take the other set instead of cloning it: for a million-entry list
+        // the clone was a full extra copy at the peak of every merge.
+        let other = pagelist.take_entries();
+        // Fast path: if self is empty, adopt the set we already have.
+        if self.is_empty() {
+            self.set_entries(other);
+            Platform::profile("PageList::union UNION DONE", None);
+            return Ok(());
+        }
+        Platform::profile("PageList::union START UNION/2", None);
+        let self_set = self.take_entries();
+        let merged = tokio::task::spawn_blocking(move || {
+            let mut result = self_set;
+            result.reserve(other.len());
+            result.extend(other);
+            result
+        })
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
         Platform::profile("PageList::union UNION DONE", None);
-        *write_lock(&self.entries) = merged;
+        self.set_entries(merged);
         Ok(())
     }
 
+    /// Keeps only entries also present in `pagelist`, consuming it. Entries
+    /// already in `self` (with their metadata) are the ones retained.
     pub async fn intersection(
         &self,
-        pagelist: &PageList,
+        pagelist: PageList,
         platform: Option<&dyn QueryContext>,
     ) -> Result<()> {
-        self.check_before_merging(pagelist, platform).await?;
-        // Clone the other list's entries so they can be moved into the blocking task.
-        let other: HashSet<PageListEntry> = read_lock(&pagelist.entries).clone();
-        let self_set: HashSet<PageListEntry> = write_lock(&self.entries).drain().collect();
+        self.check_before_merging(&pagelist, platform).await?;
+        let other = pagelist.take_entries();
+        let self_set = self.take_entries();
         let filtered = tokio::task::spawn_blocking(move || {
             self_set
                 .into_iter()
@@ -298,19 +309,19 @@ impl PageList {
         })
         .await
         .map_err(|e| anyhow!("{e}"))?;
-        *write_lock(&self.entries) = filtered;
+        self.set_entries(filtered);
         Ok(())
     }
 
+    /// Removes entries present in `pagelist`, consuming it.
     pub async fn difference(
         &self,
-        pagelist: &PageList,
+        pagelist: PageList,
         platform: Option<&dyn QueryContext>,
     ) -> Result<()> {
-        self.check_before_merging(pagelist, platform).await?;
-        // Clone the other list's entries so they can be moved into the blocking task.
-        let other: HashSet<PageListEntry> = read_lock(&pagelist.entries).clone();
-        let self_set: HashSet<PageListEntry> = write_lock(&self.entries).drain().collect();
+        self.check_before_merging(&pagelist, platform).await?;
+        let other = pagelist.take_entries();
+        let self_set = self.take_entries();
         let filtered = tokio::task::spawn_blocking(move || {
             self_set
                 .into_iter()
@@ -319,7 +330,7 @@ impl PageList {
         })
         .await
         .map_err(|e| anyhow!("{e}"))?;
-        *write_lock(&self.entries) = filtered;
+        self.set_entries(filtered);
         Ok(())
     }
 
@@ -448,6 +459,32 @@ impl PageList {
             .await
     }
 
+    /// Runs `batches` with bounded concurrency and hands each batch's rows to
+    /// `on_rows` as soon as it arrives. Unlike collecting the whole result,
+    /// this keeps at most [`MAX_CONCURRENT_DB_BATCHES`] row sets in memory,
+    /// which matters once a list holds hundreds of thousands of entries.
+    async fn for_each_batch_result<F>(
+        &self,
+        state: &AppState,
+        batches: Vec<SQLtuple>,
+        wiki: &str,
+        cluster: DbCluster,
+        mut on_rows: F,
+    ) -> Result<()>
+    where
+        F: FnMut(Vec<my::Row>) -> Result<()>,
+    {
+        let futures: Vec<_> = batches
+            .into_iter()
+            .map(|sql| self.run_batch_query(state, sql, wiki, cluster))
+            .collect();
+        let mut stream = iter(futures).buffered(MAX_CONCURRENT_DB_BATCHES);
+        while let Some(rows) = stream.next().await {
+            on_rows(rows?)?;
+        }
+        Ok(())
+    }
+
     /// Runs batched queries for `process_batch_results` and `annotate_batch_results`
     /// Uses Mutex.
     async fn run_batch_queries_mutex(
@@ -457,18 +494,12 @@ impl PageList {
         wiki: String,
         cluster: DbCluster,
     ) -> Result<Vec<my::Row>> {
-        let mut futures = vec![];
-        for sql in batches {
-            futures.push(self.run_batch_query(state, sql, &wiki, cluster));
-        }
-        let results: Vec<_> = iter(futures)
-            .buffered(MAX_CONCURRENT_DB_BATCHES)
-            .collect()
-            .await;
         let mut ret = vec![];
-        for x in results {
-            ret.append(&mut x?);
-        }
+        self.for_each_batch_result(state, batches, &wiki, cluster, |mut rows| {
+            ret.append(&mut rows);
+            Ok(())
+        })
+        .await?;
         Ok(ret)
     }
 
@@ -529,20 +560,24 @@ impl PageList {
             };
             let col_title = 0;
             let col_ns = 1;
-            let rows = self.run_batch_queries(&platform.state(), batches).await?;
-            rows.iter()
-                .filter_map(|row| {
-                    self.entry_from_row(row, col_title, col_ns)
-                        .map(|entry| (row, entry))
-                })
-                .filter_map(|(row, entry)| match self.entries.read() {
-                    Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
-                    _ => None,
-                })
-                .for_each(|(row, mut entry)| {
-                    the_f(row.clone(), &mut entry);
+            let wiki = self
+                .wiki()
+                .ok_or_else(|| anyhow!("PageList::load_missing_page_metadata: No wiki"))?;
+            let state = platform.state();
+            self.for_each_batch_result(&state, batches, &wiki, DbCluster::Core, |rows| {
+                for row in rows {
+                    let Some(entry) = self.entry_from_row(&row, col_title, col_ns) else {
+                        continue;
+                    };
+                    let Some(mut entry) = self.get_entry(&entry) else {
+                        continue;
+                    };
+                    the_f(row, &mut entry);
                     self.add_entry(entry);
-                });
+                }
+                Ok(())
+            })
+            .await?;
         }
         Ok(())
     }
@@ -654,23 +689,24 @@ impl PageList {
         };
         let col_title = 0;
         let col_ns = 1;
-        self.run_batch_queries_with_cluster(&platform.state(), batches, DbCluster::TermStore)
-            .await?
-            .iter()
-            .filter_map(|row| {
-                self.entry_from_row(row, col_title, col_ns)
-                    .map(|entry| (row, entry))
-            })
-            .filter_map(|(row, entry)| {
-                match self.entries.read() {
-                    Ok(entries) => entries.get(&entry).map(|e| (row, e.clone())),
-                    _ => None, // TODO error?
-                }
-            })
-            .for_each(|(row, mut entry)| {
-                the_f(row.clone(), &mut entry);
+        let wiki = self
+            .wiki()
+            .ok_or_else(|| anyhow!("PageList::add_wikidata_labels_for_namespace: No wiki"))?;
+        let state = platform.state();
+        self.for_each_batch_result(&state, batches, &wiki, DbCluster::TermStore, |rows| {
+            for row in rows {
+                let Some(entry) = self.entry_from_row(&row, col_title, col_ns) else {
+                    continue;
+                };
+                let Some(mut entry) = self.get_entry(&entry) else {
+                    continue;
+                };
+                the_f(row, &mut entry);
                 self.add_entry(entry);
-            });
+            }
+            Ok(())
+        })
+        .await?;
         Ok(())
     }
 
@@ -708,12 +744,18 @@ impl PageList {
             Err(_e) => None,
         };
 
-        let results = self.run_batch_queries(&state, batches);
-        let results = results.await?;
-        results
-            .iter()
-            .filter_map(|row| the_f(row.to_owned()))
-            .for_each(|entry| self.add_entry(entry));
+        let wiki = self
+            .wiki()
+            .ok_or_else(|| anyhow!("PageList::convert_to_wikidata: No wiki"))?;
+        self.for_each_batch_result(&state, batches, &wiki, DbCluster::Core, |rows| {
+            for row in rows {
+                if let Some(entry) = the_f(row) {
+                    self.add_entry(entry);
+                }
+            }
+            Ok(())
+        })
+        .await?;
 
         self.set_wiki(Some("wikidatawiki".to_string()));
         Ok(())
@@ -768,16 +810,13 @@ impl PageList {
             )))
         };
 
-        let results: Vec<_> = iter(futures)
-            .buffered(MAX_CONCURRENT_DB_BATCHES)
-            .collect()
-            .await;
-        results
-            .into_par_iter()
-            .filter_map(|r| r.ok())
-            .flatten()
-            .filter_map(the_fn)
-            .for_each(|entry| self.add_entry(entry));
+        let mut stream = iter(futures).buffered(MAX_CONCURRENT_DB_BATCHES);
+        while let Some(chunk) = stream.next().await {
+            chunk?
+                .into_par_iter()
+                .filter_map(&the_fn)
+                .for_each(|entry| self.add_entry(entry));
+        }
 
         Platform::profile("PageList::convert_from_wikidata ALL BATCHES COMPLETE", None);
         self.set_wiki(Some(wiki.to_string()));
@@ -1012,7 +1051,7 @@ mod tests {
         pl2.add_entry(make_entry("Bar", 0));
         pl2.add_entry(make_entry("Baz", 0));
 
-        pl1.union(&pl2, None).await.unwrap();
+        pl1.union(pl2, None).await.unwrap();
         assert_eq!(pl1.len(), 3); // Foo, Bar, Baz
     }
 
@@ -1042,7 +1081,7 @@ mod tests {
         let pl2 = PageList::new_from_wiki("enwiki");
         pl2.add_entry(make_entry("Bar", 0));
 
-        pl1.union(&pl2, Some(&PanickingStub)).await.unwrap();
+        pl1.union(pl2, Some(&PanickingStub)).await.unwrap();
         assert_eq!(pl1.len(), 2);
     }
 
@@ -1056,7 +1095,7 @@ mod tests {
         pl2.add_entry(make_entry("Bar", 0));
         pl2.add_entry(make_entry("Baz", 0));
 
-        pl1.intersection(&pl2, None).await.unwrap();
+        pl1.intersection(pl2, None).await.unwrap();
         assert_eq!(pl1.len(), 1); // Only Bar
         let entries = pl1.as_vec();
         assert_eq!(entries[0].title().pretty(), "Bar");
@@ -1071,7 +1110,7 @@ mod tests {
         let pl2 = PageList::new_from_wiki("enwiki");
         pl2.add_entry(make_entry("Bar", 0));
 
-        pl1.difference(&pl2, None).await.unwrap();
+        pl1.difference(pl2, None).await.unwrap();
         assert_eq!(pl1.len(), 1); // Only Foo
         let entries = pl1.as_vec();
         assert_eq!(entries[0].title().pretty(), "Foo");

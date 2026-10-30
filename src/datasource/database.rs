@@ -837,7 +837,7 @@ impl SourceDatabase {
             .collect()
             .await;
         for pages in results {
-            ret.union(&pages?, None).await?;
+            ret.union(pages?, None).await?;
             ret.ensure_at_most(state.max_result_entries())?;
         }
         Ok(ret)
@@ -1117,7 +1117,7 @@ impl SourceDatabase {
         } else {
             Self::fetch_all_category_members(state, &wiki, &cats).await?
         };
-        result.difference(&excluded, None).await
+        result.difference(excluded, None).await
     }
 
     /// Upper bound of how many pages are in `cats`, from `category.cat_pages`.
