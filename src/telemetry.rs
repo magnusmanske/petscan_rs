@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use wikimisc::metrics::{counter, gauge, histogram};
-use wikimisc::telemetry::{Telemetry, TelemetryConfig};
+use wikimisc::telemetry::{self, TelemetryConfig};
 
 /// How often the running/waiting request gauges are sampled.
 const LOAD_SAMPLE_INTERVAL: Duration = Duration::from_secs(10);
@@ -26,13 +26,9 @@ static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 /// server's own graceful shutdown, which sends the final push once drained
 /// (see [`AppState::try_shutdown`]).
 pub fn start(config: &TelemetryConfig, app_state: Arc<AppState>) {
-    let installed = Telemetry::builder("web")
-        .config(config)
-        .version(env!("CARGO_PKG_VERSION"))
-        .handle_signals(false)
-        .install_or_log();
-    TELEMETRY_ENABLED.store(installed.is_some(), Ordering::Relaxed);
-    if installed.is_some() {
+    let installed = telemetry::install_web(env!("CARGO_PKG_VERSION"), Some(config));
+    TELEMETRY_ENABLED.store(installed, Ordering::Relaxed);
+    if installed {
         spawn_load_gauges(app_state);
     }
 }
