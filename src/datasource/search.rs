@@ -4,7 +4,7 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use rayon::prelude::*;
+use std::collections::HashSet;
 use wikimisc::mediawiki::api::Api;
 
 #[derive(Debug, Clone, PartialEq, Default, Copy)]
@@ -42,21 +42,7 @@ impl DataSource for SourceSearch {
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let srlimit = if max > 500 { 500 } else { max };
         let srlimit = srlimit.to_string();
-        let namespace_ids = platform
-            .form_parameters()
-            .ns
-            .par_iter()
-            .cloned()
-            .collect::<Vec<usize>>();
-        let namespace_ids = if namespace_ids.is_empty() {
-            "*".to_string()
-        } else {
-            namespace_ids
-                .iter()
-                .map(|i| i.to_string())
-                .collect::<Vec<String>>()
-                .join(",")
-        };
+        let namespace_ids = srnamespace(&platform.form_parameters().ns);
         let params = api.params_into(&[
             ("action", "query"),
             ("list", "search"),
@@ -81,6 +67,22 @@ impl DataSource for SourceSearch {
     }
 }
 
+/// The `srnamespace` value searching these namespaces, or all of them if
+/// there are none. MediaWiki separates multiple values with `|`; given
+/// anything else, it ignores the parameter and searches the wiki's default
+/// namespaces instead.
+fn srnamespace(namespace_ids: &HashSet<usize>) -> String {
+    if namespace_ids.is_empty() {
+        return "*".to_string();
+    }
+    let mut ids: Vec<usize> = namespace_ids.iter().copied().collect();
+    ids.sort_unstable();
+    ids.iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +91,13 @@ mod tests {
     #[test]
     fn test_name() {
         assert_eq!(SourceSearch.name(), "search");
+    }
+
+    #[test]
+    fn test_srnamespace() {
+        assert_eq!(srnamespace(&HashSet::new()), "*");
+        assert_eq!(srnamespace(&HashSet::from([6])), "6");
+        assert_eq!(srnamespace(&HashSet::from([14, 0, 6])), "0|6|14");
     }
 
     #[test]
