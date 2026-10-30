@@ -241,6 +241,18 @@ impl AppState {
         }
     }
 
+    /// Test-only constructor: like [`Self::for_test_with_main_page`], but with
+    /// a `SiteMatrix` built from a fixture. Renderer tests need this to
+    /// resolve wiki URLs (e.g. `wikidatawiki`) that the empty default matrix
+    /// does not know.
+    #[cfg(test)]
+    pub(crate) fn for_test_with_site_matrix(site_matrix: SiteMatrix) -> Self {
+        Self {
+            site_matrix,
+            ..Self::default()
+        }
+    }
+
     // ------------------------------------------------------------------
     // Delegating accessors – config feature flags
     // ------------------------------------------------------------------

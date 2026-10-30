@@ -113,6 +113,21 @@ impl RenderParams {
         }
     }
 
+    /// Test-only constructor with an explicit `AppState`, for tests whose
+    /// output depends on the site matrix (e.g. wikilinks resolved through
+    /// [`Self::state`]'s `SiteMatrix`).
+    #[cfg(test)]
+    pub fn for_tests_with_state(
+        wiki: &str,
+        ns: Arc<dyn NamespaceContext>,
+        state: Arc<AppState>,
+    ) -> Self {
+        Self {
+            state,
+            ..Self::for_tests(wiki, ns)
+        }
+    }
+
     pub const fn show_wikidata_item(&self) -> bool {
         self.show_wikidata_item
     }

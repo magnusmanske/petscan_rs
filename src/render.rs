@@ -260,6 +260,19 @@ pub trait Render {
         o.as_ref().map(|x| x.to_string()).unwrap_or_default()
     }
 
+    /// Escape a plain-text cell value for the output format.
+    ///
+    /// `row_from_entry` builds some cells from raw entry data rather than
+    /// through a `render_cell_*` method. Such values can be editor-controlled
+    /// wiki content (`defaultsort` comes from `{{DEFAULTSORT:…}}`, Wikidata
+    /// labels and descriptions from item terms) and may contain characters
+    /// that are structural in the output format. Formats where that matters
+    /// (HTML) override this; formats that emit plain text keep the value
+    /// verbatim, hence the identity default.
+    fn escape_text(&self, s: String) -> String {
+        s
+    }
+
     fn row_from_entry(
         &self,
         entry: &PageListEntry,
@@ -270,48 +283,56 @@ pub trait Render {
         let mut ret = vec![];
         for (k, _) in header {
             let cell = match k.as_str() {
+                // Cells built by a `render_*` method are already in the output
+                // format's syntax (HTML links/images, wikitext links, …).
                 "title" => self.render_cell_title(entry, params),
-                "page_id" => self.opt_u32(&entry.page_id()),
                 "namespace" => self.render_cell_namespace(entry, params),
-                "size" => self.opt_u32(&entry.page_bytes()),
-                "timestamp" => self.opt_string(&entry.get_page_timestamp()),
                 "wikidata_item" => self.render_cell_wikidata_item(entry, params),
                 "image" => self.render_cell_image(&entry.get_page_image(), params),
-                "number" => params.row_number().to_string(),
-                "defaultsort" => self.opt_string(&entry.get_defaultsort()),
-                "disambiguation" => self.opt_bool(&entry.disambiguation().as_option_bool()),
-                "incoming_links" => self.opt_linkcount(&entry.incoming_links()),
-                "sitelinks" => self.opt_linkcount(&entry.sitelink_count()),
+                "checkbox" => self.render_cell_checkbox(entry, params, platform),
+                "coordinates" => self.render_coordinates(entry, params),
+                "fileusage" => self.render_cell_fileusage(entry, params),
 
                 // `img_user_text` routes through `render_user_name` so a
                 // tabular renderer can wrap it (e.g. HTML's [[User:…]]
-                // wikilink). All other img_* fields share a single helper.
+                // wikilink).
                 "img_user_text" => entry
                     .get_file_info()
                     .as_ref()
                     .and_then(|fi| fi.img_user_text.as_deref())
                     .map(|user| self.render_user_name(user, params))
                     .unwrap_or_default(),
+
+                // Everything below is plain data straight from the entry, so
+                // it goes through `escape_text` before it reaches the output.
+                "page_id" => self.escape_text(self.opt_u32(&entry.page_id())),
+                "size" => self.escape_text(self.opt_u32(&entry.page_bytes())),
+                "timestamp" => self.escape_text(self.opt_string(&entry.get_page_timestamp())),
+                "number" => self.escape_text(params.row_number().to_string()),
+                "defaultsort" => self.escape_text(self.opt_string(&entry.get_defaultsort())),
+                "disambiguation" => {
+                    self.escape_text(self.opt_bool(&entry.disambiguation().as_option_bool()))
+                }
+                "incoming_links" => self.escape_text(self.opt_linkcount(&entry.incoming_links())),
+                "sitelinks" => self.escape_text(self.opt_linkcount(&entry.sitelink_count())),
                 "img_size" | "img_width" | "img_height" | "img_media_type" | "img_major_mime"
-                | "img_minor_mime" | "img_timestamp" | "img_sha1" => entry
-                    .get_file_info()
-                    .as_ref()
-                    .and_then(|fi| fi.field_as_str(k.as_str()))
-                    .unwrap_or_default(),
-
-                "checkbox" => self.render_cell_checkbox(entry, params, platform),
-                "linknumber" => match entry.link_count() {
+                | "img_minor_mime" | "img_timestamp" | "img_sha1" => self.escape_text(
+                    entry
+                        .get_file_info()
+                        .as_ref()
+                        .and_then(|fi| fi.field_as_str(k.as_str()))
+                        .unwrap_or_default(),
+                ),
+                "linknumber" => self.escape_text(match entry.link_count() {
                     Some(lc) => format!("{lc}"),
                     None => String::new(),
-                },
-                "redlink_count" => match entry.redlink_count() {
+                }),
+                "redlink_count" => self.escape_text(match entry.redlink_count() {
                     Some(lc) => format!("{lc}"),
                     None => String::new(),
-                },
-                "coordinates" => self.render_coordinates(entry, params),
-                "fileusage" => self.render_cell_fileusage(entry, params),
+                }),
 
-                _ => "<".to_string() + k + ">",
+                _ => self.escape_text("<".to_string() + k + ">"),
             };
             ret.push(cell);
         }

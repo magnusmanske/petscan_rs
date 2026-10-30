@@ -30,7 +30,9 @@ impl Render for RenderHTML {
         let mut rows = vec![];
 
         rows.push("<hr/>".to_string());
-        rows.push("<script>var output_wiki='".to_string() + wiki + "';</script>");
+        // `wiki` is a resolved db name today, but it lands in a JS string
+        // literal: escape it so no future caller can break out.
+        rows.push("<script>var output_wiki='".to_string() + &escape::html(wiki) + "';</script>");
 
         /*
         // TODO
@@ -215,8 +217,16 @@ impl Render for RenderHTML {
         if namespace_name.is_empty() {
             "<span tt='namespace_0'>Article</span>".to_string()
         } else {
-            namespace_name
+            // Namespace names come from the wiki's site info; escape them so
+            // an unexpected name can't inject markup.
+            escape::html(&namespace_name).to_string()
         }
+    }
+
+    /// Plain-text cells (`defaultsort`, timestamps, file metadata) hold raw
+    /// wiki content and must not be able to inject markup.
+    fn escape_text(&self, s: String) -> String {
+        escape::html(&s).to_string()
     }
 
     fn render_cell_fileusage(&self, entry: &PageListEntry, params: &RenderParams) -> String {
@@ -225,7 +235,7 @@ impl Render for RenderHTML {
                 let mut rows: Vec<String> = vec![];
                 for fu in &fi.file_usage {
                     let html = "<div class='fileusage'>".to_string()
-                        + &fu.wiki().to_owned()
+                        + &escape::html(fu.wiki())
                         + ":"
                         + &Self::render_wikilink(
                             WikilinkArgs {
@@ -358,11 +368,15 @@ impl RenderHTML {
             None => format!("{title:?}"),
         };
         let url = server + "/wiki/" + &super::escape_attribute(&full_title);
+        // Link labels and titles arrive as plain text from the API, so they
+        // are escaped for the anchor's text content. Wikidata labels are
+        // editor-controlled and legally contain `<`/`>` (e.g. chemical
+        // names such as `alpha-D-Gal-(1->6)-…`), so this is not theoretical.
         let label = match alt_label {
-            Some(label) => label.to_string(),
+            Some(label) => escape::html(label),
             None => match is_page_link {
-                true => title.pretty().to_string(),
-                false => full_title_pretty,
+                true => escape::html(title.pretty()),
+                false => escape::html(&full_title_pretty),
             },
         };
         let mut ret = "<a".to_string();
@@ -375,9 +389,12 @@ impl RenderHTML {
 
         // TODO properties?
         if is_page_link && wiki == "wikidatawiki" && title.namespace_id() == 0 {
-            ret += &format!("&nbsp;<small><tt>[{}]</tt></small>", title.pretty());
+            ret += &format!(
+                "&nbsp;<small><tt>[{}]</tt></small>",
+                escape::html(title.pretty())
+            );
             if let Some(desc) = &wikidata_description {
-                ret += &format!("<div class='smaller'>{desc}</div>");
+                ret += &format!("<div class='smaller'>{}</div>", escape::html(desc));
             }
         }
         ret
@@ -402,6 +419,8 @@ impl RenderHTML {
                 ret += class_name;
                 ret += "'>";
             }
+            // Already format-ready markup: either produced by a `render_*`
+            // method or escaped by `escape_text` in `row_from_entry`.
             ret += item;
             ret += "</td>";
         }
@@ -440,7 +459,7 @@ impl RenderHTML {
                     if fdk.contains(&other) {
                         format!("<th tt='h_{}'></th>", other)
                     } else {
-                        format!("<th>UNKNOWN:'{}'</th>", other)
+                        format!("<th>UNKNOWN:'{}'</th>", escape::html(other))
                     }
                 }
             };
@@ -454,13 +473,53 @@ impl RenderHTML {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_state::AppState;
     use crate::test_support::StubNamespaceContext;
     use std::sync::Arc;
+    use wikimisc::site_matrix::SiteMatrix;
+
+    fn params() -> RenderParams {
+        RenderParams::for_tests("metawiki", Arc::new(StubNamespaceContext::enwiki()))
+    }
+
+    /// `AppState::default()` carries an empty site matrix, so links to
+    /// `wikidatawiki` would not resolve in tests; give it a minimal one.
+    fn wikidata_params() -> RenderParams {
+        let matrix = SiteMatrix::from_value(
+            serde_json::json!({
+                "sitematrix": {
+                    "0": {
+                        "site": [{"dbname": "wikidatawiki", "url": "https://www.wikidata.org"}]
+                    }
+                }
+            }),
+            None,
+        );
+        RenderParams::for_tests_with_state(
+            "wikidatawiki",
+            Arc::new(StubNamespaceContext::enwiki()),
+            Arc::new(AppState::for_test_with_site_matrix(matrix)),
+        )
+    }
+
+    fn wikilink(title: &Title, label: &Option<String>, desc: &Option<String>) -> String {
+        RenderHTML::render_wikilink(
+            WikilinkArgs {
+                title,
+                wiki: "metawiki",
+                alt_label: label,
+                is_page_link: true,
+                wikidata_description: desc,
+                is_redlink: false,
+            },
+            &params(),
+        )
+    }
 
     #[test]
     fn test_render_cell_image_links_file_and_thumbnail() {
         // `metawiki` resolves without a loaded site matrix.
-        let params = RenderParams::for_tests("metawiki", Arc::new(StubNamespaceContext::enwiki()));
+        let params = params();
         let cell = RenderHTML.render_cell_image(&Some("Foo_bar.jpg".to_string()), &params);
         assert!(
             cell.contains("href='https://meta.wikimedia.org/wiki/File:Foo%5Fbar%2Ejpg'"),
@@ -476,7 +535,76 @@ mod tests {
 
     #[test]
     fn test_render_cell_image_without_image_is_empty() {
-        let params = RenderParams::for_tests("metawiki", Arc::new(StubNamespaceContext::enwiki()));
-        assert_eq!(RenderHTML.render_cell_image(&None, &params), "");
+        assert_eq!(RenderHTML.render_cell_image(&None, &params()), "");
+    }
+
+    /// Wikidata labels are plain text and may contain `<`/`>` (e.g. chemical
+    /// names such as `alpha-D-Gal-(1->6)-…`), so they must be escaped before
+    /// they become anchor text.
+    #[test]
+    fn test_render_wikilink_escapes_label() {
+        let html = wikilink(
+            &Title::new("Some_page", 0),
+            &Some("<img src=x onerror=alert(1)>".to_string()),
+            &None,
+        );
+        assert!(
+            html.contains("&lt;img src=x onerror=alert(1)&gt;</a>"),
+            "{html}"
+        );
+        assert!(!html.contains("<img"), "{html}");
+    }
+
+    #[test]
+    fn test_render_wikilink_escapes_default_title() {
+        let html = wikilink(&Title::new("Some_page", 0), &None, &None);
+        assert!(html.contains(">Some page</a>"), "{html}");
+    }
+
+    /// Descriptions are arbitrary Wikidata text (readable by anyone with an
+    /// account), rendered in their own `<div>`.
+    #[test]
+    fn test_render_wikilink_escapes_wikidata_description() {
+        let html = RenderHTML::render_wikilink(
+            WikilinkArgs {
+                title: &Title::new("Q42", 0),
+                wiki: "wikidatawiki",
+                alt_label: &None,
+                is_page_link: true,
+                wikidata_description: &Some("<script>alert('x')</script>".to_string()),
+                is_redlink: false,
+            },
+            &wikidata_params(),
+        );
+        assert!(
+            html.contains(
+                "<div class='smaller'>&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;</div>"
+            ),
+            "{html}"
+        );
+    }
+
+    /// `defaultsort` comes from `{{DEFAULTSORT:…}}` in page content, i.e. it is
+    /// fully editor-controlled.
+    #[test]
+    fn test_defaultsort_cell_is_escaped() {
+        let mut entry = PageListEntry::new(Title::new("Some_page", 0));
+        entry.set_defaultsort(Some("<script>alert(1)</script>".to_string()));
+        let header = vec![("defaultsort".to_string(), "defaultsort".to_string())];
+        let row = RenderHTML.row_from_entry(
+            &entry,
+            &header,
+            &params(),
+            &crate::test_support::make_platform(vec![]),
+        );
+        assert_eq!(row, vec!["&lt;script&gt;alert(1)&lt;/script&gt;"]);
+    }
+
+    /// Formats that emit plain text must not HTML-escape their cells.
+    #[test]
+    fn test_escape_text_is_identity_for_plaintext_formats() {
+        let tsv = crate::render::tsv::RenderTSV::new("\t");
+        assert_eq!(tsv.escape_text("<b>".to_string()), "<b>");
+        assert_eq!(RenderHTML.escape_text("<b>".to_string()), "&lt;b&gt;");
     }
 }
