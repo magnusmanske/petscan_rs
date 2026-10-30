@@ -148,7 +148,11 @@ from the `Procfile`. As the tool (`become petscan`):
    Toolforge provides the `petscan` tool. `chmod 600` both files.
 3. Push the code to GitHub, then run `./build.sh` to build the image and
    `./restart.sh` to (re)start the web service. Logs:
-   `toolforge webservice logs -f`.
+   `toolforge webservice buildservice logs -f`. The `Procfile` sets
+   `RUST_BACKTRACE=1`, so a panic arrives there with a backtrace; after an
+   abrupt exit (for example the container's memory limit), the next start
+   logs the queries the killed process was running (see
+   `src/previous_run.rs`).
 
 While both deployments use the same database account, they share its limit
 of concurrent connections per replica.

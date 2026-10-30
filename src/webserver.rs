@@ -29,7 +29,7 @@ static NOTFOUND: &[u8] = b"Not Found";
 /// that nothing pins a worker indefinitely if the replica or an upstream
 /// API stalls. A cancelled request's `started_queries` row is removed by its
 /// [`crate::app_state::QueryLogEntry`] guard.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Clone, Default)]
 pub struct WebServer {

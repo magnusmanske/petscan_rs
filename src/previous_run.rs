@@ -1,14 +1,18 @@
 //! Reports how the previous PetScan process ended. One killed by SIGKILL (in
-//! practice the kernel enforcing the systemd unit's `MemoryMax`) cannot
-//! report that itself, so its successor does, naming the queries it was
-//! running, and then clears their `started_queries` rows.
+//! practice the kernel or container runtime enforcing the deployment's memory
+//! limit) cannot report that itself, so its successor does, naming the queries
+//! it was running, and then clears their `started_queries` rows.
 //!
-//! `run.sh` passes the previous run's exit status in [`EXIT_STATUS_VAR`];
-//! the previous process's PID and start time come from [`PID_FILE`], which
-//! every server process overwrites at startup.
+//! `run.sh` passes the previous run's exit status in [`EXIT_STATUS_VAR`].
+//! On Toolforge there is no such wrapper, so the exit status is unknown, but
+//! the interrupted queries are still reported: the previous process's PID and
+//! start time come from [`PID_FILE`], which every server process overwrites at
+//! startup. The file lives in `$TOOL_DATA_DIR` (persistent NFS on Toolforge)
+//! when that is set, so it survives the container restart a crash causes.
 
 use crate::app_state::AppState;
 use crate::database_manager::query_log_timestamp;
+use std::path::PathBuf;
 use std::sync::Arc;
 use wikimisc::telemetry::Level;
 
@@ -39,12 +43,13 @@ impl PreviousProcess {
 /// Records this process in [`PID_FILE`], then reports how the previous one
 /// ended, if it did not end cleanly.
 pub async fn report(app_state: Arc<AppState>) {
-    let previous = std::fs::read_to_string(PID_FILE)
+    let pid_file = pid_file_path();
+    let previous = std::fs::read_to_string(&pid_file)
         .ok()
         .and_then(|file| PreviousProcess::parse(&file));
     let current = format!("{} {}", std::process::id(), query_log_timestamp());
-    if let Err(e) = std::fs::write(PID_FILE, current) {
-        tracing::warn!("Could not write {PID_FILE}: {e}");
+    if let Err(e) = std::fs::write(&pid_file, current) {
+        tracing::warn!("Could not write {}: {e}", pid_file.display());
     }
 
     let exit_status = std::env::var(EXIT_STATUS_VAR)
@@ -67,6 +72,21 @@ pub async fn report(app_state: Arc<AppState>) {
     // The dashboard only gets the count: query strings can contain user names and titles.
     if let Some(summary) = report_summary(pid, exit_status, queries.len()) {
         wikimisc::telemetry::event(Level::Error, summary);
+    }
+}
+
+/// Where [`report`] keeps the previous process's PID. In `$TOOL_DATA_DIR`
+/// when set (Toolforge, and the VPS's `run.sh`), otherwise in the working
+/// directory.
+fn pid_file_path() -> PathBuf {
+    let data_dir = std::env::var("TOOL_DATA_DIR").ok();
+    pid_file_path_in(data_dir.as_deref())
+}
+
+fn pid_file_path_in(data_dir: Option<&str>) -> PathBuf {
+    match data_dir {
+        Some(dir) => PathBuf::from(dir).join(PID_FILE),
+        None => PathBuf::from(PID_FILE),
     }
 }
 
@@ -137,6 +157,15 @@ mod tests {
             })
         );
         assert_eq!(PreviousProcess::parse("garbage"), None);
+    }
+
+    #[test]
+    fn pid_file_lives_in_the_tool_data_dir_when_set() {
+        assert_eq!(
+            pid_file_path_in(Some("/data/project/petscan")),
+            PathBuf::from("/data/project/petscan/petscan.pid")
+        );
+        assert_eq!(pid_file_path_in(None), PathBuf::from("petscan.pid"));
     }
 
     #[test]
