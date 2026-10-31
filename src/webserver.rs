@@ -2,20 +2,24 @@ use crate::app_state::AppState;
 use crate::config::Config;
 use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
-use crate::platform::{MyResponse, Platform};
+use crate::platform::{MyResponse, Platform, WebResponse};
 use anyhow::Result;
 use axum::Router;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
+use futures::Stream;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
+use tokio::sync::OwnedSemaphorePermit;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
 use url::form_urlencoded;
@@ -34,9 +38,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// A rendered response plus the size of the result list that produced it.
 /// `result_entries` is captured before rendering drains the list, so the
 /// metrics reflect what the query loaded rather than what a format truncated.
-#[derive(Debug)]
 struct QueryOutcome {
-    response: MyResponse,
+    response: WebResponse,
     result_entries: usize,
 }
 
@@ -145,7 +148,7 @@ impl WebServer {
         self.serve_file_path(&path)
     }
 
-    async fn process_from_query(&self, query: &str) -> MyResponse {
+    async fn process_from_query(&self, query: &str) -> WebResponse {
         // Apply the per-request wall-clock budget. On timeout, drop the
         // in-flight `process_form` future (its RAII guards clean up state)
         // and return a 504 with a custom plaintext body.
@@ -156,19 +159,19 @@ impl WebServer {
                     timeout_secs = REQUEST_TIMEOUT.as_secs(),
                     "Request exceeded the server-side wall-clock budget; cancelling"
                 );
-                MyResponse {
+                WebResponse::Buffered(MyResponse {
                     s: format!(
                         "Request exceeded the server-side time budget of {} seconds.",
                         REQUEST_TIMEOUT.as_secs()
                     ),
                     content_type: ContentType::Plain,
                     status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
-                }
+                })
             }
         }
     }
 
-    async fn process_form(&self, parameters: &str) -> MyResponse {
+    async fn process_form(&self, parameters: &str) -> WebResponse {
         let parameter_pairs = form_urlencoded::parse(parameters.as_bytes())
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
@@ -191,7 +194,8 @@ impl WebServer {
                 s: "Temporary maintenance".to_string(),
                 content_type: ContentType::Plain,
                 status: 200,
-            };
+            }
+            .into();
         }
 
         // Just show the main page
@@ -205,7 +209,8 @@ impl WebServer {
                 s: self.app_state.get_main_page(interface_language),
                 content_type: ContentType::HTML,
                 status: 200,
-            };
+            }
+            .into();
         }
 
         // "psid" parameter? Load, and patch in, existing query
@@ -223,7 +228,8 @@ impl WebServer {
                         Err(e) => {
                             return self
                                 .app_state
-                                .render_error(format!("{e:#}"), &form_parameters);
+                                .render_error(format!("{e:#}"), &form_parameters)
+                                .into();
                         }
                     };
                     form_parameters.rebase(&psid_params);
@@ -231,7 +237,8 @@ impl WebServer {
                 Err(e) => {
                     return self
                         .app_state
-                        .render_error(format!("{e:#}"), &form_parameters);
+                        .render_error(format!("{e:#}"), &form_parameters)
+                        .into();
                 }
             }
         }
@@ -256,7 +263,8 @@ impl WebServer {
                 s: html,
                 content_type: ContentType::HTML,
                 status: 200,
-            };
+            }
+            .into();
         }
 
         // Actually do something useful!
@@ -264,12 +272,13 @@ impl WebServer {
         // already running, additional callers wait here until one finishes;
         // once too many are waiting (or one has waited too long) they are
         // turned away with an explained 503 instead of holding a socket.
-        let _request_permit = match self.app_state.acquire_request_permit().await {
+        let request_permit = match self.app_state.acquire_request_permit().await {
             Ok(permit) => permit,
             Err(overload) => {
                 return self
                     .app_state
-                    .render_error(overload.to_string(), &form_parameters);
+                    .render_error(overload.to_string(), &form_parameters)
+                    .into();
             }
         };
 
@@ -286,7 +295,13 @@ impl WebServer {
             outcome.result_entries,
             rss_sampler.peak_bytes(),
         );
-        outcome.response
+        let mut response = outcome.response;
+        // A streamed body outlives this function; keep the admission-control
+        // slot with it so slow downloads still count as a running request.
+        if let WebResponse::Streamed(streamed) = &mut response {
+            streamed.permit = Some(request_permit);
+        }
+        response
     }
 
     /// Runs an admitted query and renders its result.
@@ -323,7 +338,8 @@ impl WebServer {
                 return QueryOutcome {
                     response: self
                         .app_state
-                        .render_error(format!("{error:#}"), form_parameters),
+                        .render_error(format!("{error:#}"), form_parameters)
+                        .into(),
                     result_entries: 0,
                 };
             }
@@ -346,7 +362,8 @@ impl WebServer {
                     return QueryOutcome {
                         response: self
                             .app_state
-                            .render_error(format!("{e:#}"), form_parameters),
+                            .render_error(format!("{e:#}"), form_parameters)
+                            .into(),
                         result_entries,
                     };
                 }
@@ -355,11 +372,12 @@ impl WebServer {
         Platform::profile("PSID set", None);
 
         // Render response
-        let response = match platform.get_response().await {
+        let response = match platform.get_streaming_response().await {
             Ok(response) => response,
             Err(e) => self
                 .app_state
-                .render_error(format!("{e:#}"), form_parameters),
+                .render_error(format!("{e:#}"), form_parameters)
+                .into(),
         };
         drop(platform);
         QueryOutcome {
@@ -438,9 +456,51 @@ impl IntoResponse for MyResponse {
     }
 }
 
+impl IntoResponse for WebResponse {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Buffered(response) => response.into_response(),
+            Self::Streamed(streamed) => {
+                let status = StatusCode::from_u16(streamed.status).unwrap_or(StatusCode::OK);
+                let body = Body::from_stream(PermitStream {
+                    inner: streamed.stream,
+                    _permit: streamed.permit,
+                });
+                Response::builder()
+                    .status(status)
+                    .header(header::CONTENT_TYPE, streamed.content_type.as_str())
+                    .body(body)
+                    .unwrap_or_else(|e| {
+                        tracing::error!("Failed to build streamed HTTP response: {e}");
+                        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+                    })
+            }
+        }
+    }
+}
+
+/// Keeps the request's admission-control permit alive for as long as the body
+/// stream is. A slow client therefore still counts as a running request.
+struct PermitStream<S> {
+    inner: S,
+    _permit: Option<OwnedSemaphorePermit>,
+}
+
+impl<S> Stream for PermitStream<S>
+where
+    S: Stream<Item = Result<Bytes, std::io::Error>> + Unpin,
+{
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::StreamedResponse;
 
     #[tokio::test]
     async fn my_response_into_response_maps_status_content_type_and_body() {
@@ -470,6 +530,55 @@ mod tests {
         };
         let resp = mr.into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn streamed_response_is_sent_with_its_content_type_and_chunks() {
+        let stream: crate::render::stream::BodyStream = Box::pin(futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(b"a")),
+            Ok(Bytes::from_static(b"bc")),
+        ]));
+        let response = WebResponse::Streamed(StreamedResponse {
+            stream,
+            content_type: ContentType::CSV,
+            status: 201,
+            permit: None,
+        })
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/csv; charset=utf-8"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"abc");
+    }
+
+    #[tokio::test]
+    async fn streamed_response_holds_the_admission_permit_until_the_body_ends() {
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let stream: crate::render::stream::BodyStream =
+            Box::pin(futures::stream::iter(vec![Ok::<_, std::io::Error>(
+                Bytes::from_static(b"body"),
+            )]));
+        let response = WebResponse::Streamed(StreamedResponse {
+            stream,
+            content_type: ContentType::Plain,
+            status: 200,
+            permit: Some(permit),
+        })
+        .into_response();
+
+        assert_eq!(semaphore.available_permits(), 0);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"body");
+        assert_eq!(semaphore.available_permits(), 1);
     }
 
     // -----------------------------------------------------------------------

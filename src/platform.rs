@@ -13,14 +13,16 @@ use crate::datasource::wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
 use crate::key_set::KeySetLimits;
 use crate::pagelist::PageList;
-use crate::pagelist_entry::PageListSort;
+use crate::pagelist_entry::{PageListEntry, PageListSort};
 use crate::render::Render;
 use crate::render::html::RenderHTML;
 use crate::render::json::RenderJSON;
 use crate::render::jsonl::RenderJSONL;
 use crate::render::kml::RenderKML;
 use crate::render::pagepile::RenderPagePile;
+use crate::render::params::RenderParams;
 use crate::render::plaintext::RenderPlainText;
+use crate::render::stream::BodyStream;
 use crate::render::tsv::RenderTSV;
 use crate::render::wikitext::RenderWiki;
 use crate::wdfist::WDfist;
@@ -45,6 +47,22 @@ pub const MAX_CONCURRENT_SOURCES: usize = 8;
 /// requests are in flight simultaneously.
 pub const MAX_CONCURRENT_DB_BATCHES: usize = 5;
 
+/// Results at least this large are rendered as a stream for formats that
+/// support it. Smaller results keep the buffered path, where the overhead of a
+/// task and a chunked body would outweigh the saved allocation.
+pub const STREAMING_THRESHOLD: usize = 10_000;
+
+/// Environment override for [`STREAMING_THRESHOLD`], for benchmarks and for
+/// turning streaming off on a deployment (`PETSCAN_STREAM_THRESHOLD`).
+pub const STREAMING_THRESHOLD_ENV: &str = "PETSCAN_STREAM_THRESHOLD";
+
+fn streaming_threshold() -> usize {
+    std::env::var(STREAMING_THRESHOLD_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(STREAMING_THRESHOLD)
+}
+
 mod combine;
 
 mod params;
@@ -67,6 +85,46 @@ impl MyResponse {
             content_type,
             status: 200,
         }
+    }
+}
+
+/// A response whose body is produced lazily. The admission-control permit is
+/// held until the body has been sent, so slow downloads still count against
+/// the request budget.
+pub struct StreamedResponse {
+    pub stream: BodyStream,
+    pub content_type: ContentType,
+    pub status: u16,
+    pub permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+impl std::fmt::Debug for StreamedResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamedResponse")
+            .field("content_type", &self.content_type)
+            .field("status", &self.status)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What the webserver returns: a fully rendered string, or a chunked body.
+pub enum WebResponse {
+    Buffered(MyResponse),
+    Streamed(StreamedResponse),
+}
+
+impl std::fmt::Debug for WebResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Buffered(response) => f.debug_tuple("Buffered").field(response).finish(),
+            Self::Streamed(response) => f.debug_tuple("Streamed").field(response).finish(),
+        }
+    }
+}
+
+impl From<MyResponse> for WebResponse {
+    fn from(response: MyResponse) -> Self {
+        Self::Buffered(response)
     }
 }
 
@@ -370,7 +428,38 @@ impl Platform {
                 .state
                 .output_json(j, self.form_parameters.params.get("callback")));
         }
+        let (wiki, pages) = self.prepare_pages().await?;
+        self.render_buffered(&wiki, pages).await
+    }
 
+    /// Like [`Self::get_response`], but for a large result in a streamable
+    /// format it returns a lazy body instead of one big string. The CLI and
+    /// tests keep using `get_response`; the webserver uses this.
+    pub async fn get_streaming_response(&self) -> Result<WebResponse> {
+        if self.wdfist_result.is_some() {
+            return Ok(WebResponse::Buffered(self.get_response().await?));
+        }
+        let (wiki, pages) = self.prepare_pages().await?;
+        let renderer = self.renderer();
+        // Pretty JSON needs indentation around every entry; keep it buffered.
+        let pretty_json = self.output_format() == "json" && self.has_param("json-pretty");
+        if pages.len() >= streaming_threshold() && !pretty_json && renderer.supports_streaming() {
+            let params = RenderParams::new(self, &wiki).await?;
+            let streamed = renderer.stream(self, params, &wiki, pages)?;
+            return Ok(WebResponse::Streamed(StreamedResponse {
+                stream: streamed.stream,
+                content_type: streamed.content_type,
+                status: 200,
+                permit: None,
+            }));
+        }
+        Ok(WebResponse::Buffered(
+            self.render_buffered(&wiki, pages).await?,
+        ))
+    }
+
+    /// Drains and sorts the result, then applies `output_limit`.
+    async fn prepare_pages(&self) -> Result<(String, Vec<PageListEntry>)> {
         let result = match &self.result {
             Some(result) => result,
             None => return Err(anyhow!("Platform::get_response: No result")),
@@ -392,18 +481,25 @@ impl Platform {
         .await
         .map_err(|e| anyhow!("Sort task failed: {e}"))?;
         self.apply_results_limit(&mut pages);
+        Ok((wiki, pages))
+    }
 
+    fn renderer(&self) -> Box<dyn Render> {
         match self.output_format() {
-            "wiki" => RenderWiki::new().response(self, &wiki, pages).await,
-            "csv" => RenderTSV::new(",").response(self, &wiki, pages).await,
-            "tsv" => RenderTSV::new("\t").response(self, &wiki, pages).await,
-            "json" => RenderJSON::new().response(self, &wiki, pages).await,
-            "jsonl" => RenderJSONL::new().response(self, &wiki, pages).await,
-            "pagepile" => RenderPagePile::new().response(self, &wiki, pages).await,
-            "kml" => RenderKML::new().response(self, &wiki, pages).await,
-            "plain" => RenderPlainText::new().response(self, &wiki, pages).await,
-            _ => RenderHTML::new().response(self, &wiki, pages).await,
+            "wiki" => RenderWiki::new(),
+            "csv" => RenderTSV::new(","),
+            "tsv" => RenderTSV::new("\t"),
+            "json" => RenderJSON::new(),
+            "jsonl" => RenderJSONL::new(),
+            "pagepile" => RenderPagePile::new(),
+            "kml" => RenderKML::new(),
+            "plain" => RenderPlainText::new(),
+            _ => RenderHTML::new(),
         }
+    }
+
+    async fn render_buffered(&self, wiki: &str, pages: Vec<PageListEntry>) -> Result<MyResponse> {
+        self.renderer().response(self, wiki, pages).await
     }
 
     /// The output format, as one of a fixed set of names; anything

@@ -19,6 +19,7 @@ rand = "0.9"
 percent-encoding = "2"
 tempfile = "3"
 async-trait = "0.1"
+bytes = "1"
 wikimisc = { git = "https://github.com/magnusmanske/wikimisc" , features = ["sparql", "sparql-client", "wikibase", "lat-lon", "site-matrix", "database", "telemetry", "entity-id", "escape", "http", "jsonp", "logging", "retry", "shutdown", "title"] }
 # Reads SPARQL results, which `wikimisc` hands over as a CSV reader.
 csv = "1"

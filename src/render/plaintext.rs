@@ -3,8 +3,10 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::{MyResponse, Platform};
 use crate::render::Render;
 use crate::render::params::RenderParams;
+use crate::render::stream::{self, StreamResponse};
 use anyhow::Result;
 use async_trait::async_trait;
+use std::borrow::Cow;
 
 /// Renders `PlainText`
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +30,26 @@ impl Render for RenderPlainText {
             s: output,
             content_type: ContentType::Plain,
             status: 200,
+        })
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn stream(
+        self: Box<Self>,
+        _platform: &Platform,
+        params: RenderParams,
+        _wiki: &str,
+        entries: Vec<PageListEntry>,
+    ) -> Result<StreamResponse> {
+        let lines = entries
+            .into_iter()
+            .filter_map(move |entry| params.ns().full_pretty(entry.title()).map(Cow::Owned));
+        Ok(StreamResponse {
+            stream: stream::to_stream(stream::newline_separated(lines)),
+            content_type: ContentType::Plain,
         })
     }
 
@@ -133,5 +155,21 @@ mod tests {
         let r = RenderPlainText;
         let user_entry = PageListEntry::new(Title::new("Foo", 2));
         assert_eq!(r.render_cell_namespace(&user_entry, &enwiki_params()), "2");
+    }
+
+    #[tokio::test]
+    async fn streamed_plain_text_matches_the_buffered_layout() {
+        let platform = crate::test_support::make_platform(vec![]);
+        let entries = vec![
+            PageListEntry::new(Title::new("Foo", 0)),
+            PageListEntry::new(Title::new("Bar", 1)),
+        ];
+        let response = RenderPlainText::new()
+            .stream(&platform, enwiki_params(), "enwiki", entries)
+            .unwrap();
+        let chunks = futures::TryStreamExt::try_collect::<Vec<_>>(response.stream)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8(chunks.concat()).unwrap(), "Foo\nTalk:Bar");
     }
 }

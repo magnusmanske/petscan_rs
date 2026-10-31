@@ -3,8 +3,10 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::{MyResponse, Platform};
 use crate::render::Render;
 use crate::render::params::RenderParams;
+use crate::render::stream::{self, StreamResponse};
 use anyhow::Result;
 use async_trait::async_trait;
+use std::borrow::Cow;
 
 /// Renders CSV and TSV
 #[derive(Debug, Clone)]
@@ -21,56 +23,47 @@ impl Render for RenderTSV {
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse> {
         let mut params = RenderParams::new(platform, wiki).await?;
-        let mut rows: Vec<String> = vec![];
-        let mut header: Vec<(&str, &str)> = vec![
-            ("number", "number"),
-            ("title", "title"),
-            ("page_id", "pageid"),
-            ("namespace", "namespace"),
-            ("size", "length"),
-            ("timestamp", "touched"),
-        ];
-        if params.show_wikidata_item() {
-            header.push(("wikidata_item", "Wikidata"));
-        }
-        if params.file_data() {
-            self.file_data_keys()
-                .iter()
-                .for_each(|k| header.push((k, k)));
-        }
-        let mut header: Vec<(String, String)> = header
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        for col in self.get_initial_columns(&params) {
-            if !header.iter().any(|(k, _)| col == k) && col != "number" {
-                header.push((col.to_string(), col.to_string()));
-            }
-        }
-        rows.push(
-            header
-                .iter()
-                .map(|(_, v)| self.escape_cell(v))
-                .collect::<Vec<String>>()
-                .join(&self.separator),
-        );
-
+        let header = self.header(&params);
+        let mut rows: Vec<String> = vec![self.render_header(&header)];
         for entry in entries {
-            *params.row_number_mut() += 1;
-            let row = self.row_from_entry(&entry, &header, &params, platform);
-            let row: Vec<String> = row.iter().map(|s| self.escape_cell(s)).collect();
-            let row = row.join(&self.separator);
-            rows.push(row);
+            rows.push(self.render_row(&entry, &header, &mut params, Some(platform)));
         }
 
         Ok(MyResponse {
             s: rows.join("\n"),
-            content_type: match self.separator.as_str() {
-                "," => ContentType::CSV,
-                "\t" => ContentType::TSV,
-                _ => ContentType::Plain, // Fallback
-            },
+            content_type: self.content_type(),
             status: 200,
+        })
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn stream(
+        self: Box<Self>,
+        _platform: &Platform,
+        mut params: RenderParams,
+        _wiki: &str,
+        entries: Vec<PageListEntry>,
+    ) -> Result<StreamResponse> {
+        let header = self.header(&params);
+        let head = Cow::Owned(self.render_header(&header));
+        let content_type = self.content_type();
+        let renderer = *self;
+        let mut entries = entries.into_iter();
+        let lines = std::iter::once(head).chain(std::iter::from_fn(move || {
+            let entry = entries.next()?;
+            Some(Cow::Owned(renderer.render_row(
+                &entry,
+                &header,
+                &mut params,
+                None,
+            )))
+        }));
+        Ok(StreamResponse {
+            stream: stream::to_stream(stream::newline_separated(lines)),
+            content_type,
         })
     }
 
@@ -107,6 +100,69 @@ impl RenderTSV {
         Box::new(Self {
             separator: separator.to_string(),
         })
+    }
+
+    fn content_type(&self) -> ContentType {
+        match self.separator.as_str() {
+            "," => ContentType::CSV,
+            "\t" => ContentType::TSV,
+            _ => ContentType::Plain, // Fallback
+        }
+    }
+
+    fn header(&self, params: &RenderParams) -> Vec<(String, String)> {
+        let mut header: Vec<(&str, &str)> = vec![
+            ("number", "number"),
+            ("title", "title"),
+            ("page_id", "pageid"),
+            ("namespace", "namespace"),
+            ("size", "length"),
+            ("timestamp", "touched"),
+        ];
+        if params.show_wikidata_item() {
+            header.push(("wikidata_item", "Wikidata"));
+        }
+        if params.file_data() {
+            self.file_data_keys()
+                .iter()
+                .for_each(|k| header.push((k, k)));
+        }
+        let mut header: Vec<(String, String)> = header
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        for col in self.get_initial_columns(params) {
+            if !header.iter().any(|(k, _)| col == k) && col != "number" {
+                header.push((col.to_string(), col.to_string()));
+            }
+        }
+        header
+    }
+
+    fn render_header(&self, header: &[(String, String)]) -> String {
+        header
+            .iter()
+            .map(|(_, v)| self.escape_cell(v))
+            .collect::<Vec<String>>()
+            .join(&self.separator)
+    }
+
+    fn render_row(
+        &self,
+        entry: &PageListEntry,
+        header: &[(String, String)],
+        params: &mut RenderParams,
+        platform: Option<&Platform>,
+    ) -> String {
+        *params.row_number_mut() += 1;
+        let row = match platform {
+            Some(platform) => self.row_from_entry(entry, header, params, platform),
+            None => self.row_from_entry_streaming(entry, header, params),
+        };
+        row.iter()
+            .map(|s| self.escape_cell(s))
+            .collect::<Vec<String>>()
+            .join(&self.separator)
     }
 
     fn escape_cell(&self, s: &str) -> String {
@@ -236,6 +292,7 @@ mod tests {
     use crate::pagelist_entry::PageListEntry;
     use crate::render::params::RenderParams;
     use crate::test_support::StubNamespaceContext;
+    use futures::TryStreamExt;
     use std::sync::Arc;
     use wikimisc::mediawiki::title::Title;
 
@@ -290,5 +347,28 @@ mod tests {
         let r = tsv();
         let entry = PageListEntry::new(Title::new("Foo bar baz", 0));
         assert_eq!(r.render_cell_title(&entry, &enwiki_params()), "Foo_bar_baz");
+    }
+
+    #[tokio::test]
+    async fn streamed_tsv_matches_the_buffered_layout() {
+        let platform = crate::test_support::make_platform(vec![]);
+        let mut first = PageListEntry::new(Title::new("Foo_bar", 0));
+        first.set_page_id(Some(42));
+        first.set_page_bytes(Some(7));
+        first.set_page_timestamp(Some("2024-01-02".to_string()));
+        let second = PageListEntry::new(Title::new("Talk:Baz", 1));
+
+        let response = RenderTSV::new("\t")
+            .stream(&platform, enwiki_params(), "enwiki", vec![first, second])
+            .unwrap();
+        assert_eq!(response.content_type, crate::content_type::ContentType::TSV);
+        let chunks = response.stream.try_collect::<Vec<_>>().await.unwrap();
+        let body = String::from_utf8(chunks.concat()).unwrap();
+        assert_eq!(
+            body,
+            "number\ttitle\tpageid\tnamespace\tlength\ttouched\n\
+             1\tFoo_bar\t42\t\t7\t2024-01-02\n\
+             2\tTalk:Baz\t\tTalk\t\t"
+        );
     }
 }

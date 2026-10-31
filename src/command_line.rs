@@ -1,9 +1,11 @@
 use crate::app_state::AppState;
 use crate::config::Config;
 use crate::form_parameters::FormParameters;
-use crate::platform::Platform;
+use crate::platform::{Platform, WebResponse};
 use anyhow::{Result, anyhow};
+use futures::StreamExt;
 use std::env;
+use std::io::Write;
 use std::sync::Arc;
 use url::form_urlencoded;
 
@@ -47,13 +49,28 @@ pub async fn command_line_usage(app_state: Arc<AppState>) -> Result<()> {
     // If `run()` fails, surface that error directly. Falling through to
     // `get_response()` would mask the real cause with a generic "No result".
     let response = match platform.run().await {
-        Ok(()) => match platform.get_response().await {
+        Ok(()) => match platform.get_streaming_response().await {
             Ok(response) => response,
-            Err(error) => app_state.render_error(error.to_string(), &form_parameters),
+            Err(error) => {
+                WebResponse::Buffered(app_state.render_error(error.to_string(), &form_parameters))
+            }
         },
-        Err(error) => app_state.render_error(error.to_string(), &form_parameters),
+        Err(error) => {
+            WebResponse::Buffered(app_state.render_error(error.to_string(), &form_parameters))
+        }
     };
-    println!("{}", json!(response.s).as_str().unwrap_or(&response.s));
+    match response {
+        WebResponse::Buffered(response) => println!("{}", response.s),
+        WebResponse::Streamed(response) => {
+            let mut stream = response.stream;
+            let mut stdout = std::io::stdout().lock();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| anyhow!("{e}"))?;
+                stdout.write_all(&chunk)?;
+            }
+            stdout.write_all(b"\n")?;
+        }
+    }
 
     Ok(())
 }

@@ -3,9 +3,11 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::{MyResponse, Platform};
 use crate::render::Render;
 use crate::render::params::RenderParams;
+use crate::render::stream::{self, Piece, StreamResponse};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::prelude::*;
+use std::borrow::Cow;
 
 /// Renders wiki text
 #[derive(Debug, Clone, Copy)]
@@ -36,41 +38,8 @@ impl Render for RenderWiki {
             petscan_query_url, petscan_query_url_no_doit
         ));
         rows.push("{| border=1 class='wikitable'".to_string());
-        let mut header: Vec<(&str, &str)> = vec![
-            ("title", "Title"),
-            ("page_id", "Page ID"),
-            ("namespace", "Namespace"),
-            ("size", "Size (bytes)"),
-            ("timestamp", "Last change"),
-        ];
-        if params.show_wikidata_item() {
-            header.push(("wikidata_item", "Wikidata"));
-        }
-        if params.file_data() {
-            self.file_data_keys()
-                .iter()
-                .for_each(|k| header.push((k, k)));
-        }
-        if params.do_output_redlinks() {
-            header = vec![("redlink_count", "Wanted"), ("title", "Title")];
-        }
-        let mut header: Vec<(String, String)> = header
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        for col in self.get_initial_columns(&params) {
-            if !header.iter().any(|(k, _)| col == k) && col != "number" {
-                header.push((col.to_string(), col.to_string()));
-            }
-        }
-        rows.push(
-            "!".to_string()
-                + &header
-                    .iter()
-                    .map(|(_, v)| v.clone())
-                    .collect::<Vec<String>>()
-                    .join(" !! "),
-        );
+        let header = self.columns(&params);
+        rows.push(Self::header_line(&header));
 
         for entry in entries {
             *params.row_number_mut() += 1;
@@ -86,6 +55,51 @@ impl Render for RenderWiki {
             s: rows.join("\n"),
             content_type: ContentType::Plain,
             status: 200,
+        })
+    }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn stream(
+        self: Box<Self>,
+        platform: &Platform,
+        mut params: RenderParams,
+        _wiki: &str,
+        entries: Vec<PageListEntry>,
+    ) -> Result<StreamResponse> {
+        let header = self.columns(&params);
+        let utc: DateTime<Utc> = Utc::now();
+        let head: Vec<Piece> = vec![
+            Cow::Owned("== ".to_string() + &platform.combination().to_string() + " =="),
+            Cow::Owned(format!("Last updated on {}.", utc.to_rfc2822())),
+            Cow::Owned(format!(
+                "[{} Regenerate this table] or [{} edit the query].\n",
+                "https://petscan.toolforge.org/?".to_string()
+                    + &platform.form_parameters().to_string(),
+                "https://petscan.toolforge.org/?".to_string()
+                    + &platform.form_parameters().to_string_no_doit()
+            )),
+            Cow::Borrowed("{| border=1 class='wikitable'"),
+            Cow::Owned(Self::header_line(&header)),
+        ];
+        let renderer = *self;
+        let rows = entries.into_iter().flat_map(move |entry| {
+            *params.row_number_mut() += 1;
+            let row = renderer.row_from_entry_streaming(&entry, &header, &params);
+            [
+                Cow::Borrowed("|-"),
+                Cow::Owned("| ".to_string() + &row.join(" || ")),
+            ]
+        });
+        let all = head
+            .into_iter()
+            .chain(rows)
+            .chain(std::iter::once(Cow::Borrowed("|}")));
+        Ok(StreamResponse {
+            stream: stream::to_stream(stream::newline_separated(all)),
+            content_type: ContentType::Plain,
         })
     }
 
@@ -133,6 +147,46 @@ impl Render for RenderWiki {
 impl RenderWiki {
     pub fn new() -> Box<Self> {
         Box::new(Self {})
+    }
+
+    fn columns(&self, params: &RenderParams) -> Vec<(String, String)> {
+        let mut header: Vec<(&str, &str)> = vec![
+            ("title", "Title"),
+            ("page_id", "Page ID"),
+            ("namespace", "Namespace"),
+            ("size", "Size (bytes)"),
+            ("timestamp", "Last change"),
+        ];
+        if params.show_wikidata_item() {
+            header.push(("wikidata_item", "Wikidata"));
+        }
+        if params.file_data() {
+            self.file_data_keys()
+                .iter()
+                .for_each(|k| header.push((k, k)));
+        }
+        if params.do_output_redlinks() {
+            header = vec![("redlink_count", "Wanted"), ("title", "Title")];
+        }
+        let mut header: Vec<(String, String)> = header
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        for col in self.get_initial_columns(params) {
+            if !header.iter().any(|(k, _)| col == k) && col != "number" {
+                header.push((col.to_string(), col.to_string()));
+            }
+        }
+        header
+    }
+
+    fn header_line(header: &[(String, String)]) -> String {
+        "!".to_string()
+            + &header
+                .iter()
+                .map(|(_, v)| v.clone())
+                .collect::<Vec<String>>()
+                .join(" !! ")
     }
 
     fn render_wikilink(entry: &PageListEntry, params: &RenderParams) -> String {

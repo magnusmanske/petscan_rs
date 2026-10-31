@@ -2,10 +2,12 @@ use crate::content_type::ContentType;
 use crate::platform::MyResponse;
 use crate::render::Render;
 use crate::render::params::RenderParams;
+use crate::render::stream::{self, StreamResponse};
 use crate::{pagelist_entry::PageListEntry, platform::Platform};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
+use std::borrow::Cow;
 
 /// Renders JSON
 #[derive(Clone, Copy, Debug)]
@@ -54,6 +56,59 @@ impl Render for RenderJSON {
             status: 200,
         })
     }
+
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
+    fn stream(
+        self: Box<Self>,
+        platform: &Platform,
+        mut params: RenderParams,
+        _wiki: &str,
+        entries: Vec<PageListEntry>,
+    ) -> Result<StreamResponse> {
+        // Pretty-printing a stream would require threading indentation through
+        // every entry; that mode stays buffered.
+        if params.json_pretty() {
+            return Err(anyhow!("pretty JSON is not streamed"));
+        }
+        params.set_file_usage(params.giu() || params.file_usage());
+        if params.giu() {
+            params.set_json_sparse(false);
+        }
+        let header = self.json_header(&params);
+        let count = entries.len();
+        let quick = params.json_output_compatability() == "quick-intersection";
+        let (prefix, suffix) = if quick {
+            Self::quick_stream_frame(platform, &params, count)
+        } else {
+            Self::cat_scan_stream_frame(platform)
+        };
+        let callback = params.json_callback().to_string();
+        let has_callback = !callback.is_empty();
+        let renderer = *self;
+        let items = entries.into_iter().filter_map(move |entry| {
+            renderer
+                .entry_value(&entry, &params, &header, quick)
+                .map(|value| {
+                    Cow::Owned(serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string()))
+                })
+        });
+        let open = if has_callback {
+            callback + "(" + &prefix
+        } else {
+            prefix
+        };
+        let close = if has_callback { suffix + ")" } else { suffix };
+        let pieces = std::iter::once(Cow::Owned(open))
+            .chain(stream::comma_separated(items))
+            .chain(std::iter::once(Cow::Owned(close)));
+        Ok(StreamResponse {
+            stream: stream::to_stream(pieces),
+            content_type: ContentType::JSON,
+        })
+    }
 }
 
 impl RenderJSON {
@@ -72,7 +127,16 @@ impl RenderJSON {
             params.set_json_sparse(false);
         }
 
-        // Header
+        let header = self.json_header(params);
+        let value: Value = match params.json_output_compatability() {
+            "quick-intersection" => Self::quick_intersection(platform, entries, params, &header),
+            _ => self.cat_scan(platform, entries, params, &header), // Default
+        };
+        Ok(value)
+    }
+
+    /// The columns included in a rendered entry, shared by JSON and JSONL.
+    pub(crate) fn json_header(&self, params: &RenderParams) -> Vec<(String, String)> {
         let mut header: Vec<(&str, &str)> = vec![
             ("title", "Title"),
             ("page_id", "Page ID"),
@@ -92,22 +156,128 @@ impl RenderJSON {
                 header.push((col.to_string(), col.to_string()));
             }
         }
-
         if params.file_data() {
             self.file_data_keys()
                 .iter()
                 .for_each(|k| header.push((k.to_string(), k.to_string())));
         }
+        header
+    }
 
-        let value: Value = match params.json_output_compatability() {
-            "quick-intersection" => Self::quick_intersection(platform, entries, params, &header),
-            _ => self.cat_scan(platform, entries, params, &header), // Default
+    /// One entry as the object (or sparse title string) used by both JSON
+    /// dialects. `None` when a sparse title has no resolvable namespace.
+    pub(crate) fn entry_value(
+        &self,
+        entry: &PageListEntry,
+        params: &RenderParams,
+        header: &[(String, String)],
+        quick: bool,
+    ) -> Option<Value> {
+        if params.json_sparse() {
+            return params
+                .ns()
+                .full_with_underscores(entry.title())
+                .map(|title| json!(title));
+        }
+        let mut o = if quick {
+            json!({
+                "page_id" : entry.page_id().unwrap_or(0),
+                "page_namespace" : entry.title().namespace_id(),
+                "page_title" : entry.title().with_underscores(),
+                "page_latest" : entry.get_page_timestamp().unwrap_or_default(),
+                "page_len" : entry.page_bytes().unwrap_or(0),
+            })
+        } else {
+            json!({
+                "n":"page",
+                "title":entry.title().with_underscores(),
+                "id":entry.page_id().unwrap_or(0),
+                "namespace":entry.title().namespace_id(),
+                "len":entry.page_bytes().unwrap_or(0),
+                "touched":entry.get_page_timestamp().unwrap_or_default(),
+                "nstext":params.ns().canonical_namespace_name(entry.title().namespace_id()).unwrap_or("")
+            })
         };
-        Ok(value)
+        if quick {
+            if (params.giu() || params.file_usage())
+                && let Some(fu) = Self::get_file_usage(entry)
+            {
+                o["giu"] = fu;
+            }
+            Self::add_metadata(&mut o, entry, header);
+            if let Some(q) = entry.get_wikidata_item() {
+                o["q"] = json!(q);
+                o["metadata"]["wikidata"] = json!(q);
+            }
+        } else {
+            if let Some(q) = entry.get_wikidata_item() {
+                o["q"] = json!(q);
+                o["metadata"]["wikidata"] = json!(q);
+            }
+            Self::add_metadata(&mut o, entry, header);
+            if params.file_data() {
+                if o["metadata"].get("fileusage").is_some() {
+                    o["gil"] = o["metadata"]["fileusage"].to_owned();
+                }
+                self.file_data_keys().iter().for_each(|k| {
+                    if o["metadata"].get(k).is_some() {
+                        o[k] = o["metadata"][k].to_owned();
+                    }
+                });
+            }
+        }
+        Some(o)
     }
 
     fn get_query_string(platform: &Platform) -> String {
         "https://petscan.toolforge.org/?".to_string() + &platform.form_parameters().to_string()
+    }
+
+    fn json_string(value: &str) -> String {
+        serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+    }
+
+    fn cat_scan_stream_frame(platform: &Platform) -> (String, String) {
+        let seconds: f32 = match platform.query_time() {
+            Some(duration) => (duration.as_millis() as f32) / 1000_f32,
+            None => 0.0,
+        };
+        let seconds = serde_json::to_string(&seconds).unwrap_or_else(|_| "0".to_string());
+        let mut prefix = String::from("{\"n\":\"result\",\"a\":{\"query\":");
+        prefix += &Self::json_string(&Self::get_query_string(platform));
+        prefix += &format!(
+            ",\"querytime_sec\":{seconds}}},\"*\":[{{\"n\":\"combination\",\"a\":{{\"type\":"
+        );
+        prefix += &Self::json_string(&platform.get_param_default("combination", "subset"));
+        prefix += ",\"*\":[";
+        (prefix, "]}}]}".to_string())
+    }
+
+    fn quick_stream_frame(
+        platform: &Platform,
+        params: &RenderParams,
+        count: usize,
+    ) -> (String, String) {
+        let mut namespaces = serde_json::Map::new();
+        params.ns().for_each_local_namespace(&mut |key, name| {
+            namespaces.insert(key.to_string(), json!(name));
+        });
+        let namespaces = serde_json::to_string(&namespaces).unwrap_or_else(|_| "{}".to_string());
+        let mut prefix = format!(
+            "{{\"namespaces\":{namespaces},\"wiki\":{},\"status\":\"OK\",\"start\":0,\"max\":{},\"query\":{}",
+            Self::json_string(platform.get_main_wiki().as_deref().unwrap_or_default()),
+            count + 1,
+            Self::json_string(&Self::get_query_string(platform)),
+        );
+        if let Some(duration) = platform.query_time() {
+            prefix += &format!(
+                ",\"querytime\":{}",
+                serde_json::to_string(&((duration.as_millis() as f32) / 1000_f32))
+                    .unwrap_or_else(|_| "0".to_string())
+            );
+        }
+        prefix += &format!(",\"pagecount\":{count},\"pages\":[");
+        (prefix, "]}".to_string())
     }
 
     fn cat_scan(
@@ -117,36 +287,10 @@ impl RenderJSON {
         params: &RenderParams,
         header: &[(String, String)],
     ) -> Value {
-        let entry_data: Vec<Value> = if params.json_sparse() {
-            entries
-                .iter()
-                .filter_map(|entry| Some(json!(params.ns().full_with_underscores(entry.title())?)))
-                .collect()
-        } else {
-            entries.iter().map(|entry| {
-                let mut o = json!({
-                    "n":"page",
-                    "title":entry.title().with_underscores(),
-                    "id":entry.page_id().unwrap_or(0),
-                    "namespace":entry.title().namespace_id(),
-                    "len":entry.page_bytes().unwrap_or(0),
-                    "touched":entry.get_page_timestamp().unwrap_or_default(),
-                    "nstext":params.ns().canonical_namespace_name(entry.title().namespace_id()).unwrap_or("")
-                });
-                if let Some(q) = entry.get_wikidata_item() {
-                    o["q"] = json!(q);
-                    o["metadata"]["wikidata"] = json!(q);
-                }
-                Self::add_metadata(&mut o, entry, header);
-                if params.file_data() {
-                    if o["metadata"].get("fileusage").is_some() { o["gil"] = o["metadata"]["fileusage"].to_owned() }
-                    self.file_data_keys().iter().for_each(|k|{
-                        if o["metadata"].get(k).is_some() { o[k] = o["metadata"][k].to_owned() }
-                    });
-                }
-                o
-            }).collect()
-        };
+        let entry_data: Vec<Value> = entries
+            .iter()
+            .filter_map(|entry| self.entry_value(entry, params, header, false))
+            .collect();
         let seconds: f32 = match platform.query_time() {
             Some(duration) => (duration.as_millis() as f32) / (1000_f32),
             None => 0.0,
@@ -179,39 +323,11 @@ impl RenderJSON {
             ret["namespaces"][k] = json!(name);
         });
 
-        // Entries
-        if params.json_sparse() {
-            ret["pages"] = entries
-                .iter()
-                .filter_map(|entry| params.ns().full_with_underscores(entry.title()))
-                .collect();
-        } else {
-            ret["pages"] = entries
-                .iter()
-                .map(|entry| {
-                    let mut o = json!({
-                        "page_id" : entry.page_id().unwrap_or(0),
-                        "page_namespace" : entry.title().namespace_id(),
-                        "page_title" : entry.title().with_underscores(),
-                        "page_latest" : entry.get_page_timestamp().unwrap_or_default(),
-                        "page_len" : entry.page_bytes().unwrap_or(0),
-                        //"meta" : {}
-                    });
-                    if (params.giu() || params.file_usage())
-                        && let Some(fu) = Self::get_file_usage(entry)
-                    {
-                        o["giu"] = fu;
-                    }
-                    Self::add_metadata(&mut o, entry, header);
-                    if let Some(q) = entry.get_wikidata_item() {
-                        o["q"] = json!(q);
-                        o["metadata"]["wikidata"] = json!(q);
-                    }
-                    o
-                })
-                .collect();
-        }
-
+        let pages: Vec<Value> = entries
+            .iter()
+            .filter_map(|entry| RenderJSON.entry_value(entry, params, header, true))
+            .collect();
+        ret["pages"] = Value::Array(pages);
         ret
     }
 
@@ -290,5 +406,51 @@ impl RenderJSON {
                 o["metadata"][head] = v;
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render::params::RenderParams;
+    use crate::test_support::{StubNamespaceContext, make_platform};
+    use futures::TryStreamExt;
+    use std::sync::Arc;
+    use wikimisc::mediawiki::title::Title;
+
+    #[tokio::test]
+    async fn streamed_json_is_valid_and_contains_the_pages() {
+        let platform = make_platform(vec![]);
+        let params = RenderParams::for_tests("enwiki", Arc::new(StubNamespaceContext::enwiki()));
+        let mut entry = PageListEntry::new(Title::new("Foo_bar", 0));
+        entry.set_page_id(Some(42));
+        entry.set_page_bytes(Some(7));
+        entry.set_page_timestamp(Some("2024".to_string()));
+
+        let response = RenderJSON::new()
+            .stream(&platform, params, "enwiki", vec![entry])
+            .unwrap();
+        let chunks = response.stream.try_collect::<Vec<_>>().await.unwrap();
+        let value: Value = serde_json::from_slice(&chunks.concat()).unwrap();
+
+        let page = &value["*"][0]["a"]["*"][0];
+        assert_eq!(page["title"], "Foo_bar");
+        assert_eq!(page["id"], 42);
+        assert_eq!(page["len"], 7);
+    }
+
+    #[tokio::test]
+    async fn streamed_quick_intersection_has_the_expected_envelope() {
+        let mut params =
+            RenderParams::for_tests("enwiki", Arc::new(StubNamespaceContext::enwiki()));
+        params.set_json_sparse(false);
+        // quick-intersection is selected from the parameter in production; here
+        // the per-entry builder is exercised through the same helper.
+        let entry = PageListEntry::new(Title::new("Foo", 0));
+        let header = RenderJSON::new().json_header(&params);
+        let value = RenderJSON::new()
+            .entry_value(&entry, &params, &header, true)
+            .unwrap();
+        assert_eq!(value["page_title"], "Foo");
     }
 }

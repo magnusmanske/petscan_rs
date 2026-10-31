@@ -5,6 +5,7 @@ pub mod kml;
 pub mod pagepile;
 pub mod params;
 pub mod plaintext;
+pub mod stream;
 pub mod tsv;
 pub mod wikitext;
 
@@ -12,7 +13,8 @@ use crate::form_parameters::FormParameters;
 use crate::pagelist_entry::{LinkCount, PageListEntry};
 use crate::platform::{MyResponse, Platform};
 use crate::render::params::RenderParams;
-use anyhow::Result;
+use crate::render::stream::StreamResponse;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use std::sync::Arc;
 use wikimisc::mediawiki::api::{Api, NamespaceID};
@@ -107,13 +109,32 @@ pub(crate) fn escape_attribute(s: &str) -> String {
 }
 
 #[async_trait]
-pub trait Render {
+pub trait Render: Send + Sync {
     async fn response(
         &self,
         _platform: &Platform,
         _wiki: &str,
         _pages: Vec<PageListEntry>,
     ) -> Result<MyResponse>;
+
+    /// Whether [`Self::stream`] can render this format. Formats that need the
+    /// whole document (HTML, KML, `PagePile`) return false and use `response`.
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
+    /// Renders the result as a lazy body. `params` is built once by the
+    /// caller; the returned stream owns everything it needs, so no reference
+    /// to `platform` escapes.
+    fn stream(
+        self: Box<Self>,
+        _platform: &Platform,
+        _params: RenderParams,
+        _wiki: &str,
+        _pages: Vec<PageListEntry>,
+    ) -> Result<StreamResponse> {
+        Err(anyhow!("streaming is not implemented for this renderer"))
+    }
 
     fn file_data_keys(&self) -> Vec<&str> {
         vec![
@@ -280,6 +301,27 @@ pub trait Render {
         params: &RenderParams,
         platform: &Platform,
     ) -> Vec<String> {
+        self.row_from_entry_inner(entry, header, params, Some(platform))
+    }
+
+    /// Row builder for streaming renderers. They do not override
+    /// `render_cell_checkbox`, so no platform is needed per row.
+    fn row_from_entry_streaming(
+        &self,
+        entry: &PageListEntry,
+        header: &[(String, String)],
+        params: &RenderParams,
+    ) -> Vec<String> {
+        self.row_from_entry_inner(entry, header, params, None)
+    }
+
+    fn row_from_entry_inner(
+        &self,
+        entry: &PageListEntry,
+        header: &[(String, String)],
+        params: &RenderParams,
+        platform: Option<&Platform>,
+    ) -> Vec<String> {
         let mut ret = vec![];
         for (k, _) in header {
             let cell = match k.as_str() {
@@ -289,7 +331,9 @@ pub trait Render {
                 "namespace" => self.render_cell_namespace(entry, params),
                 "wikidata_item" => self.render_cell_wikidata_item(entry, params),
                 "image" => self.render_cell_image(&entry.get_page_image(), params),
-                "checkbox" => self.render_cell_checkbox(entry, params, platform),
+                "checkbox" => platform.map_or_else(String::new, |platform| {
+                    self.render_cell_checkbox(entry, params, platform)
+                }),
                 "coordinates" => self.render_coordinates(entry, params),
                 "fileusage" => self.render_cell_fileusage(entry, params),
 
