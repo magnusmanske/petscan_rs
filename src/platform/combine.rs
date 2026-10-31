@@ -1,4 +1,5 @@
 use crate::combination::{Combination, CombinationSequential};
+use crate::key_set::{KeySet, KeySetLimits};
 use crate::pagelist::PageList;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
@@ -10,6 +11,15 @@ pub(super) static RE_PARSE_COMBINATION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\w+(?:'\w+)?|[^\w\s]")
         .expect("Platform::parse_combination_string: Regex is invalid")
 });
+
+/// One step of the combination stack machine. `needs_entries` is false when the
+/// value is only ever used for page identity (the subtracted or
+/// intersected-away side), which is what allows it to spill to disk.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct CombineStep {
+    pub instruction: CombinationSequential,
+    pub needs_entries: bool,
+}
 
 impl Platform {
     /// Maps each source that should run seeded to the source that supplies its
@@ -170,56 +180,87 @@ impl Platform {
         a: &Combination,
         b: &Combination,
         op: CombinationSequential,
+        needs_entries: bool,
         allow_none_right: bool,
-    ) -> Result<Vec<CombinationSequential>> {
+        steps: &mut Vec<CombineStep>,
+    ) -> Result<()> {
         match (a, b) {
             (Combination::None, _) => Err(anyhow!("{op:?} with left Combination::None found")),
-            (c, Combination::None) if allow_none_right => Self::serialize_combine_results(c),
+            (c, Combination::None) if allow_none_right => {
+                Self::push_combine_steps(c, needs_entries, steps)
+            }
             (_, Combination::None) => Err(anyhow!("{op:?} with right Combination::None found")),
             (c, d) => {
-                let mut ret = Self::serialize_combine_results(c)?;
-                ret.append(&mut Self::serialize_combine_results(d)?);
-                ret.push(op);
-                Ok(ret)
+                Self::push_combine_steps(c, needs_entries, steps)?;
+                // The right side of an intersection or difference only supplies
+                // membership, so it never needs to keep its entries.
+                Self::push_combine_steps(d, false, steps)?;
+                steps.push(CombineStep {
+                    instruction: op,
+                    needs_entries,
+                });
+                Ok(())
             }
         }
     }
 
-    pub(super) fn serialize_combine_results(
+    /// Turns the combination tree into stack-machine steps, recording for each
+    /// value whether anything needs its metadata. Only the final result and the
+    /// retained side of an intersection/difference do; everything else is used
+    /// for page identity and can spill to disk.
+    pub(super) fn serialize_combine_results(combination: &Combination) -> Result<Vec<CombineStep>> {
+        let mut steps = vec![];
+        Self::push_combine_steps(combination, true, &mut steps)?;
+        Ok(steps)
+    }
+
+    fn push_combine_steps(
         combination: &Combination,
-    ) -> Result<Vec<CombinationSequential>> {
+        needs_entries: bool,
+        steps: &mut Vec<CombineStep>,
+    ) -> Result<()> {
         match combination {
-            Combination::Source(s) => Ok(vec![CombinationSequential::Source(s.to_string())]),
+            Combination::Source(s) => steps.push(CombineStep {
+                instruction: CombinationSequential::Source(s.to_string()),
+                needs_entries,
+            }),
             Combination::Union((a, b)) => match (a.as_ref(), b.as_ref()) {
                 // Either side being None collapses the Union to the other side
                 (Combination::None, c) | (c, Combination::None) => {
-                    Self::serialize_combine_results(c)
+                    Self::push_combine_steps(c, needs_entries, steps)?;
                 }
                 (c, d) => {
-                    Self::serialize_binary_combination(c, d, CombinationSequential::Union, false)
+                    Self::push_combine_steps(c, needs_entries, steps)?;
+                    Self::push_combine_steps(d, needs_entries, steps)?;
+                    steps.push(CombineStep {
+                        instruction: CombinationSequential::Union,
+                        needs_entries,
+                    });
                 }
             },
             Combination::Intersection((a, b)) => Self::serialize_binary_combination(
                 a.as_ref(),
                 b.as_ref(),
                 CombinationSequential::Intersection,
+                needs_entries,
                 false,
-            ),
+                steps,
+            )?,
             Combination::Not((a, b)) => Self::serialize_binary_combination(
                 a.as_ref(),
                 b.as_ref(),
                 CombinationSequential::Not,
+                needs_entries,
                 true, // Not(x, None) => just x
-            ),
-            Combination::None => Err(anyhow!("Combination::None found")),
+                steps,
+            )?,
+            Combination::None => return Err(anyhow!("Combination::None found")),
         }
+        Ok(())
     }
 
     /// Pops two registers and returns `(r1, r2)`, or an error if fewer than 2 are available.
-    async fn pop_two_registers(
-        registers: &mut Vec<PageList>,
-        op_name: &str,
-    ) -> Result<(PageList, PageList)> {
+    fn pop_two<T>(registers: &mut Vec<T>, op_name: &str) -> Result<(T, T)> {
         if registers.len() < 2 {
             return Err(anyhow!(
                 "combine_results: Not enough registers for {op_name}"
@@ -237,44 +278,192 @@ impl Platform {
     pub(super) async fn combine_results(
         &self,
         results: &mut HashMap<String, PageList>,
-        combination: Vec<CombinationSequential>,
+        combination: Vec<CombineStep>,
     ) -> Result<PageList> {
-        let mut registers: Vec<PageList> = vec![];
-        for command in combination {
-            match command {
+        self.combine_results_with_limits(results, combination, KeySetLimits::from_env())
+            .await
+    }
+
+    async fn combine_results_with_limits(
+        &self,
+        results: &mut HashMap<String, PageList>,
+        combination: Vec<CombineStep>,
+        limits: KeySetLimits,
+    ) -> Result<PageList> {
+        let mut registers: Vec<Combined> = vec![];
+        for step in combination {
+            let combined = match step.instruction {
                 CombinationSequential::Source(source_key) => {
-                    let source = results
+                    let list = results
                         .remove(&source_key)
                         .ok_or_else(|| anyhow!("No result for source {source_key}"))?;
-                    registers.push(source);
+                    self.source_register(list, step.needs_entries, &registers, limits)
+                        .await?
                 }
                 CombinationSequential::Union => {
-                    let (r1, r2) = Self::pop_two_registers(&mut registers, "Union").await?;
-                    r1.union(r2, Some(self)).await?;
-                    registers.push(r1);
+                    let (left, right) = Self::pop_two(&mut registers, "Union")?;
+                    self.combine_union(left, right, step.needs_entries, limits)
+                        .await?
                 }
                 CombinationSequential::Intersection => {
-                    let (r1, r2) = Self::pop_two_registers(&mut registers, "Intersection").await?;
-                    r1.intersection(r2, Some(self)).await?;
-                    registers.push(r1);
+                    let (left, right) = Self::pop_two(&mut registers, "Intersection")?;
+                    self.combine_filter(left, right, true, step.needs_entries, limits)
+                        .await?
                 }
                 CombinationSequential::Not => {
-                    let (r1, r2) = Self::pop_two_registers(&mut registers, "Not").await?;
-                    r1.difference(r2, Some(self)).await?;
-                    registers.push(r1);
+                    let (left, right) = Self::pop_two(&mut registers, "Not")?;
+                    self.combine_filter(left, right, false, step.needs_entries, limits)
+                        .await?
                 }
-            }
+            };
+            registers.push(combined);
         }
         if registers.len() == 1 {
-            return registers
-                .pop()
-                .ok_or_else(|| anyhow!("combine_results: registers unexpectedly empty"));
+            return match registers.pop() {
+                Some(Combined::Entries(result)) => Ok(result),
+                Some(Combined::Keys(..)) => Err(anyhow!("combine_results: result is key-only")),
+                None => Err(anyhow!("combine_results: registers unexpectedly empty")),
+            };
         }
         Err(anyhow!(
             "combine_results: {} registers set",
             registers.len()
         ))
     }
+
+    /// Turns a source result into a register. A value that only feeds
+    /// membership is converted to keys (and spilled if large) so its entries
+    /// can be released immediately.
+    async fn source_register(
+        &self,
+        list: PageList,
+        needs_entries: bool,
+        registers: &[Combined],
+        limits: KeySetLimits,
+    ) -> Result<Combined> {
+        if needs_entries {
+            return Ok(Combined::Entries(list));
+        }
+        // The key-only side must be on the same wiki as the side it filters.
+        // Convert before dropping the entries, because keys can no longer be
+        // converted afterwards.
+        let target = registers.iter().rev().find_map(Combined::wiki);
+        if let Some(target_wiki) = target.as_deref() {
+            list.convert_to_wiki(target_wiki, self).await?;
+        }
+        let wiki = target.or_else(|| list.wiki());
+        if list.len() > limits.threshold {
+            let keys = run_blocking(move || KeySet::from_pagelist(list, limits)).await?;
+            Ok(Combined::Keys(keys, wiki))
+        } else {
+            // Small operands keep the old in-memory path; there is nothing to
+            // gain from a temp file.
+            Ok(Combined::Entries(list))
+        }
+    }
+
+    async fn combine_union(
+        &self,
+        left: Combined,
+        right: Combined,
+        needs_entries: bool,
+        limits: KeySetLimits,
+    ) -> Result<Combined> {
+        if needs_entries {
+            let (Combined::Entries(left), Combined::Entries(right)) = (left, right) else {
+                return Err(anyhow!(
+                    "combine_results: Union lost the entry side of its result"
+                ));
+            };
+            left.union(right, Some(self)).await?;
+            return Ok(Combined::Entries(left));
+        }
+        let (left, wiki) = Self::into_keys(left, limits).await?;
+        let (right, _) = Self::into_keys(right, limits).await?;
+        let keys = run_blocking(move || left.union(right, limits)).await?;
+        Ok(Combined::Keys(keys, wiki))
+    }
+
+    /// Intersection (`keep`) and difference (`!keep`). The retained side keeps
+    /// its entries; the other side is only consulted for membership, so it may
+    /// be a key set on disk.
+    async fn combine_filter(
+        &self,
+        left: Combined,
+        right: Combined,
+        keep: bool,
+        needs_entries: bool,
+        limits: KeySetLimits,
+    ) -> Result<Combined> {
+        if needs_entries {
+            let Combined::Entries(entries) = left else {
+                return Err(anyhow!(
+                    "combine_results: set operation lost the entry side of its result"
+                ));
+            };
+            match right {
+                Combined::Entries(other) if keep => {
+                    entries.intersection(other, Some(self)).await?;
+                }
+                Combined::Entries(other) => {
+                    entries.difference(other, Some(self)).await?;
+                }
+                Combined::Keys(keys, _) => {
+                    entries.retain_by_keys(keys, keep).await?;
+                }
+            }
+            return Ok(Combined::Entries(entries));
+        }
+        let (left, wiki) = Self::into_keys(left, limits).await?;
+        let (right, _) = Self::into_keys(right, limits).await?;
+        let keys = run_blocking(move || {
+            if keep {
+                left.intersect(right, limits)
+            } else {
+                left.difference(right, limits)
+            }
+        })
+        .await?;
+        Ok(Combined::Keys(keys, wiki))
+    }
+
+    /// Converts a register to keys, whether it still holds entries or already
+    /// spilled, returning the wiki the keys are on.
+    async fn into_keys(value: Combined, limits: KeySetLimits) -> Result<(KeySet, Option<String>)> {
+        match value {
+            Combined::Keys(keys, wiki) => Ok((keys, wiki)),
+            Combined::Entries(list) => {
+                let wiki = list.wiki();
+                let keys = run_blocking(move || KeySet::from_pagelist(list, limits)).await?;
+                Ok((keys, wiki))
+            }
+        }
+    }
+}
+
+/// A combination register: either a full page list (metadata preserved) or a
+/// set of page identities, possibly spilled to disk.
+enum Combined {
+    Entries(PageList),
+    Keys(KeySet, Option<String>),
+}
+
+impl Combined {
+    fn wiki(&self) -> Option<String> {
+        match self {
+            Self::Entries(list) => list.wiki(),
+            Self::Keys(_, wiki) => wiki.clone(),
+        }
+    }
+}
+
+/// Runs blocking file I/O off the async runtime.
+async fn run_blocking<T: Send + 'static>(
+    job: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(job)
+        .await
+        .map_err(|error| anyhow!("{error}"))?
 }
 
 // ─── tests ───────────────────────────────────────────────────────────────────
@@ -400,14 +589,23 @@ mod tests {
         assert_eq!(comb, expected);
     }
 
+    fn ops(steps: &[CombineStep]) -> Vec<CombinationSequential> {
+        steps.iter().map(|step| step.instruction.clone()).collect()
+    }
+
+    fn needs(steps: &[CombineStep]) -> Vec<bool> {
+        steps.iter().map(|step| step.needs_entries).collect()
+    }
+
     #[test]
     fn test_serialize_combine_results_single_source() {
         let comb = Combination::Source("categories".to_string());
         let result = Platform::serialize_combine_results(&comb).unwrap();
         assert_eq!(
-            result,
+            ops(&result),
             vec![CombinationSequential::Source("categories".to_string())]
         );
+        assert_eq!(needs(&result), vec![true]);
     }
 
     #[test]
@@ -418,13 +616,16 @@ mod tests {
         ));
         let result = Platform::serialize_combine_results(&comb).unwrap();
         assert_eq!(
-            result,
+            ops(&result),
             vec![
                 CombinationSequential::Source("a".to_string()),
                 CombinationSequential::Source("b".to_string()),
                 CombinationSequential::Intersection,
             ]
         );
+        // Only the retained side needs its metadata; the subtracted side is
+        // used for membership alone.
+        assert_eq!(needs(&result), vec![true, false, true]);
     }
 
     #[test]
@@ -435,13 +636,14 @@ mod tests {
         ));
         let result = Platform::serialize_combine_results(&comb).unwrap();
         assert_eq!(
-            result,
+            ops(&result),
             vec![
                 CombinationSequential::Source("x".to_string()),
                 CombinationSequential::Source("y".to_string()),
                 CombinationSequential::Union,
             ]
         );
+        assert_eq!(needs(&result), vec![true, true, true]);
     }
 
     #[test]
@@ -452,13 +654,54 @@ mod tests {
         ));
         let result = Platform::serialize_combine_results(&comb).unwrap();
         assert_eq!(
-            result,
+            ops(&result),
             vec![
                 CombinationSequential::Source("a".to_string()),
                 CombinationSequential::Source("b".to_string()),
                 CombinationSequential::Not,
             ]
         );
+        assert_eq!(needs(&result), vec![true, false, true]);
+    }
+
+    #[test]
+    fn test_serialize_combine_results_key_only_union() {
+        // A AND (B OR C): the union only feeds membership, so neither B nor C
+        // needs its entries.
+        let comb = Combination::Intersection((
+            Box::new(Combination::Source("a".to_string())),
+            Box::new(Combination::Union((
+                Box::new(Combination::Source("b".to_string())),
+                Box::new(Combination::Source("c".to_string())),
+            ))),
+        ));
+        let result = Platform::serialize_combine_results(&comb).unwrap();
+        assert_eq!(needs(&result), vec![true, false, false, false, true]);
+        assert_eq!(
+            ops(&result),
+            vec![
+                CombinationSequential::Source("a".to_string()),
+                CombinationSequential::Source("b".to_string()),
+                CombinationSequential::Source("c".to_string()),
+                CombinationSequential::Union,
+                CombinationSequential::Intersection,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_serialize_combine_results_entry_side_union() {
+        // (A OR B) AND C: the union is the retained side, so A and B keep
+        // their entries and only C is key-only.
+        let comb = Combination::Intersection((
+            Box::new(Combination::Union((
+                Box::new(Combination::Source("a".to_string())),
+                Box::new(Combination::Source("b".to_string())),
+            ))),
+            Box::new(Combination::Source("c".to_string())),
+        ));
+        let result = Platform::serialize_combine_results(&comb).unwrap();
+        assert_eq!(needs(&result), vec![true, true, true, false, true]);
     }
 
     #[test]
@@ -476,9 +719,10 @@ mod tests {
         ));
         let result = Platform::serialize_combine_results(&comb).unwrap();
         assert_eq!(
-            result,
+            ops(&result),
             vec![CombinationSequential::Source("cats".to_string())]
         );
+        assert_eq!(needs(&result), vec![true]);
     }
 
     #[test]
@@ -615,5 +859,120 @@ mod tests {
         let p = priorities(&[("categories", Some(0))]);
         let tree = intersect(source("categories"), source("categories"));
         assert!(Platform::plan_seeds(&tree, &p).is_empty());
+    }
+
+    // ── spill-aware combination ──────────────────────────────────────────────
+
+    use crate::pagelist_entry::PageListEntry;
+    use wikimisc::mediawiki::title::Title;
+
+    fn page_list(titles: &[&str]) -> PageList {
+        let list = PageList::new_from_wiki("enwiki");
+        for title in titles {
+            let mut entry = PageListEntry::new(Title::new(title, 0));
+            entry.set_page_id(Some(title.len() as u32));
+            list.add_entry(entry);
+        }
+        list
+    }
+
+    fn titles(list: &PageList) -> Vec<String> {
+        let mut titles: Vec<String> = list
+            .as_vec()
+            .iter()
+            .map(|entry| entry.title().pretty().to_string())
+            .collect();
+        titles.sort();
+        titles
+    }
+
+    fn results(entries: Vec<(&str, PageList)>) -> HashMap<String, PageList> {
+        entries
+            .into_iter()
+            .map(|(name, list)| (name.to_string(), list))
+            .collect()
+    }
+
+    /// A right side above the spill threshold takes the disk-backed path and
+    /// still keeps the left side's entries and metadata.
+    #[tokio::test]
+    async fn combine_intersection_spills_the_right_side() {
+        let left = page_list(&["A", "B", "C", "D"]);
+        let right = page_list(&["B", "D", "E", "F", "G", "H"]);
+        let combination = intersect(source("left"), source("right"));
+        let steps = Platform::serialize_combine_results(&combination).unwrap();
+        let mut results = results(vec![("left", left), ("right", right)]);
+        let platform = make_platform(vec![]);
+        let limit = KeySetLimits { threshold: 2 };
+
+        let combined = platform
+            .combine_results_with_limits(&mut results, steps, limit)
+            .await
+            .unwrap();
+
+        assert_eq!(titles(&combined), vec!["B", "D"]);
+        // The left side survives with its own metadata, not a rehydrated copy.
+        assert!(
+            combined
+                .as_vec()
+                .iter()
+                .all(|entry| entry.page_id().is_some())
+        );
+    }
+
+    /// `A NOT B` removes B's pages even when B is merged from several runs.
+    #[tokio::test]
+    async fn combine_difference_spills_the_right_side() {
+        let left = page_list(&["A", "B", "C", "D"]);
+        let right = page_list(&["B", "X", "Y", "D", "Z", "W"]);
+        let combination = Combination::Not((Box::new(source("left")), Box::new(source("right"))));
+        let steps = Platform::serialize_combine_results(&combination).unwrap();
+        let mut results = results(vec![("left", left), ("right", right)]);
+        let platform = make_platform(vec![]);
+
+        let combined = platform
+            .combine_results_with_limits(&mut results, steps, KeySetLimits { threshold: 2 })
+            .await
+            .unwrap();
+
+        assert_eq!(titles(&combined), vec!["A", "C"]);
+    }
+
+    /// The right side of an intersection may itself be a union, which is
+    /// evaluated entirely in key mode.
+    #[tokio::test]
+    async fn combine_intersection_with_spilled_union() {
+        let left = page_list(&["A", "B", "C", "D"]);
+        let b = page_list(&["A", "B", "X", "Y", "Z"]);
+        let c = page_list(&["B", "C", "Q", "R", "S"]);
+        let combination = intersect(source("left"), union(source("b"), source("c")));
+        let steps = Platform::serialize_combine_results(&combination).unwrap();
+        let mut results = results(vec![("left", left), ("b", b), ("c", c)]);
+        let platform = make_platform(vec![]);
+
+        let combined = platform
+            .combine_results_with_limits(&mut results, steps, KeySetLimits { threshold: 2 })
+            .await
+            .unwrap();
+
+        assert_eq!(titles(&combined), vec!["A", "B", "C"]);
+    }
+
+    /// Below the threshold everything stays in memory and matches the old path.
+    #[tokio::test]
+    async fn combine_small_lists_keep_the_in_memory_path() {
+        let left = page_list(&["A", "B", "C"]);
+        let right = page_list(&["B", "C", "D"]);
+        let combination = intersect(source("left"), source("right"));
+        let steps = Platform::serialize_combine_results(&combination).unwrap();
+        let mut results = results(vec![("left", left), ("right", right)]);
+        let platform = make_platform(vec![]);
+
+        let combined = platform
+            .combine_results_with_limits(&mut results, steps, KeySetLimits { threshold: 1000 })
+            .await
+            .unwrap();
+
+        assert_eq!(titles(&combined), vec!["B", "C"]);
     }
 }

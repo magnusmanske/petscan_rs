@@ -47,7 +47,7 @@ source **seeded** with that side's keys. Never materialize the big side.
 - It covers intersections with `SourceDatabase` (categories/templates/links)
   and `SourceWikidata`. Unions and `big − big` still need option 2.
 
-### 2. Key-only sorted-run spill (next)
+### 2. Key-only sorted-run spill (implemented second)
 
 For `∩`/`−` that cannot be pushed down, and for unions that are later reduced:
 
@@ -57,9 +57,30 @@ For `∩`/`−` that cannot be pushed down, and for unions that are later reduce
 - Hydrate only the final small result (existing `load_missing_page_metadata`
   does this).
 - ~200–300 MB disk per 5M keys, ~10–20 MB RAM buffer, a few seconds marginal
-  cost. Keep `max_result_entries` for the final list; add
-  `spill_threshold`/`spill_budget_mb` for intermediates and a global disk
-  semaphore.
+  cost. Keep `max_result_entries` for the final list. The threshold is
+  `PETSCAN_SPILL_THRESHOLD` (default 250k). A global disk budget is deferred:
+  with sources capped at 1M entries, the worst case is ~300 MB per query, and
+  50 concurrent queries stay well inside the ~91 GB `/tmp` share.
+
+Implemented in `src/key_set.rs` and `src/platform/combine.rs`:
+
+- `KeySet` stays a `HashSet` up to `PETSCAN_SPILL_THRESHOLD` (default 250k)
+  and then writes sorted, deduplicated runs under its own temp directory,
+  which is removed on drop.
+- The combination planner marks every value that only supplies membership
+  (the subtracted/intersected-away side, and unions nested in such a side).
+  Those sources are converted to keys and dropped before the larger side is
+  filtered; the retained side keeps its entries and metadata.
+- Intersection/difference filter the retained list run by run; key×key
+  operations (nested unions) merge sorted runs. The final result is always a
+  normal `PageList`; no entry is ever reconstructed from a key.
+- Small operands never touch disk, so ordinary queries keep the old fast path.
+
+**Scope limit:** sources still materialise their own result (bounded by
+`max_result_entries` and the SQL `LIMIT`), and the peak of a query is reached
+while that result is built. The spill therefore bounds the *combination*
+phase, not the source fetch; allowing sources beyond the cap needs the source
+row stream itself (step 3 machinery), not just this layer.
 
 ### 3. Full disk-backed `PageList` (only if needed)
 
@@ -120,6 +141,27 @@ Union and difference results were byte-identical before/after (24,110 and
 runtime is mostly startup, category-tree enumeration and API calls; the
 member fetch is what the seed removes.
 
+## Measured effect of step 2 (2026-10-31)
+
+Release build, live replicas, same query and output before/after:
+
+| query | before | after | peak RSS |
+|---|---|---|---|
+| `manual NOT categories` (American_actors depth 3, 50,639 keys, spill forced at 1,000) | 13.2 s | 10.7–11.8 s | 49 MB → 49 MB |
+| `manual NOT categories` (`templates_any=Infobox person`, 676,462 keys, spills at the default threshold) | 46–59 s | 56–57 s | 302 MB → 302 MB |
+| `manual NOT sparql` (400k QIDs on wikidatawiki, spill forced at 1,000) | 10–35 s | 6–36 s | 117 MB → 117 MB |
+
+The result set was identical in every case (`Apple`, `Apple`, `Q12345`).
+RSS is unchanged because the peak is the source fetch, as noted in the scope
+limit above; the time differences are dominated by replica and SPARQL-endpoint
+variance. The 676k-key run writes and merges several runs at the default
+threshold without a measurable slowdown, and the 50k-key run lands in the same
+range whether it stays in memory or is forced to disk.
+
+All 31 live tests pass both with the default threshold and with
+`PETSCAN_SPILL_THRESHOLD=500` (forcing the larger test operands through
+disk), so the new path is exercised end to end without changing results.
+
 ## Metrics to watch
 
 - `petscan_result_entries` (final list size) and
@@ -132,3 +174,4 @@ member fetch is what the seed removes.
 - `fix/oom-result-bounds`: interim bounds (source `LIMIT`s, subpage/redlink
   caps, post-processing backstop).
 - `feat/seed-intersections`: step 1, stacked on the above.
+- `feat/key-spill`: step 2, key-only sorted-run spill for combination operands.
