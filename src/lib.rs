@@ -50,6 +50,7 @@ pub mod content_type;
 pub mod database_manager;
 pub mod datasource;
 pub mod form_parameters;
+pub mod key_set;
 pub mod pagelist;
 pub mod pagelist_entry;
 pub mod platform;

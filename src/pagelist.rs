@@ -141,8 +141,9 @@ impl PageList {
     }
 
     /// Moves the entries out, leaving this list empty. Lets callers that own
-    /// another list take its set instead of cloning it.
-    fn take_entries(&self) -> HashSet<PageListEntry> {
+    /// another list take its set instead of cloning it. Also used by
+    /// [`crate::key_set::KeySet`] to convert a list without a second copy.
+    pub(crate) fn take_entries(&self) -> HashSet<PageListEntry> {
         std::mem::take(&mut *write_lock(&self.entries))
     }
 
@@ -156,6 +157,22 @@ impl PageList {
     pub fn retain_intersection(&self, other: &PageList) {
         let other_entries = read_lock(&other.entries);
         write_lock(&self.entries).retain(|entry| other_entries.contains(entry));
+    }
+
+    /// Keeps (`keep`) or removes (`!keep`) the entries whose identity is in
+    /// `keys`, which may live on disk. This is the metadata-preserving side of
+    /// a large intersection/difference: only this list's entries survive, so
+    /// the other operand never needs to be materialised.
+    pub async fn retain_by_keys(&self, keys: crate::key_set::KeySet, keep: bool) -> Result<()> {
+        let mut entries = self.take_entries();
+        let entries = tokio::task::spawn_blocking(move || {
+            keys.retain_entries(&mut entries, keep)?;
+            Ok::<_, anyhow::Error>(entries)
+        })
+        .await
+        .map_err(|error| anyhow!("{error}"))??;
+        self.set_entries(entries);
+        Ok(())
     }
 
     pub fn get_entry(&self, entry: &PageListEntry) -> Option<PageListEntry> {
