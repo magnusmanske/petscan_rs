@@ -104,6 +104,22 @@ results are ever allowed.
 - A `big − nearly-as-big` query is the one case where the source LIMIT is
   wrong. That needs option 2 (spill), not a cap.
 
+## Measured effect of step 1 (2026-10-31)
+
+Release build, live replicas, same query before/after:
+
+| query | before | after |
+|---|---|---|
+| `American_actors` depth 3 ∩ 2 manual pages | 11.0–12.4 s, 48 MB | 6.9–7.9 s, 27 MB |
+| `American_actors` depth 4 ∩ 2 manual pages | 13.2 s, 66 MB | 6.8 s, 28 MB |
+| cross-wiki SPARQL ∩ `American_actors` depth 3 | 12.9 s, 50 MB | 8.0 s, 28 MB |
+| `Living_people` depth 0 ∩ 2 manual pages | **failed** at the 1M cap after 85 s, 134 MB | 4.4 s, 26 MB |
+
+Union and difference results were byte-identical before/after (24,110 and
+24,109 pages), confirming the planner changes timing only. The remaining
+runtime is mostly startup, category-tree enumeration and API calls; the
+member fetch is what the seed removes.
+
 ## Metrics to watch
 
 - `petscan_result_entries` (final list size) and
