@@ -58,9 +58,10 @@ For `∩`/`−` that cannot be pushed down, and for unions that are later reduce
   does this).
 - ~200–300 MB disk per 5M keys, ~10–20 MB RAM buffer, a few seconds marginal
   cost. Keep `max_result_entries` for the final list. The threshold is
-  `PETSCAN_SPILL_THRESHOLD` (default 250k). A global disk budget is deferred:
-  with sources capped at 1M entries, the worst case is ~300 MB per query, and
-  50 concurrent queries stay well inside the ~91 GB `/tmp` share.
+  `PETSCAN_SPILL_THRESHOLD` (default 250k). A global disk budget is deferred;
+  step 3 raises the key-only source cap, so a single keyed source can reach
+  ~500 MB of runs. With the 50-request admission limit the `/tmp` share (~91
+  GB) still has headroom, but a semaphore should come with any further raise.
 
 Implemented in `src/key_set.rs` and `src/platform/combine.rs`:
 
@@ -76,20 +77,44 @@ Implemented in `src/key_set.rs` and `src/platform/combine.rs`:
   normal `PageList`; no entry is ever reconstructed from a key.
 - Small operands never touch disk, so ordinary queries keep the old fast path.
 
-**Scope limit:** sources still materialise their own result (bounded by
-`max_result_entries` and the SQL `LIMIT`), and the peak of a query is reached
-while that result is built. The spill therefore bounds the *combination*
-phase, not the source fetch; allowing sources beyond the cap needs the source
-row stream itself (step 3 machinery), not just this layer.
+**Scope limit (addressed by step 3):** sources still materialise their own
+result in step 2, and the peak of a query is reached while that result is
+built. Step 3 moves the spill into the sources that only feed membership, so
+their rows never become a page list.
 
-### 3. Full disk-backed `PageList` (only if needed)
+### 3. Stream the membership-only source into the disk store (implemented third)
 
-Store whole entries (metadata + extras) on disk (redb/LMDB/SQLite) and spill
-above ~250k. This is the most general option but also the most expensive:
-fallible `PageList` API across ~25 methods, random read-modify-writes during
-enrichment, and the final sort/render still materializes unless output is
-streamed. Justified only if large lists routinely survive to output; metrics do
-not show that yet.
+Measurements of step 2 showed that the peak is the source fetch: spilling a
+source after it has built a page list leaves peak RSS unchanged. Step 3 moves
+the spill into the source itself.
+
+- `DataSource::run_keyed` is the key-only counterpart of `run`. The platform
+  decides which sources are key-only from the combination plan, before running
+  anything, and calls `run_keyed` for them.
+- `SourceDatabase` streams MySQL rows with `exec_stream` straight into a
+  `KeySet`. Neither the row vector nor a `PageList` is built. This covers
+  category members, template transclusions, links and the other base queries.
+- `SourceSparql` parses its temp-file CSV into keys instead of a page list;
+  `SourceWikidata` streams item IDs from its SQL query the same way.
+- Other sources fall back to `run` + `KeySet::from_pagelist`, which is correct
+  but does not reduce memory (they are small or already capped).
+- Key-only sources may now hold up to `MAX_SPILLED_SOURCE_KEYS` (10M) instead
+  of `max_result_entries`, because a following set operation can reduce them.
+  The **final** result is still capped, and RAM stays bounded by the spill
+  threshold. The cap is disk/CPU safety, not a product limit.
+- Fallbacks to the materialised path: negative categories, deferred filters
+  (they need the whole ID set) and a pagelist primary.
+
+A full-entry disk-backed `PageList` (the earlier version of this step) was
+**not** built. It would need a fallible API across ~25 methods and random
+read-modify-writes during enrichment, and without source streaming it would
+not lower the measured peak anyway. Streaming the membership-only side covers
+where the large intermediates actually occur.
+
+Remaining scope: the **retained** side of an intersection/difference still
+materialises. `big ∩ small` is handled by step 1's seed push-down; `big −
+small` would benefit from a negative seed (exclude the small side in SQL) in a
+future step.
 
 ### 4. Streaming output (last, as agreed)
 
@@ -120,10 +145,15 @@ results are ever allowed.
 - Keep `LIMIT max+1` for **unseeded** source queries: a bare source or union
   whose final result would exceed the cap should fail early rather than
   materialize.
+- **Key-only** sources are the exception: they stream into a spilled `KeySet`
+  and are capped at `MAX_SPILLED_SOURCE_KEYS` (10M) instead. The following set
+  operation may reduce them; the final result is still capped, and RAM stays
+  at the spill threshold. The 10M bound protects disk and CPU only.
 - Seeded targets are bounded by the seed, so their `LIMIT` never bites. Do not
   remove it; it remains a safety net for a failed seed resolution.
-- A `big − nearly-as-big` query is the one case where the source LIMIT is
-  wrong. That needs option 2 (spill), not a cap.
+- A `big − nearly-as-big` query is now handled by key-only streaming when the
+  subtracted side is the large one. `big − small` with a large retained side
+  still materialises; a negative seed would fix that.
 
 ## Measured effect of step 1 (2026-10-31)
 
@@ -162,6 +192,28 @@ All 31 live tests pass both with the default threshold and with
 `PETSCAN_SPILL_THRESHOLD=500` (forcing the larger test operands through
 disk), so the new path is exercised end to end without changing results.
 
+## Measured effect of step 3 (2026-10-31)
+
+Release build, live replicas, same query and output before/after:
+
+| query | before | after | peak RSS |
+|---|---|---|---|
+| `manual NOT categories`, `templates_any=Infobox person` (676k rows) | 44–60 s | 43–59 s | **295–304 MB → 56–60 MB** |
+| `manual NOT categories`, `American_actors` depth −1 (158k rows) | 41–46 s | 43–44 s | **107 MB → 50 MB** |
+| `manual NOT categories`, `Living_people` depth 0 (>1M rows) | **failed** at the 1M cap, 70 s, 134 MB | 77–89 s, returns the correct result | **55–60 MB** |
+| `manual NOT sparql` (400k QIDs on wikidatawiki) | 6–35 s (endpoint variance) | 6–12 s | **117 MB → 54–62 MB** |
+| seeded `American_actors` depth 3 ∩ 2 manual pages | 6.7 s, 26.7 MB | 6.5–6.9 s, 27.3 MB | unchanged |
+
+The result set was identical in every case. The DB-backed queries show an
+82% / 53% RSS drop with no consistent slowdown; the SPARQL timings are
+dominated by endpoint variance (one 35 s outlier appeared in each build).
+`Living_people` is the important case: the right side alone exceeds
+`max_result_entries`, which used to fail before the intersection could shrink
+it, and now streams in ~55 MB.
+
+All 33 live tests pass, including new cases that exercise the streamed
+category source and a 676k-row spill.
+
 ## Metrics to watch
 
 - `petscan_result_entries` (final list size) and
@@ -174,4 +226,5 @@ disk), so the new path is exercised end to end without changing results.
 - `fix/oom-result-bounds`: interim bounds (source `LIMIT`s, subpage/redlink
   caps, post-processing backstop).
 - `feat/seed-intersections`: step 1, stacked on the above.
-- `feat/key-spill`: step 2, key-only sorted-run spill for combination operands.
+- `feat/key-spill`: step 2 (key-only spill in the combination) and step 3
+  (stream each membership-only source into that store).
