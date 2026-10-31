@@ -1300,9 +1300,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.34"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "lru"
@@ -3199,7 +3199,7 @@ dependencies = [
 [[package]]
 name = "wikimisc"
 version = "0.3.2"
-source = "git+https://github.com/magnusmanske/wikimisc#598043fc7b9cad914069bbec05b114fbf8c642b4"
+source = "git+https://github.com/magnusmanske/wikimisc#f83cd2e7bf8e459a8ff98dbaffcb5c9b455449cf"
 dependencies = [
  "csv",
  "httpdate",
