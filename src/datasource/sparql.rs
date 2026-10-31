@@ -1,4 +1,5 @@
 use crate::datasource::DataSource;
+use crate::key_set::{KeySet, KeySetLimits, MAX_SPILLED_SOURCE_KEYS};
 use crate::pagelist::{PageList, too_many_results};
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
@@ -18,6 +19,9 @@ const SPARQL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// unread. Generous for `?item` plus a label or two; it bounds what is
 /// buffered before the rows can be counted.
 const MAX_SPARQL_BYTES_PER_ROW: usize = 300;
+/// Cap on a key-only SPARQL response, which is buffered to a temp file rather
+/// than memory. Generous for millions of entity IDs; the row cap still applies.
+const MAX_KEYED_RESPONSE_BYTES: usize = 1 << 30;
 /// What SPARQL requests say they are. Wikimedia asks for contact information.
 const USER_AGENT: &str = wikimisc::user_agent!(
     name = "PetScan",
@@ -95,6 +99,29 @@ fn entities_from_csv<R: Read>(mut reader: csv::Reader<R>, limit: usize) -> Resul
     Ok(ret)
 }
 
+/// Key-only counterpart of [`entities_from_csv`]: the entity IDs go straight
+/// into a spilled key set, so a large result never becomes a page list.
+fn entity_keys_from_csv<R: Read>(
+    mut reader: csv::Reader<R>,
+    limit: usize,
+    limits: KeySetLimits,
+) -> Result<KeySet> {
+    let mut keys = KeySet::builder(limits, Some("wikidatawiki".to_string()));
+    for (row, record) in reader.records().enumerate() {
+        if row >= limit {
+            return Err(too_many_results("the SPARQL result has", limit));
+        }
+        if let Some(entry) = record?
+            .get(0)
+            .and_then(|uri| EntityId::from_uri(uri).ok())
+            .and_then(Platform::entry_from_entity_id)
+        {
+            keys.insert_entry(&entry)?;
+        }
+    }
+    keys.finish()
+}
+
 /// A SPARQL failure as PetScan reports it. A query the endpoint rejects is
 /// the user's to fix, so it does not mention SPARQL as an upstream failure.
 fn sparql_error(error: SparqlError, limit: usize) -> anyhow::Error {
@@ -130,21 +157,47 @@ impl DataSource for SourceSparql {
     }
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList> {
-        let sparql = platform
-            .get_param("sparql")
-            .ok_or_else(|| anyhow!("Missing parameter \'sparql\'"))?;
-        let server = SparqlServer::from(platform.get_param("sparql_server").as_deref());
         let limit = platform.state().max_result_entries();
-        let client = SparqlClient::with_client(server.endpoint(), http_client()?)
-            .with_max_response_bytes(limit.saturating_mul(MAX_SPARQL_BYTES_PER_ROW));
-
-        let reader = client
-            .query_csv(&sparql)
-            .await
-            .map_err(|e| sparql_error(e, limit))?;
+        let reader = Self::fetch_csv(
+            platform,
+            limit,
+            limit.saturating_mul(MAX_SPARQL_BYTES_PER_ROW),
+        )
+        .await?;
         tokio::task::spawn_blocking(move || entities_from_csv(reader, limit))
             .await
             .map_err(|e| anyhow!("SPARQL parse task failed: {e}"))?
+    }
+
+    async fn run_keyed(&mut self, platform: &Platform, limits: KeySetLimits) -> Result<KeySet> {
+        // Key-only results may exceed the final cap; they are reduced by the
+        // following set operation and never become the output list.
+        let limit = MAX_SPILLED_SOURCE_KEYS;
+        let reader = Self::fetch_csv(platform, limit, MAX_KEYED_RESPONSE_BYTES).await?;
+        tokio::task::spawn_blocking(move || entity_keys_from_csv(reader, limit, limits))
+            .await
+            .map_err(|e| anyhow!("SPARQL parse task failed: {e}"))?
+    }
+}
+
+impl SourceSparql {
+    /// Fetches the query result into a temporary file and returns a CSV reader
+    /// over it. The body is never held in memory.
+    async fn fetch_csv(
+        platform: &Platform,
+        limit: usize,
+        max_bytes: usize,
+    ) -> Result<csv::Reader<std::fs::File>> {
+        let sparql = platform
+            .get_param("sparql")
+            .ok_or_else(|| anyhow!("Missing parameter 'sparql'"))?;
+        let server = SparqlServer::from(platform.get_param("sparql_server").as_deref());
+        let client = SparqlClient::with_client(server.endpoint(), http_client()?)
+            .with_max_response_bytes(max_bytes);
+        client
+            .query_csv(&sparql)
+            .await
+            .map_err(|e| sparql_error(e, limit))
     }
 }
 
@@ -255,6 +308,34 @@ mod tests {
     #[test]
     fn test_entities_from_csv_refuses_more_rows_than_the_limit() {
         let err = entities_from_csv(csv_reader(THREE_ROWS), 2)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with("Too many results: the SPARQL result has more than 2 pages"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_entity_keys_from_csv_matches_the_page_list() {
+        let keys = entity_keys_from_csv(csv_reader(THREE_ROWS), 10, KeySetLimits { threshold: 1 })
+            .unwrap();
+        assert!(keys.is_spilled(), "threshold 1 must spill two keys");
+        assert_eq!(keys.wiki().as_deref(), Some("wikidatawiki"));
+        let mut titles: Vec<String> = keys
+            .to_page_list()
+            .unwrap()
+            .as_vec()
+            .iter()
+            .map(|entry| entry.title().pretty().to_string())
+            .collect();
+        titles.sort();
+        assert_eq!(titles, vec!["P31", "Q1"]);
+    }
+
+    #[test]
+    fn test_entity_keys_from_csv_refuses_more_rows_than_the_limit() {
+        let err = entity_keys_from_csv(csv_reader(THREE_ROWS), 2, KeySetLimits { threshold: 10 })
             .unwrap_err()
             .to_string();
         assert!(

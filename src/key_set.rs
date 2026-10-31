@@ -34,6 +34,13 @@ use wikimisc::mediawiki::title::Title;
 /// requests can hold at once.
 pub const DEFAULT_SPILL_THRESHOLD: usize = 250_000;
 
+/// Upper bound on the rows a *key-only* source may stream into a spilled set.
+/// The final result is still capped by `max_result_entries`; this only stops a
+/// pathological query from filling the disk. At roughly 50 bytes per key this
+/// is ~500 MB per query, and the files are removed as soon as the combination
+/// finishes.
+pub const MAX_SPILLED_SOURCE_KEYS: usize = 10_000_000;
+
 /// Environment override for the spill threshold, mainly for benchmarks and
 /// for tuning on Toolforge without a rebuild. Values below 1 are ignored.
 pub const SPILL_THRESHOLD_ENV: &str = "PETSCAN_SPILL_THRESHOLD";
@@ -224,10 +231,13 @@ pub struct KeySet {
     dir: Option<TempDir>,
     spilling: bool,
     inserted: usize,
+    /// The wiki the keys belong to, mirroring [`PageList::wiki`]. Needed so a
+    /// streamed source can be converted before a cross-wiki comparison.
+    wiki: Option<String>,
 }
 
 impl KeySet {
-    fn with_limits(limits: KeySetLimits) -> Self {
+    pub(crate) fn with_limits(limits: KeySetLimits) -> Self {
         Self {
             limits,
             mem: HashSet::new(),
@@ -236,14 +246,27 @@ impl KeySet {
             dir: None,
             spilling: false,
             inserted: 0,
+            wiki: None,
         }
+    }
+
+    /// The wiki the keys are on, if known.
+    pub fn wiki(&self) -> Option<String> {
+        self.wiki.clone()
+    }
+
+    pub fn set_wiki(&mut self, wiki: Option<String>) {
+        self.wiki = wiki;
     }
 
     /// Consumes a page list into its keys. The list's entries (and their
     /// strings) are dropped as they are converted, so the spill itself does not
     /// make a full second copy.
     pub fn from_pagelist(pagelist: PageList, limits: KeySetLimits) -> Result<Self> {
-        Self::from_entries(pagelist.take_entries(), limits)
+        let wiki = pagelist.wiki();
+        let mut set = Self::from_entries(pagelist.take_entries(), limits)?;
+        set.wiki = wiki;
+        Ok(set)
     }
 
     fn from_entries(entries: HashSet<PageListEntry>, limits: KeySetLimits) -> Result<Self> {
@@ -252,6 +275,72 @@ impl KeySet {
             set.insert(PageKey::of(&entry))?;
         }
         set.finish()
+    }
+
+    /// Builds the set a source streams into. Call [`Self::finish`] afterwards.
+    pub(crate) fn builder(limits: KeySetLimits, wiki: Option<String>) -> Self {
+        let mut set = Self::with_limits(limits);
+        set.wiki = wiki;
+        set
+    }
+
+    /// Adds a page by namespace and MediaWiki title (underscores allowed).
+    pub(crate) fn insert_title(&mut self, namespace: NamespaceID, title: &str) -> Result<()> {
+        let title = Title::new(title, namespace);
+        self.insert(PageKey {
+            namespace,
+            title: title.pretty().to_string(),
+        })
+    }
+
+    /// Adds an existing entry's identity.
+    pub(crate) fn insert_entry(&mut self, entry: &PageListEntry) -> Result<()> {
+        self.insert(PageKey::of(entry))
+    }
+
+    /// Materialises the keys as titles on a page list. Only for the rare path
+    /// that has to convert a large key set to another wiki; the resulting list
+    /// is as large as the key set.
+    pub fn to_page_list(&self) -> Result<PageList> {
+        let list = PageList::new_from_wiki(self.wiki.as_deref().unwrap_or_default());
+        if self.wiki.is_none() {
+            list.set_wiki(None);
+        }
+        let mut entries = HashSet::new();
+        if self.spilling {
+            for run in &self.runs {
+                let mut reader = RunReader::open(run)?;
+                while let Some(key) = reader.next_key()? {
+                    entries.insert(PageListEntry::new(Title::new(&key.title, key.namespace)));
+                }
+            }
+        } else {
+            for key in &self.mem {
+                entries.insert(PageListEntry::new(Title::new(&key.title, key.namespace)));
+            }
+        }
+        list.set_entries(entries);
+        Ok(list)
+    }
+
+    /// Converts the keys to `target_wiki` if they are on another wiki. Keys
+    /// cannot be converted in place, so this materialises a title-only page
+    /// list, converts it and spills it again.
+    pub async fn convert_to_wiki(
+        &mut self,
+        target_wiki: &str,
+        platform: &dyn crate::query_context::QueryContext,
+        limits: KeySetLimits,
+    ) -> Result<()> {
+        if self.wiki.is_none() || self.wiki.as_deref() == Some(target_wiki) {
+            return Ok(());
+        }
+        let list = self.to_page_list()?;
+        list.convert_to_wiki(target_wiki, platform).await?;
+        let mut converted = Self::from_pagelist(list, limits)?;
+        converted.wiki = Some(target_wiki.to_string());
+        *self = converted;
+        Ok(())
     }
 
     /// The number of keys inserted, including duplicates. Only for logging and
@@ -322,7 +411,7 @@ impl KeySet {
     }
 
     /// Flushes any partial run. Must be called before reading the set.
-    fn finish(mut self) -> Result<Self> {
+    pub(crate) fn finish(mut self) -> Result<Self> {
         if self.spilling {
             self.flush_run()?;
         }
@@ -391,7 +480,9 @@ impl KeySet {
     }
 
     pub fn union(self, other: Self, limits: KeySetLimits) -> Result<Self> {
+        let wiki = self.wiki.clone();
         let mut out = Self::with_limits(limits);
+        out.wiki = wiki;
         let mut left = self.into_sorted_iter()?;
         let mut right = other.into_sorted_iter()?;
         let mut a = left.next_key()?;
@@ -417,7 +508,9 @@ impl KeySet {
     }
 
     pub fn intersect(self, other: Self, limits: KeySetLimits) -> Result<Self> {
+        let wiki = self.wiki.clone();
         let mut out = Self::with_limits(limits);
+        out.wiki = wiki;
         let mut left = self.into_sorted_iter()?;
         let mut right = other.into_sorted_iter()?;
         let mut a = left.next_key()?;
@@ -437,7 +530,9 @@ impl KeySet {
     }
 
     pub fn difference(self, other: Self, limits: KeySetLimits) -> Result<Self> {
+        let wiki = self.wiki.clone();
         let mut out = Self::with_limits(limits);
+        out.wiki = wiki;
         let mut left = self.into_sorted_iter()?;
         let mut right = other.into_sorted_iter()?;
         let mut a = left.next_key()?;
@@ -692,6 +787,49 @@ mod tests {
         let set = key_set(&[], 100);
         assert!(!set.is_spilled());
         assert!(set.dir.is_none());
+    }
+
+    #[test]
+    fn to_page_list_preserves_titles_namespaces_and_wiki() {
+        let keys = key_set(&[(0, "A"), (4, "Project"), (0, "Äpfel")], 1);
+        assert_eq!(keys.wiki().as_deref(), Some("enwiki"));
+        let mut titles: Vec<(NamespaceID, String)> = keys
+            .to_page_list()
+            .unwrap()
+            .as_vec()
+            .iter()
+            .map(|entry| {
+                (
+                    entry.title().namespace_id(),
+                    entry.title().pretty().to_string(),
+                )
+            })
+            .collect();
+        titles.sort();
+        assert_eq!(
+            titles,
+            vec![
+                (0, "A".to_string()),
+                (0, "Äpfel".to_string()),
+                (4, "Project".to_string())
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn convert_to_wiki_noop_without_a_wiki() {
+        let limits = KeySetLimits { threshold: 10 };
+        let mut keys = KeySet::builder(limits, None);
+        keys.insert_title(0, "A").unwrap();
+        let mut keys = keys.finish().unwrap();
+        keys.convert_to_wiki(
+            "dewiki",
+            &crate::test_support::make_platform(vec![]),
+            limits,
+        )
+        .await
+        .unwrap();
+        assert_eq!(keys.wiki(), None);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::database_manager::DbCluster;
 use crate::datasource::{DataSource, MAX_SEED_PAGES, SQLtuple};
+use crate::key_set::{KeySet, KeySetLimits};
 use crate::pagelist::PageList;
 use crate::pagelist_entry::LinkCount;
 use crate::pagelist_entry::PageListEntry;
@@ -538,6 +539,14 @@ impl DataSource for SourceDatabase {
         self.external_seed = None;
         result
     }
+
+    async fn run_keyed(&mut self, platform: &Platform, limits: KeySetLimits) -> Result<KeySet> {
+        let result = self.get_pages_keyed(&platform.state(), limits).await?;
+        if result.inserted() == 0 {
+            platform.warn("<span tt='warn_categories'></span>".to_string())?;
+        }
+        Ok(result)
+    }
 }
 
 impl SourceDatabase {
@@ -921,6 +930,81 @@ impl SourceDatabase {
         Ok(ret)
     }
 
+    /// Key-only counterpart of [`Self::run_base_queries`]: streams every row
+    /// straight into a [`KeySet`] instead of building a page list per batch.
+    async fn run_base_queries_keyed(
+        &self,
+        state: &AppState,
+        params: &DsdbParams,
+        queries: Vec<SQLtuple>,
+        limit: usize,
+        limits: KeySetLimits,
+    ) -> Result<KeySet> {
+        let mut keys = KeySet::builder(limits, Some(params.wiki.clone()));
+        let mut total = 0_usize;
+        for sql in queries {
+            let remaining = limit.saturating_sub(total);
+            total += self
+                .stream_query_keys(state, params, sql, &mut keys, remaining, limit)
+                .await?;
+        }
+        Platform::profile("DSDB::run_base_queries_keyed", Some(total));
+        keys.finish()
+    }
+
+    /// Streams one base query's pages into `keys`, stopping one row past the
+    /// remaining budget so a query over the cap still fails like the list path.
+    async fn stream_query_keys(
+        &self,
+        state: &AppState,
+        params: &DsdbParams,
+        mut sql: SQLtuple,
+        keys: &mut KeySet,
+        remaining: usize,
+        limit: usize,
+    ) -> Result<usize> {
+        let (inline, deferred) =
+            params
+                .filters
+                .clone()
+                .split(state, &params.wiki, params.base_cluster)?;
+        if !deferred.is_empty() {
+            return Err(anyhow!("keyed source path cannot apply deferred filters"));
+        }
+        super::append_sql(&mut sql, inline);
+        self.get_pages_for_primary_having(&mut sql);
+        sql.0 += &format!(" LIMIT {}", remaining.saturating_add(1));
+        debug_assert!(
+            sql.placeholders_balanced(),
+            "unbalanced placeholders: {}",
+            sql.0
+        );
+
+        let mut conn = state
+            .get_wiki_db_connection_for_cluster(&params.wiki, params.base_cluster)
+            .await?;
+        let mut rows = conn
+            .exec_stream::<PrimaryResultRow, _, _>(sql.0.as_str(), my::Params::Positional(sql.1))
+            .await
+            .map_err(|e| anyhow!(e))?;
+
+        let mut count = 0_usize;
+        while let Some(row) = rows.next().await {
+            let (_page_id, title, namespace, _timestamp, _bytes, _links) =
+                row.map_err(|e| anyhow!(e))?;
+            keys.insert_title(namespace, &String::from_utf8_lossy(&title))?;
+            count += 1;
+            if count > remaining {
+                // One row past the budget is enough to know the query is over.
+                return Err(crate::pagelist::too_many_results(
+                    "this query yields",
+                    limit,
+                ));
+            }
+        }
+        Ok(count)
+    }
+
     async fn get_pages_initialize_query(
         &mut self,
         state: &AppState,
@@ -1088,29 +1172,11 @@ impl SourceDatabase {
         params: &DsdbParams,
         state: &AppState,
     ) -> Result<PageList> {
-        let category_batches = if self.params.use_new_category_mode {
-            helpers::iterate_category_batches(&self.cat_pos, 0)
-        } else {
-            vec![self.cat_pos.to_owned()]
-        };
-
+        let queries = self.category_queries(params);
         Platform::profile(
             "DSDB::get_pages [primary:categories] BATCHES begin",
-            Some(category_batches.len()),
+            Some(queries.len()),
         );
-        let queries: Vec<SQLtuple> = category_batches
-            .iter()
-            .flat_map(|category_batch| {
-                params.seed_chunks().into_iter().map(|seed| {
-                    self.category_batch_sql(
-                        params.base_cluster,
-                        &params.link_count_sql,
-                        category_batch,
-                        seed,
-                    )
-                })
-            })
-            .collect();
         let ret = self.run_base_queries(state, params, queries).await?;
         Platform::profile(
             "DSDB::get_pages [primary:categories] RESULTS end",
@@ -1317,7 +1383,16 @@ impl SourceDatabase {
         let params = self
             .get_pages_initialize_query(state, primary_pagelist)
             .await?;
+        self.get_pages_with_params(state, params, primary_pagelist)
+            .await
+    }
 
+    async fn get_pages_with_params(
+        &mut self,
+        state: &AppState,
+        params: DsdbParams,
+        primary_pagelist: Option<&PageList>,
+    ) -> Result<PageList> {
         match params.primary {
             Primary::Categories => {
                 return self.get_pages_categories(&params, state).await;
@@ -1334,7 +1409,15 @@ impl SourceDatabase {
             Primary::Templates | Primary::LinksFrom | Primary::CreatedBy | Primary::NoWikidata => {}
         }
 
-        let queries: Vec<SQLtuple> = params
+        let queries = Self::base_queries(&params);
+        self.run_base_queries(state, &params, queries).await
+    }
+
+    /// The `SELECT … FROM page` queries for the primaries that do not need a
+    /// category traversal. One per seed chunk; a single unrestricted query
+    /// without a seed.
+    fn base_queries(params: &DsdbParams) -> Vec<SQLtuple> {
+        params
             .seed_chunks()
             .into_iter()
             .map(|seed| {
@@ -1347,8 +1430,70 @@ impl SourceDatabase {
                 }
                 sql
             })
-            .collect();
-        self.run_base_queries(state, &params, queries).await
+            .collect()
+    }
+
+    /// Key-only counterpart of [`Self::get_pages`], for a source that feeds a
+    /// subtracted or intersected-away operand. Rows are streamed from MySQL
+    /// straight into a `KeySet`; neither the row vector nor a full page list is
+    /// built.
+    ///
+    /// Falls back to the normal path for shapes that need the rows as a set:
+    /// negative categories, deferred filters (they need the whole ID set) and
+    /// a pagelist primary.
+    ///
+    /// The streamed cap is [`crate::key_set::MAX_SPILLED_SOURCE_KEYS`], not
+    /// `max_result_entries`: the whole point is that a large intermediate can
+    /// be reduced by the following set operation. Memory stays bounded because
+    /// the key set spills to disk.
+    pub async fn get_pages_keyed(
+        &mut self,
+        state: &AppState,
+        limits: KeySetLimits,
+    ) -> Result<KeySet> {
+        let limit = crate::key_set::MAX_SPILLED_SOURCE_KEYS;
+        let params = self.get_pages_initialize_query(state, None).await?;
+        if !self.cat_neg.is_empty() || params.primary == Primary::Pagelist {
+            let list = self.get_pages_with_params(state, params, None).await?;
+            return KeySet::from_pagelist(list, limits);
+        }
+        let (_, deferred) =
+            params
+                .filters
+                .clone()
+                .split(state, &params.wiki, params.base_cluster)?;
+        if !deferred.is_empty() {
+            let list = self.get_pages_with_params(state, params, None).await?;
+            return KeySet::from_pagelist(list, limits);
+        }
+
+        let queries = match params.primary {
+            Primary::Categories => self.category_queries(&params),
+            _ => Self::base_queries(&params),
+        };
+        self.run_base_queries_keyed(state, &params, queries, limit, limits)
+            .await
+    }
+
+    fn category_queries(&self, params: &DsdbParams) -> Vec<SQLtuple> {
+        let category_batches = if self.params.use_new_category_mode {
+            helpers::iterate_category_batches(&self.cat_pos, 0)
+        } else {
+            vec![self.cat_pos.to_owned()]
+        };
+        category_batches
+            .iter()
+            .flat_map(|category_batch| {
+                params.seed_chunks().into_iter().map(|seed| {
+                    self.category_batch_sql(
+                        params.base_cluster,
+                        &params.link_count_sql,
+                        category_batch,
+                        seed,
+                    )
+                })
+            })
+            .collect()
     }
 
     /// Collects every filter clause the query's parameters ask for.

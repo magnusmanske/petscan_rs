@@ -21,6 +21,23 @@ pub(super) struct CombineStep {
     pub needs_entries: bool,
 }
 
+/// A data source's result as it enters the combination. Key-only sources may
+/// have streamed their rows straight to disk and never built a page list.
+#[derive(Debug)]
+pub(super) enum SourceResult {
+    Entries(PageList),
+    Keys(KeySet),
+}
+
+impl SourceResult {
+    pub(super) fn wiki(&self) -> Option<String> {
+        match self {
+            Self::Entries(list) => list.wiki(),
+            Self::Keys(keys) => keys.wiki(),
+        }
+    }
+}
+
 impl Platform {
     /// Maps each source that should run seeded to the source that supplies its
     /// seed. Only an intersection of two single-source branches is planned;
@@ -277,7 +294,7 @@ impl Platform {
 
     pub(super) async fn combine_results(
         &self,
-        results: &mut HashMap<String, PageList>,
+        results: &mut HashMap<String, SourceResult>,
         combination: Vec<CombineStep>,
     ) -> Result<PageList> {
         self.combine_results_with_limits(results, combination, KeySetLimits::from_env())
@@ -286,7 +303,7 @@ impl Platform {
 
     async fn combine_results_with_limits(
         &self,
-        results: &mut HashMap<String, PageList>,
+        results: &mut HashMap<String, SourceResult>,
         combination: Vec<CombineStep>,
         limits: KeySetLimits,
     ) -> Result<PageList> {
@@ -294,11 +311,22 @@ impl Platform {
         for step in combination {
             let combined = match step.instruction {
                 CombinationSequential::Source(source_key) => {
-                    let list = results
+                    let result = results
                         .remove(&source_key)
                         .ok_or_else(|| anyhow!("No result for source {source_key}"))?;
-                    self.source_register(list, step.needs_entries, &registers, limits)
-                        .await?
+                    match (step.needs_entries, result) {
+                        (true, SourceResult::Entries(list)) => Combined::Entries(list),
+                        (false, SourceResult::Keys(keys)) => Combined::Keys(keys),
+                        // A seeded target or a source without a streaming path
+                        // can still arrive as entries; it is converted to keys
+                        // lazily by the operation that consumes it.
+                        (false, SourceResult::Entries(list)) => Combined::Entries(list),
+                        (true, SourceResult::Keys(_)) => {
+                            return Err(anyhow!(
+                                "combine_results: source {source_key} is key-only but its entries are needed"
+                            ));
+                        }
+                    }
                 }
                 CombinationSequential::Union => {
                     let (left, right) = Self::pop_two(&mut registers, "Union")?;
@@ -331,37 +359,6 @@ impl Platform {
         ))
     }
 
-    /// Turns a source result into a register. A value that only feeds
-    /// membership is converted to keys (and spilled if large) so its entries
-    /// can be released immediately.
-    async fn source_register(
-        &self,
-        list: PageList,
-        needs_entries: bool,
-        registers: &[Combined],
-        limits: KeySetLimits,
-    ) -> Result<Combined> {
-        if needs_entries {
-            return Ok(Combined::Entries(list));
-        }
-        // The key-only side must be on the same wiki as the side it filters.
-        // Convert before dropping the entries, because keys can no longer be
-        // converted afterwards.
-        let target = registers.iter().rev().find_map(Combined::wiki);
-        if let Some(target_wiki) = target.as_deref() {
-            list.convert_to_wiki(target_wiki, self).await?;
-        }
-        let wiki = target.or_else(|| list.wiki());
-        if list.len() > limits.threshold {
-            let keys = run_blocking(move || KeySet::from_pagelist(list, limits)).await?;
-            Ok(Combined::Keys(keys, wiki))
-        } else {
-            // Small operands keep the old in-memory path; there is nothing to
-            // gain from a temp file.
-            Ok(Combined::Entries(list))
-        }
-    }
-
     async fn combine_union(
         &self,
         left: Combined,
@@ -378,10 +375,11 @@ impl Platform {
             left.union(right, Some(self)).await?;
             return Ok(Combined::Entries(left));
         }
-        let (left, wiki) = Self::into_keys(left, limits).await?;
-        let (right, _) = Self::into_keys(right, limits).await?;
+        let left = Self::into_keys(left, limits).await?;
+        let right = Self::into_keys(right, limits).await?;
+        let (left, right) = self.align_key_wikis(left, right, limits).await?;
         let keys = run_blocking(move || left.union(right, limits)).await?;
-        Ok(Combined::Keys(keys, wiki))
+        Ok(Combined::Keys(keys))
     }
 
     /// Intersection (`keep`) and difference (`!keep`). The retained side keeps
@@ -408,14 +406,18 @@ impl Platform {
                 Combined::Entries(other) => {
                     entries.difference(other, Some(self)).await?;
                 }
-                Combined::Keys(keys, _) => {
+                Combined::Keys(mut keys) => {
+                    if let Some(target) = entries.wiki() {
+                        keys.convert_to_wiki(&target, self, limits).await?;
+                    }
                     entries.retain_by_keys(keys, keep).await?;
                 }
             }
             return Ok(Combined::Entries(entries));
         }
-        let (left, wiki) = Self::into_keys(left, limits).await?;
-        let (right, _) = Self::into_keys(right, limits).await?;
+        let left = Self::into_keys(left, limits).await?;
+        let right = Self::into_keys(right, limits).await?;
+        let (left, right) = self.align_key_wikis(left, right, limits).await?;
         let keys = run_blocking(move || {
             if keep {
                 left.intersect(right, limits)
@@ -424,18 +426,31 @@ impl Platform {
             }
         })
         .await?;
-        Ok(Combined::Keys(keys, wiki))
+        Ok(Combined::Keys(keys))
+    }
+
+    /// Both key operands must be on one wiki before their identities are
+    /// compared. Converting is a no-op for the common same-wiki case.
+    async fn align_key_wikis(
+        &self,
+        mut left: KeySet,
+        mut right: KeySet,
+        limits: KeySetLimits,
+    ) -> Result<(KeySet, KeySet)> {
+        if let Some(target) = left.wiki().or_else(|| right.wiki()) {
+            left.convert_to_wiki(&target, self, limits).await?;
+            right.convert_to_wiki(&target, self, limits).await?;
+        }
+        Ok((left, right))
     }
 
     /// Converts a register to keys, whether it still holds entries or already
-    /// spilled, returning the wiki the keys are on.
-    async fn into_keys(value: Combined, limits: KeySetLimits) -> Result<(KeySet, Option<String>)> {
+    /// spilled.
+    async fn into_keys(value: Combined, limits: KeySetLimits) -> Result<KeySet> {
         match value {
-            Combined::Keys(keys, wiki) => Ok((keys, wiki)),
+            Combined::Keys(keys) => Ok(keys),
             Combined::Entries(list) => {
-                let wiki = list.wiki();
-                let keys = run_blocking(move || KeySet::from_pagelist(list, limits)).await?;
-                Ok((keys, wiki))
+                run_blocking(move || KeySet::from_pagelist(list, limits)).await
             }
         }
     }
@@ -445,16 +460,7 @@ impl Platform {
 /// set of page identities, possibly spilled to disk.
 enum Combined {
     Entries(PageList),
-    Keys(KeySet, Option<String>),
-}
-
-impl Combined {
-    fn wiki(&self) -> Option<String> {
-        match self {
-            Self::Entries(list) => list.wiki(),
-            Self::Keys(_, wiki) => wiki.clone(),
-        }
-    }
+    Keys(KeySet),
 }
 
 /// Runs blocking file I/O off the async runtime.
@@ -886,10 +892,10 @@ mod tests {
         titles
     }
 
-    fn results(entries: Vec<(&str, PageList)>) -> HashMap<String, PageList> {
+    fn results(entries: Vec<(&str, PageList)>) -> HashMap<String, SourceResult> {
         entries
             .into_iter()
-            .map(|(name, list)| (name.to_string(), list))
+            .map(|(name, list)| (name.to_string(), SourceResult::Entries(list)))
             .collect()
     }
 
@@ -974,5 +980,57 @@ mod tests {
             .unwrap();
 
         assert_eq!(titles(&combined), vec!["B", "C"]);
+    }
+
+    /// The right side may already be a spilled key set, as it is when the
+    /// source streamed its rows. The retained side still supplies the entries.
+    #[tokio::test]
+    async fn combine_intersection_uses_pre_streamed_keys() {
+        let left = page_list(&["A", "B", "C", "D"]);
+        let right = KeySet::from_pagelist(
+            page_list(&["B", "D", "E", "F"]),
+            KeySetLimits { threshold: 1 },
+        )
+        .unwrap();
+        assert!(right.is_spilled());
+        let combination = intersect(source("left"), source("right"));
+        let steps = Platform::serialize_combine_results(&combination).unwrap();
+        let mut results = HashMap::from([
+            ("left".to_string(), SourceResult::Entries(left)),
+            ("right".to_string(), SourceResult::Keys(right)),
+        ]);
+        let platform = make_platform(vec![]);
+
+        let combined = platform
+            .combine_results_with_limits(&mut results, steps, KeySetLimits { threshold: 2 })
+            .await
+            .unwrap();
+
+        assert_eq!(titles(&combined), vec!["B", "D"]);
+    }
+
+    /// A union inside a key-only branch is merged entirely from spilled sets.
+    #[tokio::test]
+    async fn combine_intersection_with_pre_streamed_union() {
+        let left = page_list(&["A", "B", "C"]);
+        let b = KeySet::from_pagelist(page_list(&["A", "B", "X"]), KeySetLimits { threshold: 1 })
+            .unwrap();
+        let c = KeySet::from_pagelist(page_list(&["B", "C", "Y"]), KeySetLimits { threshold: 1 })
+            .unwrap();
+        let combination = intersect(source("left"), union(source("b"), source("c")));
+        let steps = Platform::serialize_combine_results(&combination).unwrap();
+        let mut results = HashMap::from([
+            ("left".to_string(), SourceResult::Entries(left)),
+            ("b".to_string(), SourceResult::Keys(b)),
+            ("c".to_string(), SourceResult::Keys(c)),
+        ]);
+        let platform = make_platform(vec![]);
+
+        let combined = platform
+            .combine_results_with_limits(&mut results, steps, KeySetLimits { threshold: 2 })
+            .await
+            .unwrap();
+
+        assert_eq!(titles(&combined), vec!["A", "B", "C"]);
     }
 }

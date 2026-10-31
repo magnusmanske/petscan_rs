@@ -11,6 +11,7 @@ use crate::datasource::sitelinks::SourceSitelinks;
 use crate::datasource::sparql::SourceSparql;
 use crate::datasource::wikidata::SourceWikidata;
 use crate::form_parameters::FormParameters;
+use crate::key_set::KeySetLimits;
 use crate::pagelist::PageList;
 use crate::pagelist_entry::PageListSort;
 use crate::render::Render;
@@ -172,6 +173,21 @@ impl Platform {
         ret
     }
 
+    async fn run_source(
+        source: &mut (dyn DataSource + Send),
+        platform: &Platform,
+        keyed: bool,
+        limits: KeySetLimits,
+    ) -> Result<combine::SourceResult> {
+        if keyed {
+            Ok(combine::SourceResult::Keys(
+                source.run_keyed(platform, limits).await?,
+            ))
+        } else {
+            Ok(combine::SourceResult::Entries(source.run(platform).await?))
+        }
+    }
+
     #[instrument(skip_all, err(level = tracing::Level::INFO))]
     #[allow(clippy::default_constructed_unit_structs)]
     pub async fn run(&mut self) -> Result<()> {
@@ -210,7 +226,8 @@ impl Platform {
 
         // Plan before running. An intersection can restrict the expensive
         // source to the other side's keys, so the large result never has to be
-        // materialised. Unplanned sources keep the existing parallel run.
+        // materialised. Sources that only feed membership stream their rows
+        // straight into a spilled key set.
         self.combination = self.get_combination(&available_sources);
         let priorities: HashMap<String, Option<u8>> = sources
             .iter()
@@ -219,6 +236,19 @@ impl Platform {
             .collect();
         let seed_plan = Self::plan_seeds(&self.combination, &priorities);
         let deferred: HashSet<String> = seed_plan.keys().cloned().collect();
+        let seed_sources: HashSet<String> = seed_plan.values().cloned().collect();
+        let steps = Self::serialize_combine_results(&self.combination)?;
+        let key_limits = KeySetLimits::from_env();
+        let key_only: HashSet<String> = steps
+            .iter()
+            .filter(|step| !step.needs_entries)
+            .filter_map(|step| match &step.instruction {
+                crate::combination::CombinationSequential::Source(name) => Some(name.clone()),
+                _ => None,
+            })
+            // A seed must stay a page list: run_seeded consumes its titles.
+            .filter(|name| !seed_sources.contains(name))
+            .collect();
 
         Platform::profile("begin futures 1", None);
 
@@ -230,27 +260,33 @@ impl Platform {
                 if deferred.contains(&name) || !available_sources.contains(&name) {
                     continue;
                 }
+                let keyed = key_only.contains(&name);
                 eager_names.push(name);
-                futures.push(source.run(self));
+                futures.push(Self::run_source(source.as_mut(), self, keyed, key_limits));
             }
             iter(futures)
                 .buffered(MAX_CONCURRENT_SOURCES)
                 .collect()
                 .await
         };
-        let mut results: HashMap<String, PageList> = eager_names
+        let mut results: HashMap<String, combine::SourceResult> = eager_names
             .into_iter()
             .zip(source_results)
-            .map(|(name, result)| result.map(|pl| (name, pl)))
+            .map(|(name, result)| result.map(|result| (name, result)))
             .collect::<Result<_, _>>()?;
 
         // Run each planned source with its seed. The seed source has already
         // run; take its result out of the map for the duration so the target's
         // result can be inserted, then put it back for the final combination.
         for (target_name, seed_name) in seed_plan {
-            let mut seed = results.remove(&seed_name).ok_or_else(|| {
+            let seed = results.remove(&seed_name).ok_or_else(|| {
                 anyhow!("Seeded source {target_name}: no result for seed source {seed_name}")
             })?;
+            let combine::SourceResult::Entries(mut seed) = seed else {
+                return Err(anyhow!(
+                    "Seeded source {target_name}: seed source {seed_name} is key-only"
+                ));
+            };
             let position = sources
                 .iter()
                 .position(|source| source.name() == target_name)
@@ -269,13 +305,21 @@ impl Platform {
                     target.run(self).await?
                 }
             };
-            results.insert(seed_name, seed);
-            results.insert(target_name, seeded);
+            results.insert(seed_name, combine::SourceResult::Entries(seed));
+            // A seeded result is already bounded by the seed, so keep it as
+            // entries: the operation that consumes it still sees the same
+            // metadata and conversion path as before.
+            results.insert(target_name, combine::SourceResult::Entries(seeded));
         }
 
         let limit = self.state.max_result_entries();
-        for pagelist in results.values() {
-            pagelist.ensure_at_most(limit)?;
+        for result in results.values() {
+            // Key-only sources are deliberately allowed past the final cap:
+            // the following operation may reduce them to a small result. Their
+            // streaming path bounds them separately.
+            if let combine::SourceResult::Entries(list) = result {
+                list.ensure_at_most(limit)?;
+            }
         }
 
         self.wiki_by_source = results
@@ -285,10 +329,7 @@ impl Platform {
         Platform::profile("end futures 1", None);
 
         Platform::profile("before combine_results", None);
-        let serialized_combination = Self::serialize_combine_results(&self.combination)?;
-        let result = self
-            .combine_results(&mut results, serialized_combination)
-            .await?;
+        let result = self.combine_results(&mut results, steps).await?;
         drop(results);
         result.ensure_at_most(limit)?;
 
@@ -761,5 +802,54 @@ mod tests {
             vec![Title::new("Earth", 0), Title::new("Ayn Rand", 0)],
         )
         .await;
+    }
+
+    /// A difference whose right side is a large category source: that source
+    /// is key-only, so it streams rows into a `KeySet` instead of building a
+    /// page list. The retained page list and result are unchanged.
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
+    async fn test_difference_streams_keyed_category_source() {
+        let state = get_state().await;
+        let query = "language=en&project=wikipedia&format=json\
+                     &categories=American_actors%7C-1\
+                     &manual_list=Arnold%20Schwarzenegger%0AApple\
+                     &manual_list_wiki=enwiki\
+                     &source_combination=manual%20NOT%20categories";
+        let params = FormParameters::outcome_from_query(query).unwrap();
+        let mut platform = Platform::new_from_parameters(&params, state);
+        platform.run().await.unwrap();
+        let result = platform.result.unwrap();
+        assert_eq!(result.wiki().as_deref(), Some("enwiki"));
+        let titles: HashSet<String> = result
+            .as_vec()
+            .iter()
+            .map(|entry| entry.title().pretty().to_string())
+            .collect();
+        assert_eq!(titles, HashSet::from(["Apple".to_string()]));
+    }
+
+    /// The same shape with a source large enough to force the key set onto
+    /// disk; several sorted runs are written and merged.
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
+    async fn test_difference_streams_and_spills_a_large_source() {
+        let state = get_state().await;
+        let query = "language=en&project=wikipedia&format=json\
+                     &templates_any=Infobox%20person\
+                     &manual_list=Tom%20Hanks%0AApple\
+                     &manual_list_wiki=enwiki\
+                     &source_combination=manual%20NOT%20categories";
+        let params = FormParameters::outcome_from_query(query).unwrap();
+        let mut platform = Platform::new_from_parameters(&params, state);
+        platform.run().await.unwrap();
+        let result = platform.result.unwrap();
+        assert_eq!(result.wiki().as_deref(), Some("enwiki"));
+        let titles: HashSet<String> = result
+            .as_vec()
+            .iter()
+            .map(|entry| entry.title().pretty().to_string())
+            .collect();
+        assert_eq!(titles, HashSet::from(["Apple".to_string()]));
     }
 }

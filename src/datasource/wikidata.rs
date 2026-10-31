@@ -1,8 +1,10 @@
 use crate::datasource::{DataSource, MAX_SEED_PAGES, SQLtuple};
+use crate::key_set::{KeySet, KeySetLimits, MAX_SPILLED_SOURCE_KEYS};
 use crate::pagelist::PageList;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use futures::stream::StreamExt;
 use wikimisc::mysql_async::Value as MyValue;
 use wikimisc::mysql_async::from_row;
 use wikimisc::mysql_async::prelude::Queryable;
@@ -61,6 +63,37 @@ impl DataSource for SourceWikidata {
         sql.0 += ")";
         sql.1.extend(ids.into_iter().map(MyValue::UInt));
         self.run_sql_query(sql, platform).await
+    }
+
+    async fn run_keyed(&mut self, platform: &Platform, limits: KeySetLimits) -> Result<KeySet> {
+        let mut sql = Self::generate_sql_query(platform)?;
+        let limit = MAX_SPILLED_SOURCE_KEYS;
+        crate::datasource::append_limit(&mut sql, limit);
+        let mut conn = platform
+            .state()
+            .get_wiki_db_connection("wikidatawiki")
+            .await?;
+        let mut rows = conn
+            .exec_stream::<usize, _, _>(
+                sql.0.as_str(),
+                wikimisc::mysql_async::Params::Positional(sql.1),
+            )
+            .await
+            .map_err(|e| anyhow!(e))?;
+        let mut keys = KeySet::builder(limits, Some("wikidatawiki".to_string()));
+        let mut count = 0_usize;
+        while let Some(row) = rows.next().await {
+            let item_id = row.map_err(|e| anyhow!(e))?;
+            count += 1;
+            if count > limit {
+                return Err(crate::pagelist::too_many_results(
+                    "this Wikidata source query yields",
+                    limit,
+                ));
+            }
+            keys.insert_title(0, &format!("Q{item_id}"))?;
+        }
+        keys.finish()
     }
 }
 

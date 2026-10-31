@@ -6,6 +6,7 @@ pub mod sitelinks;
 pub mod sparql;
 pub mod wikidata;
 
+use crate::key_set::{KeySet, KeySetLimits};
 use crate::{pagelist::PageList, platform::Platform};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -64,6 +65,18 @@ pub trait DataSource {
         let result = self.run(platform).await?;
         result.retain_intersection(seed);
         Ok(result)
+    }
+
+    /// Runs the source when only page identity is needed (it feeds a
+    /// subtracted or intersected-away operand).
+    ///
+    /// The default materialises the full result and then converts it, which is
+    /// correct but does not reduce memory. Sources that can stream their rows
+    /// override this so the big intermediate never exists in memory; see
+    /// [`crate::datasource::database::SourceDatabase`].
+    async fn run_keyed(&mut self, platform: &Platform, limits: KeySetLimits) -> Result<KeySet> {
+        let result = self.run(platform).await?;
+        KeySet::from_pagelist(result, limits)
     }
 }
 
