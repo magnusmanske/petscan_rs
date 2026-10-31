@@ -93,6 +93,14 @@ pub fn append_sql(sql: &mut SQLtuple, mut sub: SQLtuple) {
     sql.1.append(&mut sub.1);
 }
 
+/// Appends `LIMIT limit + 1` to an SQL statement. The extra row lets callers
+/// tell "exactly the cap" from "too many" without reading an unbounded
+/// result — important for source queries that otherwise load every matching
+/// row into memory before the result cap is enforced.
+pub fn append_limit(sql: &mut SQLtuple, limit: usize) {
+    sql.0 += &format!(" LIMIT {}", limit.saturating_add(1));
+}
+
 // ─── tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -192,6 +200,21 @@ mod tests {
         assert!(!missing_value.placeholders_balanced());
         let extra_value = SQLtuple("x=1".to_string(), vec![MyValue::Bytes("y".into())]);
         assert!(!extra_value.placeholders_balanced());
+    }
+
+    #[test]
+    fn test_append_limit_is_one_past_the_cap() {
+        let mut sql = SQLtuple("SELECT 1".to_string(), vec![]);
+        append_limit(&mut sql, 1000);
+        assert_eq!(sql.0, "SELECT 1 LIMIT 1001");
+        assert!(sql.1.is_empty());
+    }
+
+    #[test]
+    fn test_append_limit_saturates_at_usize_max() {
+        let mut sql = SQLtuple("SELECT 1".to_string(), vec![]);
+        append_limit(&mut sql, usize::MAX);
+        assert_eq!(sql.0, format!("SELECT 1 LIMIT {}", usize::MAX));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::datasource::DataSource;
+use crate::datasource::{DataSource, SQLtuple};
 use crate::pagelist::PageList;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
@@ -38,7 +38,7 @@ impl SourceWikidata {
 
         let sites = super::prep_quote(&sites);
 
-        let mut sql = "SELECT ips_item_id FROM wb_items_per_site".to_string();
+        let mut sql = "SELECT DISTINCT ips_item_id FROM wb_items_per_site".to_string();
         if no_statements {
             sql += ",page_props,page";
         }
@@ -52,13 +52,21 @@ impl SourceWikidata {
     }
 
     async fn run_sql_query(&self, sql: &str, platform: &Platform) -> Result<PageList> {
+        let limit = platform.state().max_result_entries();
+        // Bound the query at the database, not after all rows are in memory:
+        // a source-site filter can match millions of items.
+        let mut sql = SQLtuple(sql.to_string(), vec![]);
+        crate::datasource::append_limit(&mut sql, limit);
         // Perform DB query
         let mut conn = platform
             .state()
             .get_wiki_db_connection("wikidatawiki")
             .await?;
         let rows = conn
-            .exec_iter(sql, ())
+            .exec_iter(
+                sql.0.as_str(),
+                wikimisc::mysql_async::Params::Positional(sql.1),
+            )
             .await
             .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<usize>)
@@ -66,6 +74,12 @@ impl SourceWikidata {
             .map_err(|e| anyhow!(e))?;
         // `conn` is pooled; drop returns it.
         drop(conn);
+        if rows.len() > limit {
+            return Err(crate::pagelist::too_many_results(
+                "this Wikidata source query yields",
+                limit,
+            ));
+        }
         let ret = PageList::new_from_wiki("wikidatawiki");
         for ips_item_id in rows {
             let term_full_entity_id = format!("Q{ips_item_id}");
@@ -124,7 +138,7 @@ mod tests {
         let sql = SourceWikidata::generate_sql_query(&p).unwrap();
         assert_eq!(
             sql,
-            "SELECT ips_item_id FROM wb_items_per_site WHERE ips_site_id IN (?,?)"
+            "SELECT DISTINCT ips_item_id FROM wb_items_per_site WHERE ips_site_id IN (?,?)"
         );
     }
 
@@ -134,7 +148,7 @@ mod tests {
         let sql = SourceWikidata::generate_sql_query(&p).unwrap();
         assert_eq!(
             sql,
-            "SELECT ips_item_id FROM wb_items_per_site WHERE ips_site_id IN (?)"
+            "SELECT DISTINCT ips_item_id FROM wb_items_per_site WHERE ips_site_id IN (?)"
         );
     }
 
@@ -147,7 +161,7 @@ mod tests {
         let sql = SourceWikidata::generate_sql_query(&p).unwrap();
         assert_eq!(
             sql,
-            "SELECT ips_item_id FROM wb_items_per_site,page_props,page \
+            "SELECT DISTINCT ips_item_id FROM wb_items_per_site,page_props,page \
              WHERE ips_site_id IN (?) \
              AND page_namespace=0 \
              AND ips_item_id=substr(page_title,2)*1 \

@@ -406,6 +406,9 @@ impl Platform {
 
         self.apply_page_enrichments(result).await?;
         self.apply_text_filters_and_creator(result).await?;
+        // Backstop: filters that add pages (subpages, redlinks) can grow the
+        // list after the source-level caps have run.
+        result.ensure_at_most(self.state.max_result_entries())?;
         Ok(())
     }
 
@@ -566,9 +569,18 @@ impl Platform {
             .await
             .map_err(|e| anyhow!(e))?;
 
+        let limit = self.state.max_result_entries();
         for sql in batches {
             self.process_redlinks_batch(&mut conn, sql, &mut redlink_counter)
                 .await?;
+            // The final list is the redlink map, so an unbounded expansion
+            // here would blow up memory before the filter can shrink it.
+            if redlink_counter.len() > limit {
+                return Err(crate::pagelist::too_many_results(
+                    "the redlinks of this query yield",
+                    limit,
+                ));
+            }
         }
 
         let min_redlinks = self
@@ -629,6 +641,7 @@ impl Platform {
     /// Queries the wiki DB and adds subpages of every entry in `result`.
     async fn add_subpages_from_db(&self, result: &PageList) -> Result<()> {
         let title_ns = result.to_titles_namespaces();
+        let limit = self.state.max_result_entries();
         let wiki = result
             .wiki()
             .ok_or_else(|| anyhow!("Platform::process_subpages: no wiki set in result"))?
@@ -656,6 +669,9 @@ impl Platform {
             for (page_title, page_namespace) in rows {
                 let page_title = String::from_utf8_lossy(&page_title);
                 result.add_entry(PageListEntry::new(Title::new(&page_title, page_namespace)));
+                // One page can have millions of subpages; stop as soon as the
+                // list outgrows the result cap rather than after the query.
+                result.ensure_at_most(limit)?;
             }
         }
         Ok(())

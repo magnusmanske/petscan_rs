@@ -25,8 +25,15 @@ impl DataSource for SourceSitelinks {
     }
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList> {
+        let limit = platform.state().max_result_entries();
         let sql = self.generate_sql_query(platform)?;
-        let rows = self.get_result_rows(platform, sql).await?;
+        let rows = self.get_result_rows(platform, sql, limit).await?;
+        if rows.len() > limit {
+            return Err(crate::pagelist::too_many_results(
+                "this sitelinks query yields",
+                limit,
+            ));
+        }
         let ret = PageList::new_from_wiki_with_capacity(&self.main_wiki, rows.len());
         if self.use_min_max {
             ret.set_has_sitelink_counts(true);
@@ -140,8 +147,12 @@ impl SourceSitelinks {
     async fn get_result_rows(
         &self,
         platform: &Platform,
-        sql: SQLtuple,
+        mut sql: SQLtuple,
+        limit: usize,
     ) -> Result<Vec<(Vec<u8>, u32)>> {
+        // Without this, a sitelinks filter can load every matching page of a
+        // large wiki into memory before the result cap is checked.
+        crate::datasource::append_limit(&mut sql, limit);
         // `page` is on the links cluster too, so the langlinks join still
         // works on a wiki whose links tables were split off.
         let mut conn = platform

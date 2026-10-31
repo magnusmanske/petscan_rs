@@ -39,6 +39,9 @@ impl DataSource for SourceSearch {
             Ok(max) => max,
             Err(e) => return Err(anyhow!(e)),
         };
+        // Never ask the API for more than the query result cap; anything past
+        // it would only be loaded and then rejected.
+        let max = max.min(platform.state().max_result_entries());
         let api = platform.state().get_api_for_wiki(wiki.to_string()).await?;
         let srlimit = if max > 500 { 500 } else { max };
         let srlimit = srlimit.to_string();
