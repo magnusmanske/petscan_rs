@@ -112,16 +112,47 @@ not lower the measured peak anyway. Streaming the membership-only side covers
 where the large intermediates actually occur.
 
 Remaining scope: the **retained** side of an intersection/difference still
-materialises. `big ∩ small` is handled by step 1's seed push-down; `big −
-small` would benefit from a negative seed (exclude the small side in SQL) in a
-future step.
+materialises. `big ∩ small` is handled by step 1's seed push-down.
 
-### 4. Streaming output (last, as agreed)
+#### Negative seed for `big − small` (investigated, not implemented)
 
-Output is the last full-size copy. CSV/TSV/JSONL/plain can stream entry by
-entry; JSON needs a streaming writer; HTML is already capped at 10k rows.
-Streaming does not bound the set; pair it with external sort if large final
-results are ever allowed.
+A negative seed would run the small side first and add `page_id NOT IN (…)`
+to the retained side's SQL. It is **not worth the complexity**:
+
+- If the subtracted side is small, `A − B ≈ A`, so the result is still large.
+  Excluding a few thousand IDs neither lowers the peak meaningfully nor brings
+  the result under the cap; it can only rescue a narrow case where `A` is just
+  over the cap and `B` covers the excess.
+- If `B` is large enough to make `A − B` small, `B` has too many IDs for one
+  `NOT IN` list (placeholder/packet limits), and the replicas are read-only so
+  a join table cannot carry them. Chunking millions of IDs makes the query
+  slower than the in-memory difference.
+- The supported small-side exclusion (`negcats`) already uses the cheaper of
+  the two sides in `subtract_negative_categories`.
+
+The real lever for a large retained side is a full-entry disk store, only
+triggered if metrics show large retained results surviving to the cap. Until
+then, a `big − small` result is large by definition and hits the final cap
+anyway.
+
+### 4. Streaming output (implemented last)
+
+Output used to be the last full-size copy: the result list was formatted into
+one `String` (and, for JSON, first into a `serde_json::Value` tree).
+
+- `Platform::get_streaming_response` sorts the result as before, then hands the
+  pages to a renderer that emits chunks. The webserver sends them with
+  `Body::from_stream`; the admission-control permit travels with the stream so
+  a slow download still counts as a running request.
+- Streamed formats: CSV/TSV, plain, wikitext, JSON and JSONL. HTML (already
+  capped at 10k rows), KML, PagePile and pretty JSON stay buffered.
+- Chunks are ~64 KB. Results below `STREAMING_THRESHOLD` (10k pages, overridable
+  with `PETSCAN_STREAM_THRESHOLD`) keep the buffered path, where the task and
+  chunk overhead would outweigh the allocation saved.
+- The CLI writes stream chunks to stdout, so local runs and benchmarks exercise
+  the same path.
+- Streaming does not bound the result set; the sorted page vector is still in
+  memory. Pair it with an external sort only if the final cap is ever raised.
 
 ## Rejected options
 
@@ -214,6 +245,23 @@ it, and now streams in ~55 MB.
 All 33 live tests pass, including new cases that exercise the streamed
 category source and a 676k-row spill.
 
+## Measured effect of step 4 (2026-10-31)
+
+Release build, live replicas, 50,640 `American_actors` depth 3 pages, same
+parsed result:
+
+| format | buffered | streamed | peak RSS |
+|---|---|---|---|
+| JSON | 34.8 s | 32.6 s | **192 MB → 68 MB** |
+| CSV | 34.3 s | 34.1 s | 67 MB → 67 MB |
+
+The JSON drop is the `serde_json::Value` tree plus the joined string; streaming
+serialises one entry at a time. CSV's document is only ~3 MB here and the
+source/result peak already dominates, so RSS is flat; the win is time to first
+byte and no second full copy of the document. Output was verified by parsing
+both JSON documents and comparing all 50,640 entries (the CSV bytes differ only
+where a live page changed between runs).
+
 ## Metrics to watch
 
 - `petscan_result_entries` (final list size) and
@@ -228,3 +276,5 @@ category source and a 676k-row spill.
 - `feat/seed-intersections`: step 1, stacked on the above.
 - `feat/key-spill`: step 2 (key-only spill in the combination) and step 3
   (stream each membership-only source into that store).
+- `feat/stream-output`: step 4 (streamed rendering) plus the negative-seed
+  investigation and its rejection.
