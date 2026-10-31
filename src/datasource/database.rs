@@ -491,16 +491,29 @@ impl DataSource for SourceDatabase {
         Some(0)
     }
 
-    async fn run_seeded(&mut self, platform: &Platform, seed: &PageList) -> Result<PageList> {
+    async fn run_seeded(&mut self, platform: &Platform, seed: &mut PageList) -> Result<PageList> {
         let Some(wiki) = self.params.wiki.clone().or_else(|| seed.wiki()) else {
             return self.run(platform).await;
         };
-        // The combination layer handles cross-wiki intersections by converting
-        // the seed; restricting by title here would compare the wrong wiki.
+        if seed.len() > MAX_SEED_PAGES {
+            return self.run(platform).await;
+        }
+        if seed.wiki().is_none() && !seed.is_empty() {
+            return self.run(platform).await;
+        }
         if let Some(seed_wiki) = seed.wiki()
             && seed_wiki != wiki
         {
-            return self.run(platform).await;
+            // Convert the small side. On failure keep the original seed and
+            // let the combination layer handle the cross-wiki intersection.
+            let converted = seed.clone();
+            match converted.convert_to_wiki(&wiki, platform).await {
+                Ok(()) => *seed = converted,
+                Err(error) => {
+                    debug!("Could not convert seed to {wiki}: {error:#}");
+                    return self.run(platform).await;
+                }
+            }
         }
         let titles = seed.to_titles_namespaces();
         if titles.is_empty() {

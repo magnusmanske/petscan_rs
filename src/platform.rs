@@ -248,7 +248,7 @@ impl Platform {
         // run; take its result out of the map for the duration so the target's
         // result can be inserted, then put it back for the final combination.
         for (target_name, seed_name) in seed_plan {
-            let seed = results.remove(&seed_name).ok_or_else(|| {
+            let mut seed = results.remove(&seed_name).ok_or_else(|| {
                 anyhow!("Seeded source {target_name}: no result for seed source {seed_name}")
             })?;
             let position = sources
@@ -260,7 +260,7 @@ impl Platform {
                 &format!("seeding {target_name} from {seed_name}"),
                 Some(seed.len()),
             );
-            let seeded = match target.run_seeded(self, &seed).await {
+            let seeded = match target.run_seeded(self, &mut seed).await {
                 Ok(result) => result,
                 Err(error) => {
                     tracing::warn!(

@@ -29,11 +29,24 @@ impl DataSource for SourceWikidata {
         Some(1)
     }
 
-    async fn run_seeded(&mut self, platform: &Platform, seed: &PageList) -> Result<PageList> {
-        // Other wikis are converted by the combination layer; their titles are
-        // not item IDs.
-        if seed.wiki().as_deref() != Some("wikidatawiki") {
+    async fn run_seeded(&mut self, platform: &Platform, seed: &mut PageList) -> Result<PageList> {
+        if seed.len() > MAX_SEED_PAGES {
             return self.run(platform).await;
+        }
+        let Some(seed_wiki) = seed.wiki() else {
+            return self.run(platform).await;
+        };
+        if seed_wiki != "wikidatawiki" {
+            // Convert the small side; a failed conversion leaves the original
+            // seed intact for the combination layer.
+            let converted = seed.clone();
+            match converted.convert_to_wiki("wikidatawiki", platform).await {
+                Ok(()) => *seed = converted,
+                Err(error) => {
+                    tracing::debug!("Could not convert seed to wikidatawiki: {error:#}");
+                    return self.run(platform).await;
+                }
+            }
         }
         let ids = item_ids_from_seed(seed);
         if ids.is_empty() {

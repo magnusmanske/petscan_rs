@@ -93,6 +93,18 @@ pub struct PageList {
     has_sitelink_counts: RwLock<bool>,
 }
 
+impl Clone for PageList {
+    /// Deep copy, used by the intersection planner to convert a seed to
+    /// another wiki without risking the original on a conversion error.
+    fn clone(&self) -> Self {
+        Self {
+            wiki: RwLock::new(self.wiki()),
+            entries: RwLock::new(self.as_vec().into_iter().collect()),
+            has_sitelink_counts: RwLock::new(self.has_sitelink_counts()),
+        }
+    }
+}
+
 impl PageList {
     pub fn new_from_wiki(wiki: &str) -> Self {
         Self {
@@ -1196,6 +1208,22 @@ mod tests {
         assert_eq!(pl1.len(), 1); // Only Foo
         let entries = pl1.as_vec();
         assert_eq!(entries[0].title().pretty(), "Foo");
+    }
+
+    #[test]
+    fn test_clone_is_independent() {
+        let original = PageList::new_from_wiki("enwiki");
+        original.add_entry(make_entry("Foo", 0));
+        original.set_has_sitelink_counts(true);
+
+        let copy = original.clone();
+        original.add_entry(make_entry("Bar", 0));
+        original.set_wiki(Some("dewiki".to_string()));
+        original.set_has_sitelink_counts(false);
+
+        assert_eq!(copy.len(), 1);
+        assert_eq!(copy.wiki(), Some("enwiki".to_string()));
+        assert!(copy.has_sitelink_counts());
     }
 
     #[test]

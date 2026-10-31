@@ -56,8 +56,11 @@ pub trait DataSource {
     /// The default is correct but not an optimisation: it runs the source in
     /// full and keeps the intersection. Sources that can push the restriction
     /// into their query override this, and must fall back to an unrestricted
-    /// run whenever the seed is too large or on another wiki.
-    async fn run_seeded(&mut self, platform: &Platform, seed: &PageList) -> Result<PageList> {
+    /// run whenever the seed is too large.
+    ///
+    /// `seed` is mutable so a target on another wiki can convert it first
+    /// (the conversion is what makes `SPARQL ∩ categories` cheap).
+    async fn run_seeded(&mut self, platform: &Platform, seed: &mut PageList) -> Result<PageList> {
         let result = self.run(platform).await?;
         result.retain_intersection(seed);
         Ok(result)
