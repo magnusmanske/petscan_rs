@@ -3,7 +3,7 @@ use crate::pagelist::PageList;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 pub(super) static RE_PARSE_COMBINATION: LazyLock<Regex> = LazyLock::new(|| {
@@ -12,6 +12,67 @@ pub(super) static RE_PARSE_COMBINATION: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 impl Platform {
+    /// Maps each source that should run seeded to the source that supplies its
+    /// seed. Only an intersection of two single-source branches is planned;
+    /// other shapes keep the materialise-then-combine path.
+    ///
+    /// `priorities` gives [`crate::datasource::DataSource::seed_priority`] per
+    /// source. A lower value is the more expensive side and therefore the
+    /// preferred target for a seed.
+    pub(super) fn plan_seeds(
+        combination: &Combination,
+        priorities: &HashMap<String, Option<u8>>,
+    ) -> HashMap<String, String> {
+        let mut plan = HashMap::new();
+        Self::collect_seed_candidates(combination, priorities, &mut plan);
+        // A seed must itself run eagerly. Drop chained targets (A seeded by B,
+        // B seeded by C) until only eager seeds remain; a cycle drops entirely.
+        loop {
+            let deferred: HashSet<String> = plan.keys().cloned().collect();
+            let before = plan.len();
+            plan.retain(|_, seed| !deferred.contains(seed));
+            if plan.len() == before {
+                break;
+            }
+        }
+        plan
+    }
+
+    fn collect_seed_candidates(
+        node: &Combination,
+        priorities: &HashMap<String, Option<u8>>,
+        plan: &mut HashMap<String, String>,
+    ) {
+        match node {
+            Combination::Intersection((left, right)) => {
+                if let (Combination::Source(a), Combination::Source(b)) =
+                    (left.as_ref(), right.as_ref())
+                    && a != b
+                {
+                    let pa = priorities.get(a).copied().flatten();
+                    let pb = priorities.get(b).copied().flatten();
+                    let target_seed = match (pa, pb) {
+                        (Some(pa), Some(pb)) if pa <= pb => Some((a, b)),
+                        (Some(_), Some(_)) => Some((b, a)),
+                        (Some(_), None) => Some((a, b)),
+                        (None, Some(_)) => Some((b, a)),
+                        (None, None) => None,
+                    };
+                    if let Some((target, seed)) = target_seed {
+                        plan.entry(target.clone()).or_insert_with(|| seed.clone());
+                    }
+                }
+                Self::collect_seed_candidates(left, priorities, plan);
+                Self::collect_seed_candidates(right, priorities, plan);
+            }
+            Combination::Union((left, right)) | Combination::Not((left, right)) => {
+                Self::collect_seed_candidates(left, priorities, plan);
+                Self::collect_seed_candidates(right, priorities, plan);
+            }
+            Combination::Source(_) | Combination::None => {}
+        }
+    }
+
     /// Extracts the content between the leading `(` and matching `)` from `parts`,
     /// consuming tokens from `parts` as it goes. Returns `None` on unbalanced parens.
     fn extract_parenthesized(parts: &mut Vec<String>) -> Option<String> {
@@ -467,5 +528,92 @@ mod tests {
         let mut parts: Vec<String> = vec![];
         let result = Platform::extract_parenthesized(&mut parts);
         assert!(result.is_none());
+    }
+
+    // ── seed planning ────────────────────────────────────────────────────────
+
+    fn source(name: &str) -> Combination {
+        Combination::Source(name.to_string())
+    }
+
+    fn intersect(a: Combination, b: Combination) -> Combination {
+        Combination::Intersection((Box::new(a), Box::new(b)))
+    }
+
+    fn union(a: Combination, b: Combination) -> Combination {
+        Combination::Union((Box::new(a), Box::new(b)))
+    }
+
+    fn priorities(entries: &[(&str, Option<u8>)]) -> HashMap<String, Option<u8>> {
+        entries
+            .iter()
+            .map(|(name, priority)| ((*name).to_string(), *priority))
+            .collect()
+    }
+
+    #[test]
+    fn plan_seeds_database_from_non_seedable_side() {
+        let p = priorities(&[("categories", Some(0)), ("manual", None)]);
+        for tree in [
+            intersect(source("categories"), source("manual")),
+            intersect(source("manual"), source("categories")),
+        ] {
+            let plan = Platform::plan_seeds(&tree, &p);
+            assert_eq!(plan.len(), 1);
+            assert_eq!(plan.get("categories"), Some(&"manual".to_string()));
+        }
+    }
+
+    #[test]
+    fn plan_seeds_prefers_the_expensive_side() {
+        // Both can be seeded; the lower priority value (categories) is the
+        // expensive side and should be restricted by the other.
+        let p = priorities(&[("categories", Some(0)), ("wikidata", Some(1))]);
+        for tree in [
+            intersect(source("categories"), source("wikidata")),
+            intersect(source("wikidata"), source("categories")),
+        ] {
+            let plan = Platform::plan_seeds(&tree, &p);
+            assert_eq!(plan.get("categories"), Some(&"wikidata".to_string()));
+        }
+    }
+
+    #[test]
+    fn plan_seeds_needs_one_seedable_side() {
+        let p = priorities(&[("sparql", None), ("manual", None)]);
+        let tree = intersect(source("sparql"), source("manual"));
+        assert!(Platform::plan_seeds(&tree, &p).is_empty());
+    }
+
+    #[test]
+    fn plan_seeds_drops_chained_targets() {
+        // (a ∩ b) ∩ (b ∩ c): the inner plans are a←b and b←c. b is itself
+        // deferred, so a←b must be dropped and a runs eagerly.
+        let p = priorities(&[("a", Some(0)), ("b", Some(1)), ("c", Some(1))]);
+        let tree = intersect(
+            intersect(source("a"), source("b")),
+            intersect(source("b"), source("c")),
+        );
+        let plan = Platform::plan_seeds(&tree, &p);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan.get("b"), Some(&"c".to_string()));
+    }
+
+    #[test]
+    fn plan_seeds_recurses_into_union() {
+        let p = priorities(&[("categories", Some(0)), ("manual", None), ("search", None)]);
+        let tree = union(
+            intersect(source("categories"), source("manual")),
+            source("search"),
+        );
+        let plan = Platform::plan_seeds(&tree, &p);
+        assert_eq!(plan.get("categories"), Some(&"manual".to_string()));
+    }
+
+    #[test]
+    fn plan_seeds_ignores_self_intersection() {
+        let p = priorities(&[("categories", Some(0))]);
+        let tree = intersect(source("categories"), source("categories"));
+        assert!(Platform::plan_seeds(&tree, &p).is_empty());
     }
 }

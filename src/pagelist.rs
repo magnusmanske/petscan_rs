@@ -138,6 +138,14 @@ impl PageList {
         write_lock(&self.entries).retain(f);
     }
 
+    /// Keeps only entries also present in `other`, borrowing `other`'s set
+    /// instead of consuming it. Used where a seed list must stay available for
+    /// the final set operation.
+    pub fn retain_intersection(&self, other: &PageList) {
+        let other_entries = read_lock(&other.entries);
+        write_lock(&self.entries).retain(|entry| other_entries.contains(entry));
+    }
+
     pub fn get_entry(&self, entry: &PageListEntry) -> Option<PageListEntry> {
         self.entries.read().ok()?.get(entry).cloned()
     }
@@ -1188,6 +1196,21 @@ mod tests {
         assert_eq!(pl1.len(), 1); // Only Foo
         let entries = pl1.as_vec();
         assert_eq!(entries[0].title().pretty(), "Foo");
+    }
+
+    #[test]
+    fn test_retain_intersection_borrows_other() {
+        let pl1 = PageList::new_from_wiki("enwiki");
+        pl1.add_entry(make_entry("Foo", 0));
+        pl1.add_entry(make_entry("Bar", 0));
+
+        let pl2 = PageList::new_from_wiki("enwiki");
+        pl2.add_entry(make_entry("Bar", 0));
+        pl2.add_entry(make_entry("Baz", 0));
+
+        pl1.retain_intersection(&pl2);
+        assert_eq!(pl1.len(), 1);
+        assert_eq!(pl2.len(), 2, "the seed must stay intact");
     }
 
     #[test]

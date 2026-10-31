@@ -1,7 +1,6 @@
 use crate::app_state::AppState;
 use crate::database_manager::DbCluster;
-use crate::datasource::DataSource;
-use crate::datasource::SQLtuple;
+use crate::datasource::{DataSource, MAX_SEED_PAGES, SQLtuple};
 use crate::pagelist::PageList;
 use crate::pagelist_entry::LinkCount;
 use crate::pagelist_entry::PageListEntry;
@@ -34,18 +33,6 @@ const MAX_SUBCATEGORIES_IN_TREE: usize = 500000;
 
 /// Excluded categories per statement when applying negative categories.
 const NEGATIVE_CATEGORY_BATCH_SIZE: usize = MAX_CATEGORY_BATCH_SIZE * 10;
-
-/// The most pages a [`Filter::seed`] may name and still restrict the base
-/// query.
-///
-/// A seeded base query costs one statement per [`PAGE_BATCH_SIZE`] seed
-/// pages (per category batch), each a random-access probe of the links
-/// tables — on Commons roughly 1.5 s per statement. An unseeded one costs
-/// its full result set, then that many rows again in the deferred pass. The
-/// cap keeps a seed from being applied where it would be the larger side:
-/// Commons creates about 55 000 pages a day, so this admits a "created in
-/// the last few days" window and rejects a "last edited this month" one.
-const MAX_SEED_PAGES: usize = 150_000;
 
 /// The tables each family of filter clauses reads besides `page`. Named so a
 /// clause and the cluster it can run on cannot drift apart.
@@ -468,6 +455,9 @@ pub struct SourceDatabase {
     /// (namespace stripped, underscores), resolved from Q6964088 when
     /// `skip_tracking_categories` is requested. `None` = no filtering.
     tracking_category_local: Option<String>,
+    /// Page IDs the current run is restricted to by an intersection seed.
+    /// Taken by `get_pages_initialize_query`; `None` for a normal run.
+    external_seed: Option<Vec<u32>>,
 }
 
 #[async_trait]
@@ -494,6 +484,47 @@ impl DataSource for SourceDatabase {
         }
         Ok(ret)
     }
+
+    fn seed_priority(&self) -> Option<u8> {
+        // The database source is the expensive side: it is the one worth
+        // restricting to an intersection partner's keys.
+        Some(0)
+    }
+
+    async fn run_seeded(&mut self, platform: &Platform, seed: &PageList) -> Result<PageList> {
+        let Some(wiki) = self.params.wiki.clone().or_else(|| seed.wiki()) else {
+            return self.run(platform).await;
+        };
+        // The combination layer handles cross-wiki intersections by converting
+        // the seed; restricting by title here would compare the wrong wiki.
+        if let Some(seed_wiki) = seed.wiki()
+            && seed_wiki != wiki
+        {
+            return self.run(platform).await;
+        }
+        let titles = seed.to_titles_namespaces();
+        if titles.is_empty() {
+            return Ok(PageList::new_from_wiki(&wiki));
+        }
+        // Beyond the seed cap the seed is the larger side; run unseeded.
+        if titles.len() > MAX_SEED_PAGES {
+            return self.run(platform).await;
+        }
+        let ids = Self::page_ids_for_titles(&platform.state(), &wiki, &titles).await?;
+        if ids.len() > MAX_SEED_PAGES {
+            return self.run(platform).await;
+        }
+        if ids.is_empty() {
+            return Ok(PageList::new_from_wiki(&wiki));
+        }
+        if self.params.wiki.is_none() {
+            self.params.wiki = Some(wiki);
+        }
+        self.external_seed = Some(ids);
+        let result = self.run(platform).await;
+        self.external_seed = None;
+        result
+    }
 }
 
 impl SourceDatabase {
@@ -506,7 +537,41 @@ impl SourceDatabase {
             params,
             talk_namespace_ids: String::new(),
             tracking_category_local: None,
+            external_seed: None,
         }
+    }
+
+    /// Resolves seed titles to page IDs on `wiki`, grouped by namespace so
+    /// every statement can use the `(page_namespace, page_title)` index.
+    async fn page_ids_for_titles(
+        state: &AppState,
+        wiki: &str,
+        titles: &[(String, NamespaceID)],
+    ) -> Result<Vec<u32>> {
+        let mut by_ns: HashMap<NamespaceID, Vec<String>> = HashMap::new();
+        for (title, namespace_id) in titles {
+            by_ns.entry(*namespace_id).or_default().push(title.clone());
+        }
+        let mut conn = state.get_wiki_db_connection(wiki).await?;
+        let mut ret = Vec::with_capacity(titles.len());
+        for (namespace_id, ns_titles) in by_ns {
+            for chunk in ns_titles.chunks(PAGE_BATCH_SIZE) {
+                let mut sql = sql_text(&format!(
+                    "SELECT page_id FROM page WHERE page_namespace={namespace_id} AND page_title IN ("
+                ));
+                super::append_sql(&mut sql, super::prep_quote(chunk));
+                sql.0 += ")";
+                let ids = conn
+                    .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
+                    .await
+                    .map_err(|e| anyhow!(e))?
+                    .map_and_drop(from_row::<u32>)
+                    .await
+                    .map_err(|e| anyhow!(e))?;
+                ret.extend(ids);
+            }
+        }
+        Ok(ret)
     }
 
     /// Resolve the wiki-local name of the "tracking categories" container
@@ -917,10 +982,15 @@ impl SourceDatabase {
         let filters = self.collect_filters(primary, api);
         let base_cluster = filters.base_cluster(state, &wiki, &self.base_query_tables(primary));
         // A pagelist is already narrowed to its titles; a seed would only add
-        // a query.
+        // a query. An external seed from an intersection takes precedence over
+        // the deferred-filter seed: it is the caller's restriction, while the
+        // filter seed is only a cost optimisation.
         let seed = match primary {
             Primary::Pagelist => None,
-            _ => Self::fetch_seed(state, &wiki, &filters, base_cluster).await?,
+            _ => match self.external_seed.take() {
+                Some(ids) => Some(ids),
+                None => Self::fetch_seed(state, &wiki, &filters, base_cluster).await?,
+            },
         };
 
         Ok(DsdbParams {

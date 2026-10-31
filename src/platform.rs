@@ -179,10 +179,9 @@ impl Platform {
         let start_time = SystemTime::now();
         self.output_redlinks = self.has_param("show_redlinks");
 
-        // Primary data sources, evaluated in order. Each is tried via its
-        // `can_run` gate; the ones whose gates pass contribute a name and
-        // a future to the parallel batch below. Order matters because the
-        // names line up with `source_results` for `combine_results`.
+        // Primary data sources, in declaration order. Sources whose `can_run`
+        // gate passes are available; the combination decides which of them run
+        // eagerly and which run seeded below.
         let mut sources: Vec<Box<dyn DataSource + Send>> = vec![
             Box::new(SourceDatabase::new(
                 SourceDatabaseParameters::db_params(self).await,
@@ -194,41 +193,86 @@ impl Platform {
             Box::new(SourceWikidata::default()),
         ];
         // Sitelinks is a fallback that only runs when no other source applies.
-        // It is declared up here (before `futures`) so its drop order is
-        // strictly after `futures` — a future returned by its `.run(self)`
-        // borrows it for the duration of the await.
-        let mut s_sitelinks = SourceSitelinks::new();
+        let sitelinks = SourceSitelinks::new();
 
-        let mut available_sources = vec![];
-        let mut futures = vec![];
-        for source in sources.iter_mut() {
-            if source.can_run(self) {
-                available_sources.push(source.name());
-                futures.push(source.run(self));
-            }
+        let mut available_sources: Vec<String> = sources
+            .iter()
+            .filter(|source| source.can_run(self))
+            .map(|source| source.name())
+            .collect();
+        if available_sources.is_empty() && sitelinks.can_run(self) {
+            available_sources.push(sitelinks.name());
+            sources.push(Box::new(sitelinks));
         }
-
-        if futures.is_empty() && s_sitelinks.can_run(self) {
-            available_sources.push(s_sitelinks.name());
-            futures.push(s_sitelinks.run(self));
-        }
-
-        if futures.is_empty() {
+        if available_sources.is_empty() {
             return Err(anyhow!("No possible data source found in parameters"));
         }
 
+        // Plan before running. An intersection can restrict the expensive
+        // source to the other side's keys, so the large result never has to be
+        // materialised. Unplanned sources keep the existing parallel run.
+        self.combination = self.get_combination(&available_sources);
+        let priorities: HashMap<String, Option<u8>> = sources
+            .iter()
+            .filter(|source| available_sources.contains(&source.name()))
+            .map(|source| (source.name(), source.seed_priority()))
+            .collect();
+        let seed_plan = Self::plan_seeds(&self.combination, &priorities);
+        let deferred: HashSet<String> = seed_plan.keys().cloned().collect();
+
         Platform::profile("begin futures 1", None);
 
-        let source_results: Vec<_> = iter(futures)
-            .buffered(MAX_CONCURRENT_SOURCES)
-            .collect()
-            .await;
-        let mut results: HashMap<String, PageList> = available_sources
-            .iter()
-            .cloned()
+        let mut eager_names = vec![];
+        let source_results: Vec<_> = {
+            let mut futures = vec![];
+            for source in sources.iter_mut() {
+                let name = source.name();
+                if deferred.contains(&name) || !available_sources.contains(&name) {
+                    continue;
+                }
+                eager_names.push(name);
+                futures.push(source.run(self));
+            }
+            iter(futures)
+                .buffered(MAX_CONCURRENT_SOURCES)
+                .collect()
+                .await
+        };
+        let mut results: HashMap<String, PageList> = eager_names
+            .into_iter()
             .zip(source_results)
             .map(|(name, result)| result.map(|pl| (name, pl)))
             .collect::<Result<_, _>>()?;
+
+        // Run each planned source with its seed. The seed source has already
+        // run; take its result out of the map for the duration so the target's
+        // result can be inserted, then put it back for the final combination.
+        for (target_name, seed_name) in seed_plan {
+            let seed = results.remove(&seed_name).ok_or_else(|| {
+                anyhow!("Seeded source {target_name}: no result for seed source {seed_name}")
+            })?;
+            let position = sources
+                .iter()
+                .position(|source| source.name() == target_name)
+                .ok_or_else(|| anyhow!("Seeded source {target_name}: source not found"))?;
+            let mut target = sources.remove(position);
+            Platform::profile(
+                &format!("seeding {target_name} from {seed_name}"),
+                Some(seed.len()),
+            );
+            let seeded = match target.run_seeded(self, &seed).await {
+                Ok(result) => result,
+                Err(error) => {
+                    tracing::warn!(
+                        "Seeded run of {target_name} failed, falling back to an unseeded run: {error:#}"
+                    );
+                    target.run(self).await?
+                }
+            };
+            results.insert(seed_name, seed);
+            results.insert(target_name, seeded);
+        }
+
         let limit = self.state.max_result_entries();
         for pagelist in results.values() {
             pagelist.ensure_at_most(limit)?;
@@ -239,8 +283,6 @@ impl Platform {
             .filter_map(|(name, data)| data.wiki().map(|wiki| (name.to_string(), wiki)))
             .collect();
         Platform::profile("end futures 1", None);
-
-        self.combination = self.get_combination(&available_sources);
 
         Platform::profile("before combine_results", None);
         let serialized_combination = Self::serialize_combine_results(&self.combination)?;

@@ -42,7 +42,31 @@ pub trait DataSource {
     fn can_run(&self, platform: &Platform) -> bool;
     async fn run(&mut self, platform: &Platform) -> Result<PageList>;
     fn name(&self) -> String;
+
+    /// How much this source benefits from being the *target* of an
+    /// intersection seed. Lower values are preferred targets, i.e. the
+    /// expensive side that should be restricted. `None` means the source
+    /// cannot be restricted cheaply.
+    fn seed_priority(&self) -> Option<u8> {
+        None
+    }
+
+    /// Runs restricted to `seed` (a superset of the valid results is fine).
+    ///
+    /// The default is correct but not an optimisation: it runs the source in
+    /// full and keeps the intersection. Sources that can push the restriction
+    /// into their query override this, and must fall back to an unrestricted
+    /// run whenever the seed is too large or on another wiki.
+    async fn run_seeded(&mut self, platform: &Platform, seed: &PageList) -> Result<PageList> {
+        let result = self.run(platform).await?;
+        result.retain_intersection(seed);
+        Ok(result)
+    }
 }
+
+/// Largest seed a source will use to restrict its query. Beyond this the seed
+/// is the larger side, and a seeded run would cost more than it saves.
+pub const MAX_SEED_PAGES: usize = 150_000;
 
 // ─── SQL utilities ────────────────────────────────────────────────────────────
 

@@ -1,8 +1,9 @@
-use crate::datasource::{DataSource, SQLtuple};
+use crate::datasource::{DataSource, MAX_SEED_PAGES, SQLtuple};
 use crate::pagelist::PageList;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use wikimisc::mysql_async::Value as MyValue;
 use wikimisc::mysql_async::from_row;
 use wikimisc::mysql_async::prelude::Queryable;
 
@@ -21,12 +22,37 @@ impl DataSource for SourceWikidata {
 
     async fn run(&mut self, platform: &Platform) -> Result<PageList> {
         let sql = Self::generate_sql_query(platform)?;
-        self.run_sql_query(&sql, platform).await
+        self.run_sql_query(sql, platform).await
+    }
+
+    fn seed_priority(&self) -> Option<u8> {
+        Some(1)
+    }
+
+    async fn run_seeded(&mut self, platform: &Platform, seed: &PageList) -> Result<PageList> {
+        // Other wikis are converted by the combination layer; their titles are
+        // not item IDs.
+        if seed.wiki().as_deref() != Some("wikidatawiki") {
+            return self.run(platform).await;
+        }
+        let ids = item_ids_from_seed(seed);
+        if ids.is_empty() {
+            return Ok(PageList::new_from_wiki("wikidatawiki"));
+        }
+        if ids.len() > MAX_SEED_PAGES {
+            return self.run(platform).await;
+        }
+        let mut sql = Self::generate_sql_query(platform)?;
+        sql.0 += " AND ips_item_id IN (";
+        sql.0 += &super::get_placeholders(ids.len());
+        sql.0 += ")";
+        sql.1.extend(ids.into_iter().map(MyValue::UInt));
+        self.run_sql_query(sql, platform).await
     }
 }
 
 impl SourceWikidata {
-    fn generate_sql_query(platform: &Platform) -> Result<String> {
+    fn generate_sql_query(platform: &Platform) -> Result<SQLtuple> {
         let no_statements = platform.has_param("wpiu_no_statements");
         let sites = platform
             .get_param("wikidata_source_sites")
@@ -38,24 +64,27 @@ impl SourceWikidata {
 
         let sites = super::prep_quote(&sites);
 
-        let mut sql = "SELECT DISTINCT ips_item_id FROM wb_items_per_site".to_string();
+        let mut sql = SQLtuple(
+            "SELECT DISTINCT ips_item_id FROM wb_items_per_site".to_string(),
+            vec![],
+        );
         if no_statements {
-            sql += ",page_props,page";
+            sql.0 += ",page_props,page";
         }
-        sql += " WHERE ips_site_id IN (";
-        sql += &sites.0;
-        sql += ")";
+        sql.0 += " WHERE ips_site_id IN (";
+        sql.0 += &sites.0;
+        sql.0 += ")";
+        sql.1 = sites.1;
         if no_statements {
-            sql += " AND page_namespace=0 AND ips_item_id=substr(page_title,2)*1 AND page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0";
+            sql.0 += " AND page_namespace=0 AND ips_item_id=substr(page_title,2)*1 AND page_id=pp_page AND pp_propname='wb-claims' AND pp_sortkey=0";
         }
         Ok(sql)
     }
 
-    async fn run_sql_query(&self, sql: &str, platform: &Platform) -> Result<PageList> {
+    async fn run_sql_query(&self, mut sql: SQLtuple, platform: &Platform) -> Result<PageList> {
         let limit = platform.state().max_result_entries();
         // Bound the query at the database, not after all rows are in memory:
         // a source-site filter can match millions of items.
-        let mut sql = SQLtuple(sql.to_string(), vec![]);
         crate::datasource::append_limit(&mut sql, limit);
         // Perform DB query
         let mut conn = platform
@@ -89,6 +118,16 @@ impl SourceWikidata {
         }
         Ok(ret)
     }
+}
+
+/// Numeric IDs of the `Q…` titles in `seed`, ignoring other namespaces and
+/// non-item titles.
+fn item_ids_from_seed(seed: &PageList) -> Vec<u64> {
+    seed.to_titles_namespaces()
+        .into_iter()
+        .filter(|(_, namespace_id)| *namespace_id == 0)
+        .filter_map(|(title, _)| title.strip_prefix('Q')?.parse::<u64>().ok())
+        .collect()
 }
 
 #[cfg(test)]
@@ -137,9 +176,10 @@ mod tests {
         let p = make_platform(vec![("wikidata_source_sites", "enwiki,frwiki")]);
         let sql = SourceWikidata::generate_sql_query(&p).unwrap();
         assert_eq!(
-            sql,
+            sql.0,
             "SELECT DISTINCT ips_item_id FROM wb_items_per_site WHERE ips_site_id IN (?,?)"
         );
+        assert_eq!(params_as_strings(&sql.1), vec!["enwiki", "frwiki"]);
     }
 
     #[test]
@@ -147,9 +187,10 @@ mod tests {
         let p = make_platform(vec![("wikidata_source_sites", "enwiki")]);
         let sql = SourceWikidata::generate_sql_query(&p).unwrap();
         assert_eq!(
-            sql,
+            sql.0,
             "SELECT DISTINCT ips_item_id FROM wb_items_per_site WHERE ips_site_id IN (?)"
         );
+        assert_eq!(params_as_strings(&sql.1), vec!["enwiki"]);
     }
 
     #[test]
@@ -160,7 +201,7 @@ mod tests {
         ]);
         let sql = SourceWikidata::generate_sql_query(&p).unwrap();
         assert_eq!(
-            sql,
+            sql.0,
             "SELECT DISTINCT ips_item_id FROM wb_items_per_site,page_props,page \
              WHERE ips_site_id IN (?) \
              AND page_namespace=0 \
@@ -169,6 +210,7 @@ mod tests {
              AND pp_propname='wb-claims' \
              AND pp_sortkey=0"
         );
+        assert_eq!(params_as_strings(&sql.1), vec!["enwiki"]);
     }
 
     #[test]
@@ -190,12 +232,50 @@ mod tests {
         )]);
         let sql = SourceWikidata::generate_sql_query(&p).unwrap();
         assert!(
-            !sql.contains("DROP"),
-            "hostile site name leaked into SQL: {sql}"
+            !sql.0.contains("DROP"),
+            "hostile site name leaked into SQL: {}",
+            sql.0
         );
         assert!(
-            !sql.contains("enwiki"),
-            "site name leaked into SQL string instead of params: {sql}"
+            !sql.0.contains("enwiki"),
+            "site name leaked into SQL string instead of params: {}",
+            sql.0
         );
+        assert_eq!(
+            params_as_strings(&sql.1),
+            vec!["enwiki", "'); DROP TABLE page;--"]
+        );
+    }
+
+    #[test]
+    fn item_ids_from_seed_keeps_only_q_items_in_main_namespace() {
+        use crate::pagelist_entry::PageListEntry;
+        use std::collections::BTreeSet;
+        use wikimisc::mediawiki::title::Title;
+
+        let seed = PageList::new_from_wiki("wikidatawiki");
+        for (title, namespace_id) in [
+            ("Q1", 0),
+            ("Q42", 0),
+            ("P31", 0),
+            ("Q2", 120),
+            ("Not an id", 0),
+            ("Qnotanumber", 0),
+        ] {
+            seed.add_entry(PageListEntry::new(Title::new(title, namespace_id)));
+        }
+
+        let ids: BTreeSet<u64> = item_ids_from_seed(&seed).into_iter().collect();
+        assert_eq!(ids, BTreeSet::from([1, 42]));
+    }
+
+    fn params_as_strings(params: &[MyValue]) -> Vec<String> {
+        params
+            .iter()
+            .map(|value| match value {
+                MyValue::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
+                other => format!("{other:?}"),
+            })
+            .collect()
     }
 }
