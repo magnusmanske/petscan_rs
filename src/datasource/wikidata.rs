@@ -104,11 +104,13 @@ impl SourceWikidata {
             .get_param("wikidata_source_sites")
             .ok_or_else(|| anyhow!("Missing parameter 'wikidata_source_sites'"))?;
         let sites: Vec<String> = sites.split(',').map(|s| s.to_string()).collect();
-        if sites.is_empty() {
+        let sites = super::prep_quote(&sites);
+        if sites.1.is_empty() {
+            // `split` always yields at least one element, so the emptiness
+            // check has to happen after `prep_quote` dropped blanks; otherwise
+            // a whitespace-only list would emit `IN ()` and fail in MySQL.
             return Err(anyhow!("SourceWikidata: No wikidata source sites given"));
         }
-
-        let sites = super::prep_quote(&sites);
 
         let mut sql = SQLtuple(
             "SELECT DISTINCT ips_item_id FROM wb_items_per_site".to_string(),
@@ -257,6 +259,19 @@ mod tests {
              AND pp_sortkey=0"
         );
         assert_eq!(params_as_strings(&sql.1), vec!["enwiki"]);
+    }
+
+    #[test]
+    fn test_generate_sql_query_blank_sites_returns_error() {
+        // `split(',')` yields non-empty pieces for these, so the check must
+        // happen after the blank entries are filtered out.
+        for value in [" ", " , ", ","] {
+            let p = make_platform(vec![("wikidata_source_sites", value)]);
+            assert!(
+                SourceWikidata::generate_sql_query(&p).is_err(),
+                "blank site list {value:?} must not produce `IN ()`"
+            );
+        }
     }
 
     #[test]
