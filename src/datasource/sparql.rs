@@ -11,6 +11,7 @@ use wikimisc::entity_id::EntityId;
 use wikimisc::mediawiki::reqwest;
 use wikimisc::sparql_client::{SparqlClient, SparqlError};
 use wikimisc::sparql_endpoint::SparqlEndpoint;
+use wikimisc::sparql_retry::{Retry, RetryPolicy};
 
 /// The endpoints stop a query after a minute or so; this leaves room for
 /// sending a large result.
@@ -22,6 +23,15 @@ const MAX_SPARQL_BYTES_PER_ROW: usize = 300;
 /// Cap on a key-only SPARQL response, which is buffered to a temp file rather
 /// than memory. Generous for millions of entity IDs; the row cap still applies.
 const MAX_KEYED_RESPONSE_BYTES: usize = 1 << 30;
+/// How often a SPARQL request that failed transiently (rate limiting, a
+/// briefly unavailable endpoint, a broken connection) is retried, and the
+/// waits between attempts: 2, 4, 8, 16 and 30 s. Toolforge's outbound
+/// address is shared by many tools, so unrelated traffic can get PetScan a
+/// 429 even though its own request rate is unremarkable; waiting usually
+/// clears that. A bad query, a timeout or an oversized result is not retried.
+const SPARQL_RETRIES: u32 = 5;
+const SPARQL_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
+const SPARQL_MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
 /// What SPARQL requests say they are. Wikimedia asks for contact information.
 const USER_AGENT: &str = wikimisc::user_agent!(
     name = "PetScan",
@@ -64,6 +74,23 @@ impl SparqlServer {
             Self::QLeverWd => SparqlEndpoint::qlever_wikidata(),
         }
     }
+}
+
+/// Retries a SPARQL request that failed in a way that may clear on its own.
+fn retry_policy() -> RetryPolicy {
+    RetryPolicy::new(SPARQL_RETRIES)
+        .with_initial_backoff(SPARQL_INITIAL_BACKOFF)
+        .with_max_wait(SPARQL_MAX_RETRY_WAIT)
+        .with_jitter()
+        .on_retry(|retry: &Retry<'_>| {
+            tracing::warn!(
+                endpoint = retry.endpoint,
+                attempt = retry.retry,
+                delay_ms = retry.wait.as_millis(),
+                error = %retry.error,
+                "SPARQL request failed; retrying"
+            );
+        })
 }
 
 /// The shared HTTP client for SPARQL requests.
@@ -139,6 +166,10 @@ fn sparql_error(error: SparqlError, limit: usize) -> anyhow::Error {
             ),
             limit,
         ),
+        SparqlError::RateLimited { message, .. } => anyhow!(
+            "The SPARQL endpoint is rate-limiting PetScan ({message}). \
+             Please try again in a minute, or choose a different SPARQL server."
+        ),
         other => anyhow!("SPARQL: {other}"),
     }
 }
@@ -193,7 +224,8 @@ impl SourceSparql {
             .ok_or_else(|| anyhow!("Missing parameter 'sparql'"))?;
         let server = SparqlServer::from(platform.get_param("sparql_server").as_deref());
         let client = SparqlClient::with_client(server.endpoint(), http_client()?)
-            .with_max_response_bytes(max_bytes);
+            .with_max_response_bytes(max_bytes)
+            .with_retry_policy(retry_policy());
         client
             .query_csv(&sparql)
             .await
@@ -344,6 +376,64 @@ mod tests {
         );
     }
 
+    // ── retry policy ─────────────────────────────────────────────────────────
+
+    fn rate_limited() -> SparqlError {
+        SparqlError::RateLimited {
+            retry_after: None,
+            message: "429 Too Many Requests".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_rate_limits_and_server_errors_are_retried() {
+        let policy = retry_policy();
+        let first_wait = policy.delay(&rate_limited(), 0).expect("must retry");
+        assert!(
+            first_wait >= SPARQL_INITIAL_BACKOFF
+                && first_wait <= SPARQL_INITIAL_BACKOFF + SPARQL_INITIAL_BACKOFF / 2,
+            "{first_wait:?}"
+        );
+        assert!(
+            policy
+                .delay(
+                    &SparqlError::Endpoint {
+                        status: 503,
+                        message: String::new(),
+                    },
+                    0
+                )
+                .is_some()
+        );
+        assert!(policy.delay(&rate_limited(), SPARQL_RETRIES - 1).is_some());
+        assert_eq!(policy.delay(&rate_limited(), SPARQL_RETRIES), None);
+    }
+
+    #[test]
+    fn test_bad_queries_and_timeouts_are_not_retried() {
+        let policy = retry_policy();
+        assert_eq!(
+            policy.delay(
+                &SparqlError::Endpoint {
+                    status: 400,
+                    message: String::new(),
+                },
+                0
+            ),
+            None
+        );
+        assert_eq!(
+            policy.delay(
+                &SparqlError::Timeout {
+                    status: 429,
+                    message: "Operation timed out.".to_string(),
+                },
+                0
+            ),
+            None
+        );
+    }
+
     // ── sparql_error ─────────────────────────────────────────────────────────
 
     #[test]
@@ -367,6 +457,17 @@ mod tests {
             message: "Service Unavailable".to_string(),
         };
         let message = sparql_error(error, 10).to_string();
+        assert_eq!(
+            crate::app_state::AppError::classify(&message),
+            crate::app_state::AppError::Upstream,
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn test_an_exhausted_rate_limit_asks_the_user_to_retry() {
+        let message = sparql_error(rate_limited(), 10).to_string();
+        assert!(message.contains("try again"), "{message}");
         assert_eq!(
             crate::app_state::AppError::classify(&message),
             crate::app_state::AppError::Upstream,
