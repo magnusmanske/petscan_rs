@@ -669,6 +669,9 @@ impl AppError {
             || lc.contains("not allowed")
             || lc.contains("malformed")
             || lc.contains("no wiki in result")
+            || lc.contains("no possible data source")
+            || lc.contains("bad wiki")
+            || lc.contains("unknown output wiki type")
         {
             AppError::BadRequest
         } else {
@@ -957,6 +960,11 @@ mod tests {
             "Operation not allowed for this user",
             "Malformed PSID",
             "No wiki in result",
+            "No possible data source found in parameters",
+            "SourceDatabase: Bad wiki 'None'",
+            "Unknown output wiki type 'commons'",
+            "Unknown output wiki type 'commonswiki'",
+            "Unknown output wiki type '*'",
         ] {
             assert_eq!(
                 AppError::classify(msg),
