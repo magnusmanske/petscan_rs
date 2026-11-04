@@ -386,8 +386,15 @@ impl AppState {
         }
     }
 
-    pub fn render_error(&self, error: String, form_parameters: &FormParameters) -> MyResponse {
-        let status = AppError::classify(&error).status();
+    pub fn render_error(
+        &self,
+        error: &anyhow::Error,
+        form_parameters: &FormParameters,
+    ) -> MyResponse {
+        let status = AppError::classify_anyhow(error).status();
+        // `{:#}` keeps the context chain, so a bare upstream message like
+        // reqwest's "builder error" arrives with its cause.
+        let error = format!("{error:#}");
         // Server-side log so monitoring/alerting can detect failures without
         // needing to scrape response bodies. The audit's P1 #9 noted that
         // `render_error` was the silent path: HTTP 200 + no log.
@@ -623,6 +630,36 @@ pub enum AppError {
     Internal,
 }
 
+/// Errors caused by invalid user input. Returned as typed values so they can
+/// travel through `anyhow` and be recognised at the HTTP boundary by
+/// downcasting, instead of matching on their message text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputError {
+    /// No data source was applicable to the parameters.
+    NoDataSource,
+    /// The database source was not given a usable wiki.
+    BadWiki(Option<String>),
+    /// `common_wiki` named an output wiki type PetScan does not know.
+    UnknownOutputWikiType(String),
+}
+
+// `Debug` here mirrors the message this error had before it became typed
+// (`Bad wiki 'None'`), which users and log queries may rely on.
+#[allow(clippy::use_debug)]
+impl std::fmt::Display for InputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoDataSource => write!(f, "No possible data source found in parameters"),
+            Self::BadWiki(wiki) => write!(f, "SourceDatabase: Bad wiki '{wiki:?}'"),
+            Self::UnknownOutputWikiType(kind) => {
+                write!(f, "Unknown output wiki type '{kind}'")
+            }
+        }
+    }
+}
+
+impl std::error::Error for InputError {}
+
 impl AppError {
     pub const fn status(self) -> u16 {
         match self {
@@ -633,10 +670,9 @@ impl AppError {
         }
     }
 
-    /// Heuristic classification by substring match. Errors arrive here as
-    /// `anyhow::Error::to_string()` so a perfect classifier would need
-    /// structured errors at every callsite (P4 #32). This catches the
-    /// common shapes so most user-visible failures get the right status.
+    /// Heuristic classification by substring match, for errors that reach the
+    /// HTTP layer as plain text. Classify `anyhow` errors with
+    /// [`AppError::classify_anyhow`] first, which recognises typed errors.
     pub fn classify(error: &str) -> Self {
         let lc = error.to_lowercase();
         // Admission control turned the request away (503).
@@ -676,6 +712,16 @@ impl AppError {
             AppError::BadRequest
         } else {
             AppError::Internal
+        }
+    }
+
+    /// Prefer the typed error carried anywhere in the `anyhow` chain; fall back
+    /// to the string heuristic for errors that are still untyped.
+    pub fn classify_anyhow(error: &anyhow::Error) -> Self {
+        if error.downcast_ref::<InputError>().is_some() {
+            AppError::BadRequest
+        } else {
+            Self::classify(&format!("{error:#}"))
         }
     }
 }
@@ -796,7 +842,7 @@ mod tests {
         params
             .params
             .insert("format".to_string(), "html".to_string());
-        let response = state.render_error("Test error".to_string(), &params);
+        let response = state.render_error(&anyhow::anyhow!("Test error"), &params);
         assert!(response.s.contains("Test error"));
         assert_eq!(response.content_type, ContentType::HTML);
     }
@@ -808,7 +854,7 @@ mod tests {
         params
             .params
             .insert("format".to_string(), "json".to_string());
-        let response = state.render_error("Test error".to_string(), &params);
+        let response = state.render_error(&anyhow::anyhow!("Test error"), &params);
         assert!(response.s.contains("Test error"));
         assert_eq!(response.content_type, ContentType::JSON);
     }
@@ -820,7 +866,7 @@ mod tests {
         params
             .params
             .insert("format".to_string(), "plaintext".to_string());
-        let response = state.render_error("Test error".to_string(), &params);
+        let response = state.render_error(&anyhow::anyhow!("Test error"), &params);
         assert_eq!(response.s, "Test error");
         assert_eq!(response.content_type, ContentType::Plain);
     }
@@ -991,6 +1037,40 @@ mod tests {
     }
 
     #[test]
+    fn test_app_error_classify_typed_input_error() {
+        for input in [
+            InputError::NoDataSource,
+            InputError::BadWiki(None),
+            InputError::UnknownOutputWikiType("commons".to_string()),
+        ] {
+            let error = anyhow::Error::new(input);
+            assert_eq!(AppError::classify_anyhow(&error), AppError::BadRequest);
+            // Context added further up the call stack must not hide the type.
+            let with_context = error.context("while handling the request");
+            assert_eq!(
+                AppError::classify_anyhow(&with_context),
+                AppError::BadRequest
+            );
+        }
+    }
+
+    #[test]
+    fn test_input_error_display_is_user_facing() {
+        assert_eq!(
+            InputError::NoDataSource.to_string(),
+            "No possible data source found in parameters"
+        );
+        assert_eq!(
+            InputError::BadWiki(None).to_string(),
+            "SourceDatabase: Bad wiki 'None'"
+        );
+        assert_eq!(
+            InputError::UnknownOutputWikiType("commons".to_string()).to_string(),
+            "Unknown output wiki type 'commons'"
+        );
+    }
+
+    #[test]
     fn test_render_error_sets_status_from_classification() {
         let state = state_with_config(make_minimal_config());
         let mut params = crate::form_parameters::FormParameters::new();
@@ -998,14 +1078,17 @@ mod tests {
             .params
             .insert("format".to_string(), "json".to_string());
 
-        let resp_upstream =
-            state.render_error("Connection refused (os error 61)".to_string(), &params);
+        let resp_upstream = state.render_error(
+            &anyhow::anyhow!("Connection refused (os error 61)"),
+            &params,
+        );
         assert_eq!(resp_upstream.status, 502);
 
-        let resp_bad = state.render_error("Invalid parameter foo".to_string(), &params);
+        let resp_bad = state.render_error(&anyhow::anyhow!("Invalid parameter foo"), &params);
         assert_eq!(resp_bad.status, 400);
 
-        let resp_internal = state.render_error("Could not insert new PSID".to_string(), &params);
+        let resp_internal =
+            state.render_error(&anyhow::anyhow!("Could not insert new PSID"), &params);
         assert_eq!(resp_internal.status, 500);
     }
 
@@ -1122,7 +1205,10 @@ mod tests {
         let state = AppState::for_test_with_main_page("<!--output-->");
         let params =
             FormParameters::new_from_pairs([("format".to_string(), "html".to_string())].into());
-        let response = state.render_error("Invalid PSID '<script>x</script>'".to_string(), &params);
+        let response = state.render_error(
+            &anyhow::anyhow!("Invalid PSID '<script>x</script>'"),
+            &params,
+        );
         assert!(!response.s.contains("<script>"), "{}", response.s);
         assert!(response.s.contains("&lt;script&gt;"), "{}", response.s);
     }

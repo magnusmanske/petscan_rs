@@ -51,13 +51,9 @@ pub async fn command_line_usage(app_state: Arc<AppState>) -> Result<()> {
     let response = match platform.run().await {
         Ok(()) => match platform.get_streaming_response().await {
             Ok(response) => response,
-            Err(error) => {
-                WebResponse::Buffered(app_state.render_error(error.to_string(), &form_parameters))
-            }
+            Err(error) => WebResponse::Buffered(app_state.render_error(&error, &form_parameters)),
         },
-        Err(error) => {
-            WebResponse::Buffered(app_state.render_error(error.to_string(), &form_parameters))
-        }
+        Err(error) => WebResponse::Buffered(app_state.render_error(&error, &form_parameters)),
     };
     match response {
         WebResponse::Buffered(response) => println!("{}", response.s),

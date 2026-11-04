@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppState, InputError};
 use crate::database_manager::DbCluster;
 use crate::datasource::{DataSource, MAX_SEED_PAGES, SQLtuple};
 use crate::key_set::{KeySet, KeySetLimits};
@@ -1020,7 +1020,7 @@ impl SourceDatabase {
 
         // Paranoia
         if self.params.wiki.is_none() || self.params.wiki == Some("wiki".to_string()) {
-            return Err(anyhow!("SourceDatabase: Bad wiki '{:?}'", self.params.wiki));
+            return Err(InputError::BadWiki(self.params.wiki.clone()).into());
         }
 
         let wiki = match &self.params.wiki {

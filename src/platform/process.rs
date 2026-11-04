@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppState, InputError};
 use crate::database_manager::DbCluster;
 use crate::datasource::SQLtuple;
 use crate::datasource::database::{SourceDatabase, SourceDatabaseParameters};
@@ -440,7 +440,7 @@ impl Platform {
             "other" => Ok(Some(self.get_param("common_wiki_other").ok_or_else(
                 || anyhow!("Other wiki for output expected, but not given in text field"),
             )?)),
-            unknown => Err(anyhow!("Unknown output wiki type '{unknown}'")),
+            unknown => Err(InputError::UnknownOutputWikiType(unknown.to_string()).into()),
         }
     }
 

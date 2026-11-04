@@ -3,7 +3,7 @@ use crate::config::Config;
 use crate::content_type::ContentType;
 use crate::form_parameters::FormParameters;
 use crate::platform::{MyResponse, Platform, WebResponse};
-use anyhow::Result;
+use anyhow::{Error, Result};
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
@@ -226,19 +226,13 @@ impl WebServer {
                     let psid_params = match FormParameters::outcome_from_query(&psid_query) {
                         Ok(pp) => pp,
                         Err(e) => {
-                            return self
-                                .app_state
-                                .render_error(format!("{e:#}"), &form_parameters)
-                                .into();
+                            return self.app_state.render_error(&e, &form_parameters).into();
                         }
                     };
                     form_parameters.rebase(&psid_params);
                 }
                 Err(e) => {
-                    return self
-                        .app_state
-                        .render_error(format!("{e:#}"), &form_parameters)
-                        .into();
+                    return self.app_state.render_error(&e, &form_parameters).into();
                 }
             }
         }
@@ -275,10 +269,8 @@ impl WebServer {
         let request_permit = match self.app_state.acquire_request_permit().await {
             Ok(permit) => permit,
             Err(overload) => {
-                return self
-                    .app_state
-                    .render_error(overload.to_string(), &form_parameters)
-                    .into();
+                let error = Error::new(overload);
+                return self.app_state.render_error(&error, &form_parameters).into();
             }
         };
 
@@ -333,13 +325,8 @@ impl WebServer {
             Ok(_) => {}
             Err(error) => {
                 drop(platform);
-                // `{:#}` keeps the context chain, so a bare upstream message
-                // like reqwest's "builder error" arrives with its cause.
                 return QueryOutcome {
-                    response: self
-                        .app_state
-                        .render_error(format!("{error:#}"), form_parameters)
-                        .into(),
+                    response: self.app_state.render_error(&error, form_parameters).into(),
                     result_entries: 0,
                 };
             }
@@ -360,10 +347,7 @@ impl WebServer {
                 Ok(psid) => Some(psid),
                 Err(e) => {
                     return QueryOutcome {
-                        response: self
-                            .app_state
-                            .render_error(format!("{e:#}"), form_parameters)
-                            .into(),
+                        response: self.app_state.render_error(&e, form_parameters).into(),
                         result_entries,
                     };
                 }
@@ -374,10 +358,7 @@ impl WebServer {
         // Render response
         let response = match platform.get_streaming_response().await {
             Ok(response) => response,
-            Err(e) => self
-                .app_state
-                .render_error(format!("{e:#}"), form_parameters)
-                .into(),
+            Err(e) => self.app_state.render_error(&e, form_parameters).into(),
         };
         drop(platform);
         QueryOutcome {

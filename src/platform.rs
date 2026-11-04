@@ -1,4 +1,4 @@
-use crate::app_state::AppState;
+use crate::app_state::{AppState, InputError};
 use crate::combination::Combination;
 use crate::content_type::ContentType;
 use crate::datasource::DataSource;
@@ -279,7 +279,7 @@ impl Platform {
             sources.push(Box::new(sitelinks));
         }
         if available_sources.is_empty() {
-            return Err(anyhow!("No possible data source found in parameters"));
+            return Err(InputError::NoDataSource.into());
         }
 
         // Plan before running. An intersection can restrict the expensive
