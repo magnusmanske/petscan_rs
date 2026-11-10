@@ -458,10 +458,11 @@ function generateThumbnailView() {
 	var h = "<div id='thumbnails' class='card-columns'></div>";
 	$("#main_table").after(h);
 
-	$("#main_table tbody tr").each(function () {
+	$("#main_table tbody tr").each(function (index) {
 		var tr = $(this);
 		var td = $(tr.find("td.link_container").get(0));
 		var a = $(td.find("a.pagelink").get(0));
+		var selected = tr.find("input.row-select").prop("checked");
 		var url =
 			a
 				.attr("href")
@@ -478,6 +479,12 @@ function generateThumbnailView() {
 			'" border=0 /></a></div>';
 		h += '<div class="card-block">';
 		h += '<p class="card-text">';
+		h +=
+			"<input type='checkbox' class='thumb-select' data-row='" +
+			index +
+			"' " +
+			(selected ? "checked" : "") +
+			" /> ";
 		h += $("<div>").append(a.clone()).html();
 		h += "</p>";
 		h += "</div>";
@@ -487,11 +494,25 @@ function generateThumbnailView() {
 		$("#thumbnails").append(card);
 	});
 
+	$("#thumbnails").on("change", ".thumb-select", function () {
+		$("#main_table tbody tr")
+			.eq($(this).data("row"))
+			.find("input.row-select")
+			.prop("checked", this.checked);
+	});
+
 	// Load thumbnails on demand
 	$(window).scroll(function () {
 		$("#thumbnails img.pre_thumb").each(function () {
 			loadThumbnail($(this));
 		});
+	});
+}
+
+function syncThumbnailSelection() {
+	$("#main_table tbody tr").each(function (index) {
+		var checked = $(this).find("input.row-select").prop("checked");
+		$("#thumbnails .thumb-select").eq(index).prop("checked", checked);
 	});
 }
 
@@ -676,6 +697,7 @@ function initializeInterface() {
 		if ($("#thumbnails").length === 0) {
 			generateThumbnailView();
 		}
+		syncThumbnailSelection();
 
 		$("#main_table").hide();
 		$("#thumbnails").show();
@@ -810,6 +832,7 @@ function setupResultMultiSelect() {
 
 	$("#row_select_all").on("click", function () {
 		$(".row-select").prop("checked", this.checked);
+		syncThumbnailSelection();
 	});
 
 	var lastIndex = null;
@@ -823,6 +846,7 @@ function setupResultMultiSelect() {
 			$boxes.slice(start, end + 1).prop("checked", checked);
 		}
 		lastIndex = idx;
+		syncThumbnailSelection();
 	});
 
 	$("#open_selected_btn").on("click", function () {
