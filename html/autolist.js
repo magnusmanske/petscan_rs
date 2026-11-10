@@ -1,3 +1,14 @@
+// The page title from a wikilink href. A malformed percent escape must not
+// abort command generation (which used to make "Start QS" do nothing).
+function decodePageTitle(href) {
+  var path = (href || "").replace(/^.+?\/wiki\//, "");
+  try {
+    return decodeURIComponent(path);
+  } catch (e) {
+    return path;
+  }
+}
+
 function AutoList(callback) {
   this.setupCommands = function () {
     var me = this;
@@ -13,9 +24,7 @@ function AutoList(callback) {
         var cmd = { q: q, mode: "create" };
         var a = tr.find("a.pagelink").first();
         if (a.length === 0) return;
-        cmd.page = decodeURIComponent(
-          (a.attr("href") || "").replace(/^.+?\/wiki\//, ""),
-        );
+        cmd.page = decodePageTitle(a.attr("href"));
         me.commands_todo.push(cmd);
       }
 
