@@ -40,6 +40,14 @@ impl Render for RenderTSV {
         true
     }
 
+    fn extra_columns(&self, params: &RenderParams) -> Vec<&'static str> {
+        if params.is_wikidata() {
+            vec!["wikidata_label"]
+        } else {
+            vec![]
+        }
+    }
+
     fn stream(
         self: Box<Self>,
         _platform: &Platform,
@@ -191,6 +199,24 @@ mod tests {
     }
 
     // ── escape_cell ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn wikidata_output_has_a_label_column() {
+        let params =
+            RenderParams::for_tests("wikidatawiki", Arc::new(StubNamespaceContext::enwiki()));
+        let header = tsv().header(&params);
+        assert!(
+            header.iter().any(|(key, _)| key == "wikidata_label"),
+            "{header:?}"
+        );
+    }
+
+    #[test]
+    fn non_wikidata_output_has_no_label_column() {
+        let params = RenderParams::for_tests("enwiki", Arc::new(StubNamespaceContext::enwiki()));
+        let header = tsv().header(&params);
+        assert!(!header.iter().any(|(key, _)| key == "wikidata_label"));
+    }
 
     #[test]
     fn test_escape_cell_tsv_replaces_tab_with_space() {

@@ -61,6 +61,14 @@ impl Render for RenderJSON {
         true
     }
 
+    fn extra_columns(&self, params: &RenderParams) -> Vec<&'static str> {
+        if params.is_wikidata() {
+            vec!["wikidata_label"]
+        } else {
+            vec![]
+        }
+    }
+
     fn stream(
         self: Box<Self>,
         platform: &Platform,
@@ -209,12 +217,22 @@ impl RenderJSON {
                 o["q"] = json!(q);
                 o["metadata"]["wikidata"] = json!(q);
             }
+            if params.is_wikidata()
+                && let Some(label) = entry.get_wikidata_label()
+            {
+                o["wikidata_label"] = json!(label);
+            }
         } else {
             if let Some(q) = entry.get_wikidata_item() {
                 o["q"] = json!(q);
                 o["metadata"]["wikidata"] = json!(q);
             }
             Self::add_metadata(&mut o, entry, header);
+            if params.is_wikidata()
+                && let Some(label) = entry.get_wikidata_label()
+            {
+                o["wikidata_label"] = json!(label);
+            }
             if params.file_data() {
                 if o["metadata"].get("fileusage").is_some() {
                     o["gil"] = o["metadata"]["fileusage"].to_owned();
@@ -391,6 +409,7 @@ impl RenderJSON {
                 "image" => entry.get_page_image().map(|s| json!(s)),
                 "linknumber" => entry.link_count().map(|s| json!(s)),
                 "wikidata" => entry.get_wikidata_item().map(|s| json!(s)),
+                "wikidata_label" => entry.get_wikidata_label().map(|s| json!(s)),
                 "defaultsort" => entry.get_defaultsort().map(|s| json!(s)),
                 "disambiguation" => Some(entry.disambiguation().as_json()),
                 "incoming_links" => entry.incoming_links().map(|s| json!(s)),
@@ -437,6 +456,34 @@ mod tests {
         assert_eq!(page["title"], "Foo_bar");
         assert_eq!(page["id"], 42);
         assert_eq!(page["len"], 7);
+    }
+
+    #[test]
+    fn wikidata_output_includes_the_label() {
+        let params =
+            RenderParams::for_tests("wikidatawiki", Arc::new(StubNamespaceContext::enwiki()));
+        let mut entry = PageListEntry::new(Title::new("Q42", 0));
+        entry.set_wikidata_label(Some("Douglas Adams".to_string()));
+        let renderer = RenderJSON::new();
+        let header = renderer.json_header(&params);
+        let value = renderer
+            .entry_value(&entry, &params, &header, false)
+            .expect("entry value");
+        assert_eq!(value["wikidata_label"], json!("Douglas Adams"));
+        assert_eq!(value["metadata"]["wikidata_label"], json!("Douglas Adams"));
+    }
+
+    #[test]
+    fn non_wikidata_output_keeps_the_label_out_of_json() {
+        let params = RenderParams::for_tests("enwiki", Arc::new(StubNamespaceContext::enwiki()));
+        let mut entry = PageListEntry::new(Title::new("Foo", 0));
+        entry.set_wikidata_label(Some("Foo label".to_string()));
+        let renderer = RenderJSON::new();
+        let header = renderer.json_header(&params);
+        let value = renderer
+            .entry_value(&entry, &params, &header, false)
+            .expect("entry value");
+        assert!(value.get("wikidata_label").is_none());
     }
 
     #[tokio::test]

@@ -150,6 +150,13 @@ pub trait Render: Send + Sync {
         ]
     }
 
+    /// Renderer-specific columns appended to the common ones. Tabular
+    /// machine-readable renderers use this for the Wikidata label; HTML
+    /// already shows the label as the link text.
+    fn extra_columns(&self, _params: &RenderParams) -> Vec<&'static str> {
+        vec![]
+    }
+
     fn get_initial_columns(&self, params: &RenderParams) -> Vec<&str> {
         let mut columns = vec![];
         if params.use_autolist() {
@@ -193,6 +200,7 @@ pub trait Render: Send + Sync {
         if params.file_usage() {
             columns.push("fileusage");
         }
+        columns.extend(self.extra_columns(params));
         columns
     }
 
@@ -359,6 +367,7 @@ pub trait Render: Send + Sync {
                 }
                 "incoming_links" => self.escape_text(self.opt_linkcount(&entry.incoming_links())),
                 "sitelinks" => self.escape_text(self.opt_linkcount(&entry.sitelink_count())),
+                "wikidata_label" => self.escape_text(self.opt_string(&entry.get_wikidata_label())),
                 "img_size" | "img_width" | "img_height" | "img_media_type" | "img_major_mime"
                 | "img_minor_mime" | "img_timestamp" | "img_sha1" => self.escape_text(
                     entry
