@@ -36,6 +36,33 @@ use wikimisc::mediawiki::api::NamespaceID;
 
 pub static PAGE_BATCH_SIZE: usize = 15000;
 
+/// Whether a failed source may succeed if run again.
+///
+/// Kept deliberately narrow: a deterministic query error (bad SQL, unknown
+/// table) only wastes another attempt.
+fn is_transient_source_error(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_ascii_lowercase();
+    [
+        "max_user_connections",
+        "too many connections",
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "broken pipe",
+        "server has gone away",
+        "unexpected eof",
+        "unexpectedeof",
+        "os error 61",
+        "timed out",
+        "timeout",
+        "deadlock",
+        "lock wait timeout",
+        "temporarily unavailable",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
 /// Cap on how many heterogeneous data sources we fan out in parallel.
 /// Sources hit different upstreams (DB, Commons, SPARQL, …), so the cap
 /// can be wider than the per-wiki batched-query cap.
@@ -231,19 +258,47 @@ impl Platform {
         ret
     }
 
+    /// Run a data source, retrying transient connection failures.
+    ///
+    /// The replicas occasionally reject a query while a tool is at its
+    /// connection limit, or drop an idle connection. Those are exactly the
+    /// intermittent "No result for source …" reports (issue #148); a retry
+    /// turns them into a successful query instead of an empty result page.
     async fn run_source(
         source: &mut (dyn DataSource + Send),
         platform: &Platform,
         keyed: bool,
         limits: KeySetLimits,
     ) -> Result<combine::SourceResult> {
-        if keyed {
-            Ok(combine::SourceResult::Keys(
-                source.run_keyed(platform, limits).await?,
-            ))
-        } else {
-            Ok(combine::SourceResult::Entries(source.run(platform).await?))
+        const MAX_ATTEMPTS: usize = 3;
+        let name = source.name();
+        for attempt in 1..=MAX_ATTEMPTS {
+            let result = if keyed {
+                source
+                    .run_keyed(platform, limits)
+                    .await
+                    .map(combine::SourceResult::Keys)
+            } else {
+                source
+                    .run(platform)
+                    .await
+                    .map(combine::SourceResult::Entries)
+            };
+            match result {
+                Ok(result) => return Ok(result),
+                Err(error) if attempt < MAX_ATTEMPTS && is_transient_source_error(&error) => {
+                    tracing::warn!(
+                        "Source {name} failed transiently (attempt {attempt}/{MAX_ATTEMPTS}), retrying: {error:#}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        250 * (1 << (attempt - 1)),
+                    ))
+                    .await;
+                }
+                Err(error) => return Err(error),
+            }
         }
+        unreachable!("the retry loop always returns")
     }
 
     #[instrument(skip_all, err(level = tracing::Level::INFO))]
@@ -542,6 +597,32 @@ impl crate::query_context::QueryContext for Platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_source_errors_are_retried() {
+        for message in [
+            "Io(Io(Custom { kind: Other, error: \"max_user_connections\" }))",
+            "connection reset by peer",
+            "server has gone away",
+            "Io(UnexpectedEof)",
+            "timed out waiting for connection",
+        ] {
+            assert!(
+                is_transient_source_error(&anyhow!(message.to_string())),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn deterministic_source_errors_are_not_retried() {
+        for message in ["Unknown column 'foo'", "No such table: bar", "Invalid PSID"] {
+            assert!(
+                !is_transient_source_error(&anyhow!(message.to_string())),
+                "{message}"
+            );
+        }
+    }
     use crate::app_state::AppState;
     use crate::config::Config;
     use crate::form_parameters::FormParameters;
