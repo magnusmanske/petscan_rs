@@ -749,6 +749,10 @@ function initializeInterface() {
 	$("#quick_commons").click(function () {
 		$("input[name='language']").val("commons");
 		$("input[name='project']").val("wikimedia");
+		// Commons queries almost always want files. Only do this on an explicit
+		// click, never while loading a PSID or URL parameters, so existing
+		// queries keep exactly the namespaces they were saved with.
+		selectNamespace(6);
 		loadNamespaces();
 		return false;
 	});
@@ -766,6 +770,15 @@ function initializeInterface() {
 	});
 
 	setupResultMultiSelect();
+}
+
+// Select a namespace in the form without discarding the user's other
+// selections. Safe before the namespace list has loaded: renderNS() reads
+// namespaces_selected when it builds the checkboxes.
+function selectNamespace(ns) {
+	ns *= 1;
+	if ($.inArray(ns, namespaces_selected) < 0) namespaces_selected.push(ns);
+	$("#namespaces input[ns='" + ns + "']").prop("checked", true);
 }
 
 function setupResultMultiSelect() {
