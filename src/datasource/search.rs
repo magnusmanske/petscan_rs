@@ -4,8 +4,10 @@ use crate::pagelist_entry::PageListEntry;
 use crate::platform::Platform;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use serde_json::Value;
 use std::collections::HashSet;
 use wikimisc::mediawiki::api::Api;
+use wikimisc::mediawiki::title::Title;
 
 #[derive(Debug, Clone, PartialEq, Default, Copy)]
 pub struct SourceSearch;
@@ -52,22 +54,71 @@ impl DataSource for SourceSearch {
             ("srlimit", srlimit.as_str()),
             ("srsearch", query.as_str()),
             ("srnamespace", namespace_ids.as_str()),
+            ("srinfo", "totalhits"),
         ]);
-        let result = match api.get_query_api_json_limit(&params, Some(max)).await {
-            Ok(result) => result,
-            Err(e) => return Err(anyhow!(e)),
-        };
-        let titles = Api::result_array_to_titles(&result);
+
+        // The search index is updated while a multi-page search runs, so
+        // offset pagination can miss hits and two identical queries can differ
+        // (issue #179). Re-run the search and union the titles until the result
+        // is at least as large as the reported total.
+        let mut titles: Vec<Title> = vec![];
+        let mut seen = HashSet::new();
+        let mut total = None;
+        const ATTEMPTS: usize = 3;
+        for attempt in 1..=ATTEMPTS {
+            let result = match api.get_query_api_json_limit(&params, Some(max)).await {
+                Ok(result) => result,
+                Err(e) => return Err(anyhow!(e)),
+            };
+            total = total_hits(&result).or(total);
+            for title in Api::result_array_to_titles(&result) {
+                if seen.insert(title.clone()) {
+                    titles.push(title);
+                }
+            }
+            if !search_is_incomplete(titles.len(), total, max) {
+                break;
+            }
+            if attempt < ATTEMPTS {
+                tokio::time::sleep(std::time::Duration::from_millis(250 * attempt as u64)).await;
+            }
+        }
+        if let Some(total) = total
+            && total <= max
+            && titles.len() < total
+        {
+            tracing::warn!(
+                "search on {wiki} returned {} of {total} reported hits after {ATTEMPTS} attempts",
+                titles.len()
+            );
+        }
+        titles.truncate(max);
+
         let ret = PageList::new_from_wiki(&wiki);
         titles
-            .iter()
-            .map(|title| PageListEntry::new(title.to_owned()))
+            .into_iter()
+            .map(PageListEntry::new)
             .for_each(|entry| ret.add_entry(entry));
         if ret.is_empty() {
             platform.warn("<span tt=\'warn_search\'></span>".to_string())?;
         }
         Ok(ret)
     }
+}
+
+/// The search API's estimate of the total number of hits, when available.
+fn total_hits(result: &Value) -> Option<usize> {
+    let value = &result["query"]["searchinfo"]["totalhits"];
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+        .map(|n| n as usize)
+}
+
+/// A paged search is short of the reported total, and the user asked for at
+/// least that many results. A total above `max` is expected to be truncated.
+fn search_is_incomplete(found: usize, total: Option<usize>, max: usize) -> bool {
+    total.is_some_and(|total| total <= max && found < total)
 }
 
 /// The `srnamespace` value searching these namespaces, or all of them if
@@ -101,6 +152,28 @@ mod tests {
         assert_eq!(srnamespace(&HashSet::new()), "*");
         assert_eq!(srnamespace(&HashSet::from([6])), "6");
         assert_eq!(srnamespace(&HashSet::from([14, 0, 6])), "0|6|14");
+    }
+
+    #[test]
+    fn test_total_hits() {
+        assert_eq!(
+            total_hits(&serde_json::json!({"query":{"searchinfo":{"totalhits":1087}}})),
+            Some(1087)
+        );
+        assert_eq!(
+            total_hits(&serde_json::json!({"query":{"searchinfo":{"totalhits":"42"}}})),
+            Some(42)
+        );
+        assert_eq!(total_hits(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn test_search_is_incomplete() {
+        assert!(search_is_incomplete(1039, Some(1087), 1500));
+        assert!(!search_is_incomplete(1087, Some(1087), 1500));
+        // A total above the caller's cap is expected to be truncated.
+        assert!(!search_is_incomplete(500, Some(1087), 500));
+        assert!(!search_is_incomplete(10, None, 500));
     }
 
     #[test]
