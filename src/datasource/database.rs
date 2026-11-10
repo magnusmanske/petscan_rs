@@ -1834,8 +1834,10 @@ impl SourceDatabase {
             ));
         }
         for value in &self.params.title_ends_with {
+            // `page_title` is binary, so compare a byte-length suffix;
+            // OCTET_LENGTH works for non-ASCII titles too.
             conditions.push(SQLtuple(
-                "RIGHT(p.page_title, CHAR_LENGTH(?)) = ?".to_string(),
+                "RIGHT(p.page_title, OCTET_LENGTH(?)) = ?".to_string(),
                 vec![
                     MyValue::Bytes(value.clone().into()),
                     MyValue::Bytes(value.clone().into()),
@@ -2680,7 +2682,7 @@ mod tests {
 
         let ends = snapshot_db(|p| p.title_ends_with = vec![" research".to_string()]);
         let (ends_sql, ends_n) = built(|s| ends.get_pages_for_primary_title_filters(s));
-        assert_eq!(ends_sql, " AND (RIGHT(p.page_title, CHAR_LENGTH(?)) = ?)");
+        assert_eq!(ends_sql, " AND (RIGHT(p.page_title, OCTET_LENGTH(?)) = ?)");
         assert_eq!(ends_n, 2);
 
         let includes = snapshot_db(|p| p.title_includes = vec!["lithium".to_string()]);
@@ -2703,7 +2705,7 @@ mod tests {
         let (all_sql, all_n) = built(|s| db.get_pages_for_primary_title_filters(s));
         assert_eq!(
             all_sql,
-            " AND ((LOCATE(?, p.page_title) = 1) AND (RIGHT(p.page_title, CHAR_LENGTH(?)) = ?))"
+            " AND ((LOCATE(?, p.page_title) = 1) AND (RIGHT(p.page_title, OCTET_LENGTH(?)) = ?))"
         );
         assert_eq!(all_n, 3);
 
@@ -2711,7 +2713,7 @@ mod tests {
         let (any_sql, any_n) = built(|s| db.get_pages_for_primary_title_filters(s));
         assert_eq!(
             any_sql,
-            " AND ((LOCATE(?, p.page_title) = 1) OR (RIGHT(p.page_title, CHAR_LENGTH(?)) = ?))"
+            " AND ((LOCATE(?, p.page_title) = 1) OR (RIGHT(p.page_title, OCTET_LENGTH(?)) = ?))"
         );
         assert_eq!(any_n, 3);
     }
