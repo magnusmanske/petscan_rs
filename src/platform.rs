@@ -789,6 +789,27 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
+    async fn test_sitelink_filter_count_matches_display() {
+        // The reported query filters 84..=90 Wikidata sitelinks but used to
+        // display the target wiki's langlinks count instead (issue #109).
+        let platform = run_psid(20867492).await;
+        let result = platform.result.as_ref().expect("result");
+        assert!(!result.is_empty());
+        assert!(result.has_sitelink_counts());
+        for entry in result.as_vec() {
+            let count = entry
+                .sitelink_count()
+                .expect("sitelink count must survive the conversion back");
+            assert!(
+                (84..=90).contains(&count),
+                "{} has {count} sitelinks",
+                entry.title().pretty()
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_min_max_sitelinks() {
         // [[Count von Count]] vs. [[Magnus Manske]]
         check_results_for_psid(10123897, "wikidatawiki", vec![Title::new("Q13520818", 0)]).await; // Min 15

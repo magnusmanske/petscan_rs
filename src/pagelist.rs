@@ -1,7 +1,7 @@
 use crate::app_state::AppState;
 use crate::database_manager::DbCluster;
 use crate::datasource::SQLtuple;
-use crate::pagelist_entry::{PageListEntry, PageListSort, sort_or_shuffle};
+use crate::pagelist_entry::{LinkCount, PageListEntry, PageListSort, sort_or_shuffle};
 use crate::platform::{MAX_CONCURRENT_DB_BATCHES, PAGE_BATCH_SIZE, Platform};
 use crate::query_context::QueryContext;
 use anyhow::{Result, anyhow};
@@ -37,6 +37,19 @@ fn read_lock<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
 
 fn write_lock<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     lock.write().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Sitelink counts by item title (`Q…`/`P…`), for carrying them across a
+/// Wikidata → target-wiki conversion.
+fn sitelink_counts_by_title(entries: &HashSet<PageListEntry>) -> HashMap<String, LinkCount> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .sitelink_count()
+                .map(|count| (entry.title().pretty().to_string(), count))
+        })
+        .collect()
 }
 
 /// Distinguishes Wikidata item entities (Q-prefixed, namespace 0) from
@@ -837,10 +850,16 @@ impl PageList {
             return Ok(());
         }
         Platform::profile("PageList::convert_from_wikidata START", None);
+        // Keep sitelink counts when a caller (the sitelinks filter) already
+        // computed them on Wikidata. `process_pages` otherwise replaces them
+        // with the target wiki's langlinks count, which is a different number.
+        let entries_len = self.len();
+        let sitelink_counts = sitelink_counts_by_title(&read_lock(&self.entries));
+        let keep_sitelink_counts = sitelink_counts.len() == entries_len && entries_len > 0;
         let batches = self.to_sql_batches(PAGE_BATCH_SIZE*2)
             .par_iter_mut()
             .map(|sql|{
-                sql.0 = "SELECT ips_site_page FROM wb_items_per_site,page WHERE ips_item_id=substr(page_title,2)*1 AND ".to_owned()+&sql.0+" AND ips_site_id=?";
+                sql.0 = "SELECT ips_site_page,page_title FROM wb_items_per_site,page WHERE ips_item_id=substr(page_title,2)*1 AND ".to_owned()+&sql.0+" AND ips_site_id=?";
                 sql.1.push(MyValue::Bytes(wiki.into()));
                 sql.to_owned()
             })
@@ -868,12 +887,14 @@ impl PageList {
         }
 
         let the_fn = |row: my::Row| {
-            let ips_site_page = my::from_row_opt::<Vec<u8>>(row).ok()?;
+            let (ips_site_page, item) = my::from_row_opt::<(Vec<u8>, Vec<u8>)>(row).ok()?;
             let ips_site_page = String::from_utf8_lossy(&ips_site_page).into_owned();
-            Some(PageListEntry::new(Title::new_from_full(
-                &ips_site_page,
-                &api,
-            )))
+            let item = String::from_utf8_lossy(&item).into_owned();
+            let mut entry = PageListEntry::new(Title::new_from_full(&ips_site_page, &api));
+            if let Some(count) = sitelink_counts.get(&item) {
+                entry.set_sitelink_count(Some(*count));
+            }
+            Some(entry)
         };
 
         let mut stream = iter(futures).buffered(MAX_CONCURRENT_DB_BATCHES);
@@ -885,6 +906,9 @@ impl PageList {
         }
 
         Platform::profile("PageList::convert_from_wikidata ALL BATCHES COMPLETE", None);
+        if keep_sitelink_counts {
+            self.set_has_sitelink_counts(true);
+        }
         self.set_wiki(Some(wiki.to_string()));
         Platform::profile("PageList::convert_from_wikidata END", None);
         Ok(())
@@ -1089,6 +1113,17 @@ mod tests {
         assert!(pl.has_sitelink_counts());
         pl.set_has_sitelink_counts(false);
         assert!(!pl.has_sitelink_counts());
+    }
+
+    #[test]
+    fn sitelink_counts_are_keyed_by_item_title() {
+        let mut with_count = make_entry("Q42", 0);
+        with_count.set_sitelink_count(Some(84));
+        let without_count = make_entry("Q43", 0);
+        let entries = HashSet::from([with_count, without_count]);
+        let counts = sitelink_counts_by_title(&entries);
+        assert_eq!(counts.get("Q42"), Some(&84));
+        assert!(!counts.contains_key("Q43"));
     }
 
     #[test]

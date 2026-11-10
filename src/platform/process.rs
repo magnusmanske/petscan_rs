@@ -1223,6 +1223,9 @@ impl Platform {
             return Ok(());
         }
 
+        // `build_sitelinks_sql` only computes the count when a min/max bound
+        // is set; otherwise the second column is a constant 0.
+        let has_counts = !sitelinks_min.is_empty() || !sitelinks_max.is_empty();
         let (sql, sql_post) = Self::build_sitelinks_sql(
             &sitelinks_yes,
             &sitelinks_any,
@@ -1244,8 +1247,12 @@ impl Platform {
         result.clear_entries();
         let state = self.state();
         let the_f = |row: my::Row| {
-            let (page_title, _sitelinks_count) = my::from_row::<(String, usize)>(row);
-            Some(PageListEntry::new(Title::new(&page_title, 0)))
+            let (page_title, sitelinks_count) = my::from_row::<(String, usize)>(row);
+            let mut entry = PageListEntry::new(Title::new(&page_title, 0));
+            if has_counts {
+                entry.set_sitelink_count(Some(sitelinks_count as LinkCount));
+            }
+            Some(entry)
         };
         result
             .run_batch_queries(&state, batches)
@@ -1253,6 +1260,11 @@ impl Platform {
             .iter()
             .filter_map(|row| the_f(row.to_owned()))
             .for_each(|entry| result.add_entry(entry));
+        if has_counts {
+            // Keep the Wikidata count for display/sorting after converting back;
+            // the target wiki's langlinks count is a different number (#109).
+            result.set_has_sitelink_counts(true);
+        }
 
         if let Some(wiki) = old_wiki {
             result.convert_to_wiki(&wiki, self).await?;
