@@ -13,7 +13,7 @@ use chrono::prelude::*;
 use core::ops::Sub;
 use futures::stream::{StreamExt, iter};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use tracing::debug;
 use wikimisc::mediawiki::api::{Api, NamespaceID};
 use wikimisc::mediawiki::title::Title;
@@ -279,9 +279,9 @@ pub struct SourceDatabaseParameters {
     links_to_all: Vec<String>,
     links_to_any: Vec<String>,
     links_to_none: Vec<String>,
-    templates_yes: Vec<String>,
-    templates_any: Vec<String>,
-    templates_no: Vec<String>,
+    templates_yes: Vec<(NamespaceID, String)>,
+    templates_any: Vec<(NamespaceID, String)>,
+    templates_no: Vec<(NamespaceID, String)>,
     templates_yes_talk_page: bool,
     templates_any_talk_page: bool,
     templates_no_talk_page: bool,
@@ -423,18 +423,24 @@ impl SourceDatabaseParameters {
             skip_tracking_categories: platform.has_param("skip_tracking_categories"),
             skip_hidden_categories: platform.has_param("skip_hidden_categories"),
         };
-        ret.templates_yes = helpers::vec_to_ucfirst(
-            platform.get_param_as_vec("templates_yes", "\n"),
+        ret.templates_yes = template_list(
+            platform,
+            "templates_yes",
             ret.template_namespace_is_case_insensitive,
-        );
-        ret.templates_any = helpers::vec_to_ucfirst(
-            platform.get_param_as_vec("templates_any", "\n"),
+        )
+        .await;
+        ret.templates_any = template_list(
+            platform,
+            "templates_any",
             ret.template_namespace_is_case_insensitive,
-        );
-        ret.templates_no = helpers::vec_to_ucfirst(
-            platform.get_param_as_vec("templates_no", "\n"),
+        )
+        .await;
+        ret.templates_no = template_list(
+            platform,
+            "templates_no",
             ret.template_namespace_is_case_insensitive,
-        );
+        )
+        .await;
         ret.created_by = platform.get_param_as_vec("created_by", "\n");
         ret
     }
@@ -442,6 +448,29 @@ impl SourceDatabaseParameters {
     pub fn set_wiki(&mut self, wiki: Option<String>) {
         self.wiki = wiki;
     }
+}
+
+/// Parse one Templates&links textarea into namespace-qualified titles.
+///
+/// Uses the wiki's site info when it is available, so localised namespace
+/// names work; otherwise `helpers::template_title` falls back to the canonical
+/// Template/Module/main-namespace rules.
+async fn template_list(
+    platform: &Platform,
+    param: &str,
+    is_case_insensitive: bool,
+) -> Vec<(NamespaceID, String)> {
+    let raw = platform.get_param_as_vec(param, "\n");
+    if raw.is_empty() {
+        return vec![];
+    }
+    let api = match platform.get_main_wiki() {
+        Some(wiki) => platform.state().get_api_for_wiki(wiki).await.ok(),
+        None => None,
+    };
+    raw.iter()
+        .map(|title| helpers::template_title(title, api.as_ref(), is_case_insensitive))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -806,7 +835,45 @@ impl SourceDatabase {
             .join(","))
     }
 
-    fn template_subquery(&self, input: &[String], use_talk_page: bool, find_not: bool) -> SQLtuple {
+    /// A `templatelinks` condition for one group of namespaced template titles.
+    ///
+    /// `input` is already normalized to `(namespace, underscored title)`, so a
+    /// bare name is Template: and `Module:`/`:Title` keep their namespaces.
+    fn template_title_condition(input: &[(NamespaceID, String)]) -> SQLtuple {
+        let mut by_namespace: BTreeMap<NamespaceID, Vec<String>> = BTreeMap::new();
+        for (namespace, title) in input {
+            by_namespace
+                .entry(*namespace)
+                .or_default()
+                .push(title.clone());
+        }
+
+        let mut condition = super::sql_tuple();
+        let multiple = by_namespace.len() > 1;
+        if multiple {
+            condition.0 += "(";
+        }
+        for (index, (namespace, titles)) in by_namespace.iter().enumerate() {
+            if index > 0 {
+                condition.0 += " OR ";
+            }
+            condition.0 += "(";
+            condition.0 += &format!("lt_namespace={namespace} AND lt_title");
+            helpers::sql_in(titles, &mut condition);
+            condition.0 += ")";
+        }
+        if multiple {
+            condition.0 += ")";
+        }
+        condition
+    }
+
+    fn template_subquery(
+        &self,
+        input: &[(NamespaceID, String)],
+        use_talk_page: bool,
+        find_not: bool,
+    ) -> SQLtuple {
         let mut sql = super::sql_tuple();
         if use_talk_page {
             sql.0 += if find_not {
@@ -817,17 +884,19 @@ impl SourceDatabase {
             // Keep the indexed column alone on the left: `pt2.page_namespace+1=…`
             // cannot use the page namespace/title index and makes large
             // template queries (e.g. GA nominee on enwiki) time out.
-            sql.0 += "(SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace=pt.page_namespace-1 AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
+            sql.0 += "(SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace=pt.page_namespace-1 AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND ";
         } else {
             sql.0 += if find_not {
                 " AND p.page_id NOT IN "
             } else {
                 " AND p.page_id IN "
             };
-            sql.0 += "(SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
+            sql.0 += "(SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND ";
         }
 
-        helpers::sql_in(input, &mut sql);
+        let condition = Self::template_title_condition(input);
+        sql.0 += &condition.0;
+        sql.1.extend(condition.1);
 
         if !self.params.namespace_ids.is_empty() {
             let v: Vec<String> = self
@@ -1927,7 +1996,7 @@ impl SourceDatabase {
         }
     }
 
-    /// Templates as secondary; template namespace only!
+    /// Templates as secondary; each title keeps its parsed namespace.
     fn get_pages_for_primary_templates_as_secondary(&self, filters: &mut Filters) {
         if !self.has_pos_templates {
             return;
@@ -2415,11 +2484,11 @@ mod tests {
     #[test]
     fn sql_templates_yes_one_subquery_per_template() {
         let mut db = snapshot_db(|p| {
-            p.templates_yes = vec!["Infobox".to_string(), "Taxobox".to_string()];
+            p.templates_yes = vec![(10, "Infobox".to_string()), (10, "Taxobox".to_string())];
         });
         db.has_pos_templates = true;
         let (sql, n) = built(|s| db.get_pages_for_primary_templates_as_secondary(s));
-        let one = " AND p.page_id IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)";
+        let one = " AND p.page_id IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND (lt_namespace=10 AND lt_title=?))";
         assert_eq!(sql, format!("{one}{one}"));
         assert_eq!(n, 2);
     }
@@ -2427,24 +2496,42 @@ mod tests {
     #[test]
     fn sql_templates_any_single_subquery_with_in_list() {
         let mut db = snapshot_db(|p| {
-            p.templates_any = vec!["Infobox".to_string(), "Taxobox".to_string()];
+            p.templates_any = vec![(10, "Infobox".to_string()), (10, "Taxobox".to_string())];
         });
         db.has_pos_templates = true;
         let (sql, n) = built(|s| db.get_pages_for_primary_templates_as_secondary(s));
         assert_eq!(
             sql,
-            " AND p.page_id IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title IN (?,?))"
+            " AND p.page_id IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND (lt_namespace=10 AND lt_title IN (?,?)))"
         );
         assert_eq!(n, 2);
     }
 
     #[test]
+    fn sql_templates_any_groups_by_namespace() {
+        let mut db = snapshot_db(|p| {
+            p.templates_any = vec![
+                (0, "Main_page".to_string()),
+                (10, "Infobox".to_string()),
+                (828, "Bar".to_string()),
+            ];
+        });
+        db.has_pos_templates = true;
+        let (sql, n) = built(|s| db.get_pages_for_primary_templates_as_secondary(s));
+        assert_eq!(
+            sql,
+            " AND p.page_id IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND ((lt_namespace=0 AND lt_title=?) OR (lt_namespace=10 AND lt_title=?) OR (lt_namespace=828 AND lt_title=?)))"
+        );
+        assert_eq!(n, 3);
+    }
+
+    #[test]
     fn sql_templates_no_uses_not_in() {
-        let db = snapshot_db(|p| p.templates_no = vec!["Stub".to_string()]);
+        let db = snapshot_db(|p| p.templates_no = vec![(10, "Stub".to_string())]);
         let (sql, n) = built(|s| db.get_pages_for_primary_negative_templates(s));
         assert_eq!(
             sql,
-            " AND p.page_id NOT IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=?)"
+            " AND p.page_id NOT IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND (lt_namespace=10 AND lt_title=?))"
         );
         assert_eq!(n, 1);
     }
@@ -2452,7 +2539,7 @@ mod tests {
     #[test]
     fn sql_templates_talk_page_shifts_namespace() {
         let mut db = snapshot_db(|p| {
-            p.templates_any = vec!["WikiProject_Biology".to_string()];
+            p.templates_any = vec![(10, "WikiProject_Biology".to_string())];
             p.templates_any_talk_page = true;
             p.namespace_ids = vec![0];
         });
@@ -2460,7 +2547,7 @@ mod tests {
         let (sql, n) = built(|s| db.get_pages_for_primary_templates_as_secondary(s));
         assert_eq!(
             sql,
-            " AND p.page_id IN (SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace=pt.page_namespace-1 AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=? AND tl_from_namespace=?)"
+            " AND p.page_id IN (SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace=pt.page_namespace-1 AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND (lt_namespace=10 AND lt_title=?) AND tl_from_namespace=?)"
         );
         // Template title + the talk-shifted namespace id (0+1=1), both bound.
         assert_eq!(n, 2);
@@ -2798,7 +2885,7 @@ mod tests {
     fn kitchen_sink_filters() -> Filters {
         let mut db = snapshot_db(|p| {
             p.namespace_ids = vec![0];
-            p.templates_no = vec!["Stub".to_string()];
+            p.templates_no = vec![(10, "Stub".to_string())];
             p.page_image = "free".to_string();
             p.last_edit_anon = "no".to_string();
             p.redirects = "no".to_string();
@@ -2831,7 +2918,7 @@ mod tests {
         assert_eq!(
             sql,
             " AND p.page_namespace=? \
-             AND p.page_id NOT IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=? AND tl_from_namespace=?) \
+             AND p.page_id NOT IN (SELECT DISTINCT tl_from FROM templatelinks,linktarget WHERE p.page_id=tl_from AND tl_target_id=lt_id AND (lt_namespace=10 AND lt_title=?) AND tl_from_namespace=?) \
              AND EXISTS (SELECT * FROM page_props WHERE p.page_id=pp_page AND pp_propname='page_image_free') \
              AND EXISTS (SELECT * FROM revision,actor WHERE rev_id=p.page_latest AND rev_page=p.page_id AND rev_actor=actor_id AND actor_user IS NOT NULL) \
              AND p.page_is_redirect=0 \

@@ -59,11 +59,41 @@ pub(super) fn s2u_ucfirst(s: &str, is_case_insensitive: bool) -> String {
     }
 }
 
-pub(super) fn vec_to_ucfirst(input: Vec<String>, is_case_insensitive: bool) -> Vec<String> {
-    input
-        .iter()
-        .map(|s| s2u_ucfirst(s, is_case_insensitive))
-        .collect()
+/// Normalize one `Templates&links` input into `(namespace, underscored title)`.
+///
+/// Bare names default to the Template namespace (10). A leading `:` forces the
+/// rest to be parsed as a full title, so `:Title` is main-namespace and
+/// `:Module:Title` is the Module namespace. Any other prefix (`Module:Title`,
+/// localised namespaces) is resolved through the wiki's site info when an API
+/// is available; the offline fallback only knows the canonical `Module:` form.
+pub(super) fn template_title(
+    input: &str,
+    api: Option<&Api>,
+    is_case_insensitive: bool,
+) -> (NamespaceID, String) {
+    let input = input.trim();
+    if let Some(api) = api {
+        let full = if let Some(rest) = input.strip_prefix(':') {
+            rest.to_string()
+        } else if input.contains(':') {
+            input.to_string()
+        } else {
+            format!("Template:{input}")
+        };
+        let title = Title::new_from_full(&full, api);
+        return (title.namespace_id(), title.with_underscores());
+    }
+
+    if let Some(rest) = input.strip_prefix(':') {
+        (0, s2u_ucfirst(rest, is_case_insensitive))
+    } else if let Some(rest) = input
+        .strip_prefix("Module:")
+        .or_else(|| input.strip_prefix("module:"))
+    {
+        (828, s2u_ucfirst(rest, is_case_insensitive))
+    } else {
+        (10, s2u_ucfirst(input, is_case_insensitive))
+    }
 }
 
 /// Append an SQL `=v` or `IN (v1, v2, …)` clause, picking the shorter form
@@ -336,11 +366,22 @@ mod tests {
     }
 
     #[test]
-    fn vec_to_ucfirst_maps_each_item() {
-        let input = vec!["foo".to_string(), "bar baz".to_string()];
+    fn template_title_offline_defaults_to_template_namespace() {
         assert_eq!(
-            vec_to_ucfirst(input, true),
-            vec!["Foo".to_string(), "Bar_baz".to_string()]
+            template_title("Infobox person", None, true),
+            (10, "Infobox_person".to_string())
+        );
+    }
+
+    #[test]
+    fn template_title_offline_handles_module_and_leading_colon() {
+        assert_eq!(
+            template_title("Module:Bar", None, true),
+            (828, "Bar".to_string())
+        );
+        assert_eq!(
+            template_title(":Main page", None, true),
+            (0, "Main_page".to_string())
         );
     }
 
