@@ -300,6 +300,10 @@ pub struct SourceDatabaseParameters {
     page_wikidata_item: String,
     larger: Option<usize>,
     smaller: Option<usize>,
+    title_starts_with: Vec<String>,
+    title_ends_with: Vec<String>,
+    title_includes: Vec<String>,
+    title_filter_any: bool,
     since_rev0: Option<usize>,
     minlinks: Option<usize>,
     maxlinks: Option<usize>,
@@ -409,6 +413,12 @@ impl SourceDatabaseParameters {
             larger: platform.usize_option_from_param("larger"),
             since_rev0: platform.usize_option_from_param("since_rev0"),
             smaller: platform.usize_option_from_param("smaller"),
+            title_starts_with: non_empty_values(
+                &platform.get_param_as_vec("title_starts_with", "\n"),
+            ),
+            title_ends_with: non_empty_values(&platform.get_param_as_vec("title_ends_with", "\n")),
+            title_includes: non_empty_values(&platform.get_param_as_vec("title_includes", "\n")),
+            title_filter_any: platform.get_param_blank("title_filter_combination") == "any",
             wiki: platform.get_main_wiki(),
             namespace_ids: platform
                 .form_parameters()
@@ -448,6 +458,17 @@ impl SourceDatabaseParameters {
     pub fn set_wiki(&mut self, wiki: Option<String>) {
         self.wiki = wiki;
     }
+}
+
+/// Drop empty (or whitespace-only) newline-separated values, keeping the
+/// value itself intact: in a title filter a trailing space is significant
+/// (`Research ` should not match `Researchers`).
+fn non_empty_values(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim_end_matches('\r').to_string())
+        .filter(|value| !value.trim().is_empty())
+        .collect()
 }
 
 /// Parse one Templates&links textarea into namespace-qualified titles.
@@ -1588,6 +1609,7 @@ impl SourceDatabase {
         self.get_pages_for_primary_created_by(&mut filters);
         self.get_pages_for_primary_page_types(&mut filters);
         self.get_pages_for_primary_page_size(&mut filters);
+        self.get_pages_for_primary_title_filters(&mut filters);
         self.get_pages_for_primary_wikidata_item(&mut filters);
         self.get_pages_for_primary_last_edited(&mut filters);
         filters
@@ -1795,6 +1817,64 @@ impl SourceDatabase {
             sql.0 += " HAVING ";
             sql.0 += &having.join(" AND ");
         }
+    }
+
+    /// `title_starts_with` / `title_ends_with` / `title_includes`.
+    ///
+    /// Values within a field are combined with OR; the fields are combined
+    /// with AND by default, or with OR when `title_filter_combination=any`.
+    /// `LOCATE`/`RIGHT` are used instead of `LIKE` so `%` and `_` in the
+    /// input are literal text.
+    fn get_pages_for_primary_title_filters(&self, filters: &mut Filters) {
+        let mut conditions: Vec<SQLtuple> = vec![];
+        for value in &self.params.title_starts_with {
+            conditions.push(SQLtuple(
+                "LOCATE(?, p.page_title) = 1".to_string(),
+                vec![MyValue::Bytes(value.clone().into())],
+            ));
+        }
+        for value in &self.params.title_ends_with {
+            conditions.push(SQLtuple(
+                "RIGHT(p.page_title, CHAR_LENGTH(?)) = ?".to_string(),
+                vec![
+                    MyValue::Bytes(value.clone().into()),
+                    MyValue::Bytes(value.clone().into()),
+                ],
+            ));
+        }
+        for value in &self.params.title_includes {
+            conditions.push(SQLtuple(
+                "LOCATE(?, p.page_title) > 0".to_string(),
+                vec![MyValue::Bytes(value.clone().into())],
+            ));
+        }
+        if conditions.is_empty() {
+            return;
+        }
+
+        let joiner = if self.params.title_filter_any {
+            " OR "
+        } else {
+            " AND "
+        };
+        let multiple = conditions.len() > 1;
+        let mut sql = SQLtuple(" AND ".to_string(), vec![]);
+        if multiple {
+            sql.0 += "(";
+        }
+        for (index, condition) in conditions.into_iter().enumerate() {
+            if index > 0 {
+                sql.0 += joiner;
+            }
+            sql.0 += "(";
+            sql.0 += &condition.0;
+            sql.0 += ")";
+            sql.1.extend(condition.1);
+        }
+        if multiple {
+            sql.0 += ")";
+        }
+        filters.push_page_only(sql);
     }
 
     fn get_pages_for_primary_page_size(&self, filters: &mut Filters) {
@@ -2180,6 +2260,32 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + config.json; run with --ignored"]
+    async fn test_title_starts_with_filters_the_category_result() {
+        let result = simulate_category_query(vec![
+            ("categories", "1974_births\nGerman_bioinformaticians"),
+            ("language", "en"),
+            ("project", "wikipedia"),
+            ("title_starts_with", "Magnus"),
+        ])
+        .await
+        .unwrap();
+        assert!(!result.is_empty());
+        assert!(
+            result
+                .as_vec()
+                .iter()
+                .all(|entry| entry.title().pretty().starts_with("Magnus")),
+            "{:?}",
+            result
+                .as_vec()
+                .iter()
+                .map(|entry| entry.title().pretty().to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
     /// The Commons links split in one query: `categorylinks` on the links
     /// cluster, `revision` (the `before` filter *and* `page_touched`) on the
     /// core one. Nothing but the split machinery can make this return rows.
@@ -2551,6 +2657,63 @@ mod tests {
         );
         // Template title + the talk-shifted namespace id (0+1=1), both bound.
         assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn non_empty_values_keeps_significant_spaces() {
+        assert_eq!(
+            non_empty_values(&[
+                "Research ".to_string(),
+                " ".to_string(),
+                "Foo\r".to_string(),
+            ]),
+            vec!["Research ".to_string(), "Foo".to_string()]
+        );
+    }
+
+    #[test]
+    fn sql_title_filters() {
+        let starts = snapshot_db(|p| p.title_starts_with = vec!["Research ".to_string()]);
+        let (starts_sql, starts_n) = built(|s| starts.get_pages_for_primary_title_filters(s));
+        assert_eq!(starts_sql, " AND (LOCATE(?, p.page_title) = 1)");
+        assert_eq!(starts_n, 1);
+
+        let ends = snapshot_db(|p| p.title_ends_with = vec![" research".to_string()]);
+        let (ends_sql, ends_n) = built(|s| ends.get_pages_for_primary_title_filters(s));
+        assert_eq!(ends_sql, " AND (RIGHT(p.page_title, CHAR_LENGTH(?)) = ?)");
+        assert_eq!(ends_n, 2);
+
+        let includes = snapshot_db(|p| p.title_includes = vec!["lithium".to_string()]);
+        let (includes_sql, includes_n) = built(|s| includes.get_pages_for_primary_title_filters(s));
+        assert_eq!(includes_sql, " AND (LOCATE(?, p.page_title) > 0)");
+        assert_eq!(includes_n, 1);
+
+        let none = snapshot_db(|_| {});
+        let (none_sql, none_n) = built(|s| none.get_pages_for_primary_title_filters(s));
+        assert_eq!(none_sql, "");
+        assert_eq!(none_n, 0);
+    }
+
+    #[test]
+    fn sql_title_filters_combine() {
+        let mut db = snapshot_db(|p| {
+            p.title_starts_with = vec!["Research ".to_string()];
+            p.title_ends_with = vec![" research".to_string()];
+        });
+        let (all_sql, all_n) = built(|s| db.get_pages_for_primary_title_filters(s));
+        assert_eq!(
+            all_sql,
+            " AND ((LOCATE(?, p.page_title) = 1) AND (RIGHT(p.page_title, CHAR_LENGTH(?)) = ?))"
+        );
+        assert_eq!(all_n, 3);
+
+        db.params.title_filter_any = true;
+        let (any_sql, any_n) = built(|s| db.get_pages_for_primary_title_filters(s));
+        assert_eq!(
+            any_sql,
+            " AND ((LOCATE(?, p.page_title) = 1) OR (RIGHT(p.page_title, CHAR_LENGTH(?)) = ?))"
+        );
+        assert_eq!(any_n, 3);
     }
 
     #[test]

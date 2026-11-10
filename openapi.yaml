@@ -87,6 +87,32 @@ paths:
           in: query
           schema:
             type: string
+        - name: title_starts_with
+          in: query
+          description: >-
+            Keep pages whose title starts with this text. Newline-separated
+            values are ORed within the field.
+          schema:
+            type: string
+        - name: title_ends_with
+          in: query
+          description: Keep pages whose title ends with this text.
+          schema:
+            type: string
+        - name: title_includes
+          in: query
+          description: Keep pages whose title contains this text.
+          schema:
+            type: string
+        - name: title_filter_combination
+          in: query
+          description: >-
+            `all` (default) ANDs the title filters above, `any` ORs them.
+          schema:
+            type: string
+            enum:
+              - all
+              - any
         - name: before
           in: query
           schema:
