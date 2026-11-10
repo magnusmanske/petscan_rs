@@ -792,6 +792,19 @@ function initializeInterface() {
 	});
 
 	setupResultMultiSelect();
+
+	$("#ns_select_all").click(function (e) {
+		e.preventDefault();
+		$("#namespaces input[type='checkbox']")
+			.prop("checked", true)
+			.trigger("change");
+	});
+	$("#ns_select_none").click(function (e) {
+		e.preventDefault();
+		$("#namespaces input[type='checkbox']")
+			.prop("checked", false)
+			.trigger("change");
+	});
 }
 
 // Select a namespace in the form without discarding the user's other
