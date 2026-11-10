@@ -371,14 +371,17 @@ impl Platform {
             .await?;
         Platform::profile("after load_missing_metadata", Some(result.len()));
 
-        if let Some(regexp) = self.get_param("rxp_filter") {
-            result.regexp_filter(&regexp);
-        }
         if let Some(search) = self.get_param("search_filter") {
             result.search_filter(self, &search).await?;
         }
         self.process_redlinks(result).await?;
         Platform::profile("after process_redlinks", Some(result.len()));
+        // Apply the regexp after redlink expansion, so it filters the redlinks
+        // themselves for redlink output instead of only the source pages
+        // (issue #42). For normal output process_redlinks is a no-op.
+        if let Some(regexp) = self.get_param("rxp_filter") {
+            result.regexp_filter(&regexp);
+        }
         self.process_creator(result).await?;
         Platform::profile("after process_creator", Some(result.len()));
         Ok(())
