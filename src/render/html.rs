@@ -294,8 +294,10 @@ impl Render for RenderHTML {
         let mut q = String::new();
         let checked: &str;
         if params.autolist_creator_mode() {
-            if platform.label_exists(entry.title().pretty()) || entry.title().pretty().contains('(')
-            {
+            // Preselect exactly those pages whose full title has no label or
+            // alias yet. Titles with parentheses used to be skipped
+            // unconditionally, which hid valid candidates (issue #108).
+            if platform.label_exists(entry.title().pretty()) {
                 checked = "";
             } else {
                 checked = "checked";
@@ -531,6 +533,16 @@ mod tests {
             ),
             "{cell}"
         );
+    }
+
+    #[test]
+    fn creator_checkbox_preselects_parenthesized_title_without_label() {
+        let platform = crate::test_support::make_platform(vec![]);
+        let mut params = params();
+        *params.autolist_creator_mode_mut() = true;
+        let entry = PageListEntry::new(Title::new("Вулиця Шараневича (Львів)", 0));
+        let html = RenderHTML.render_cell_checkbox(&entry, &params, &platform);
+        assert!(html.contains("checked"), "{html}");
     }
 
     #[test]
