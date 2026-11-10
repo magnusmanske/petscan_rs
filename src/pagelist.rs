@@ -216,11 +216,14 @@ impl PageList {
         let tmp = read_lock(&self.entries)
             .par_iter()
             .map(|entry| {
-                let mut nsid = entry.title().namespace_id();
-                nsid = nsid - (nsid & 1) + add; // Change "talk" bit
-                let t = entry.title().pretty();
-                let new_title = Title::new(t, nsid);
-                PageListEntry::new(new_title)
+                let nsid = entry.title().namespace_id();
+                let new_nsid = nsid - (nsid & 1) + add; // Change "talk" bit
+                if new_nsid == nsid {
+                    // Same page: keep page id, size, file info, counts, …
+                    return entry.clone();
+                }
+                // A different page: the old page's metadata no longer applies.
+                PageListEntry::new(Title::new(entry.title().pretty(), new_nsid))
             })
             .collect();
         *(write_lock(&self.entries)) = tmp;
@@ -1113,6 +1116,32 @@ mod tests {
         assert!(pl.has_sitelink_counts());
         pl.set_has_sitelink_counts(false);
         assert!(!pl.has_sitelink_counts());
+    }
+
+    #[test]
+    fn change_namespaces_keeps_metadata_when_the_namespace_is_unchanged() {
+        let pl = PageList::new_from_wiki("commonswiki");
+        let mut entry = make_entry("Example.jpg", 6);
+        entry.set_page_id(Some(7));
+        entry.set_incoming_links(Some(3));
+        pl.add_entry(entry);
+        pl.change_namespaces(false); // topic conversion leaves File: at 6
+        let entries = pl.as_vec();
+        assert_eq!(entries[0].title().namespace_id(), 6);
+        assert_eq!(entries[0].page_id(), Some(7));
+        assert_eq!(entries[0].incoming_links(), Some(3));
+    }
+
+    #[test]
+    fn change_namespaces_drops_metadata_when_the_page_changes() {
+        let pl = PageList::new_from_wiki("enwiki");
+        let mut entry = make_entry("Foo", 1);
+        entry.set_page_id(Some(7));
+        pl.add_entry(entry);
+        pl.change_namespaces(false); // Talk:Foo -> Foo
+        let entries = pl.as_vec();
+        assert_eq!(entries[0].title().namespace_id(), 0);
+        assert_eq!(entries[0].page_id(), None);
     }
 
     #[test]

@@ -349,10 +349,13 @@ impl Platform {
     async fn apply_page_enrichments(&self, result: &PageList) -> Result<()> {
         self.process_files(result).await?;
         Platform::profile("after process_files", Some(result.len()));
-        self.process_pages(result).await?;
-        Platform::profile("after process_pages", Some(result.len()));
+        // Convert talk↔subject before fetching page fields: incoming links,
+        // size and sitelinks must describe the page the user will see, not the
+        // talk page a WikiProject category matched (issue #154).
         self.process_namespace_conversion(result).await?;
         Platform::profile("after process_namespace_conversion", Some(result.len()));
+        self.process_pages(result).await?;
+        Platform::profile("after process_pages", Some(result.len()));
         self.process_subpages(result).await?;
         Platform::profile("after process_subpages", Some(result.len()));
         self.annotate_with_wikidata_item(result).await?;

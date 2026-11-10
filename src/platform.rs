@@ -810,6 +810,29 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
+    async fn test_incoming_links_after_topic_conversion() {
+        // WikiProject Louisville categories contain talk pages; the output asks
+        // for topic pages sorted by incoming links (issue #154).
+        let platform = run_psid(26811125).await;
+        let result = platform.result.as_ref().expect("result");
+        assert!(!result.is_empty());
+        for entry in result.as_vec() {
+            assert_eq!(
+                entry.title().namespace_id(),
+                0,
+                "{}",
+                entry.title().pretty()
+            );
+            assert!(
+                entry.incoming_links().is_some(),
+                "missing incoming links for {}",
+                entry.title().pretty()
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live MySQL replica + Wikimedia APIs; run with --ignored"]
     async fn test_manual_list_enwiki_min_max_sitelinks() {
         // [[Count von Count]] vs. [[Magnus Manske]]
         check_results_for_psid(10123897, "wikidatawiki", vec![Title::new("Q13520818", 0)]).await; // Min 15
