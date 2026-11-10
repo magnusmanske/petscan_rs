@@ -814,7 +814,10 @@ impl SourceDatabase {
             } else {
                 " AND p.page_id IN "
             };
-            sql.0 += "(SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace+1=pt.page_namespace AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
+            // Keep the indexed column alone on the left: `pt2.page_namespace+1=…`
+            // cannot use the page namespace/title index and makes large
+            // template queries (e.g. GA nominee on enwiki) time out.
+            sql.0 += "(SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace=pt.page_namespace-1 AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title";
         } else {
             sql.0 += if find_not {
                 " AND p.page_id NOT IN "
@@ -2457,7 +2460,7 @@ mod tests {
         let (sql, n) = built(|s| db.get_pages_for_primary_templates_as_secondary(s));
         assert_eq!(
             sql,
-            " AND p.page_id IN (SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace+1=pt.page_namespace AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=? AND tl_from_namespace=?)"
+            " AND p.page_id IN (SELECT pt2.page_id FROM page pt,page pt2,templatelinks,linktarget WHERE pt2.page_namespace=pt.page_namespace-1 AND pt2.page_title=pt.page_title AND pt.page_id=tl_from AND tl_target_id=lt_id AND lt_namespace=10 AND lt_title=? AND tl_from_namespace=?)"
         );
         // Template title + the talk-shifted namespace id (0+1=1), both bound.
         assert_eq!(n, 2);
