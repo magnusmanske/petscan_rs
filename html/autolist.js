@@ -9,6 +9,16 @@ function decodePageTitle(href) {
   }
 }
 
+// The language for a CREATE label, from a wiki dbname such as "ruwikisource",
+// "enwiki" or "commonswiki". Returns null when there is no usable language.
+function labelLanguage(wiki) {
+  var m = wiki.match(
+    /^(.*?)(wiktionary|wikibooks|wikinews|wikiquote|wikisource|wikiversity|wikivoyage|wikimedia|wiki)$/,
+  );
+  if (m === null || m[1] === "") return null;
+  return m[1] === "commons" ? interface_language : m[1];
+}
+
 function AutoList(callback) {
   this.setupCommands = function () {
     var me = this;
@@ -115,9 +125,8 @@ function AutoList(callback) {
         if (cmd.mode == "create") {
           qs = "CREATE";
           qs += "||LAST|S" + output_wiki + '|"' + cmd.page + '"';
-          let m = output_wiki.match(/^([a-z-]+)wiki$/);
-          if (m !== null) {
-            let lang = m[1] == "commons" ? interface_language : m[1];
+          let lang = labelLanguage(output_wiki);
+          if (lang !== null) {
             let the_label = $.trim(
               cmd.page.replace(/_/g, " ").replace(/\s*\(.+?\)\s*/, " "),
             ).replace(/^\S+:/, "");
