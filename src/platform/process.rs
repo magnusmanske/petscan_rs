@@ -452,12 +452,20 @@ impl Platform {
     }
 
     pub(super) fn apply_results_limit(&self, pages: &mut Vec<PageListEntry>) {
+        let offset = self.usize_option_from_param("output_offset").unwrap_or(0);
+        if offset > 0 {
+            if offset >= pages.len() {
+                pages.clear();
+            } else {
+                pages.drain(..offset);
+            }
+        }
         let limit = self
             .get_param_default("output_limit", "0")
             .parse::<usize>()
             .unwrap_or(0);
         if limit != 0 && limit < pages.len() {
-            pages.resize(limit, PageListEntry::new(Title::new("", 0)));
+            pages.truncate(limit);
         }
     }
 
@@ -1518,6 +1526,39 @@ mod tests {
             .collect();
         p.apply_results_limit(&mut pages);
         assert_eq!(pages.len(), 5);
+    }
+
+    fn numbered_pages(count: usize) -> Vec<PageListEntry> {
+        (0..count)
+            .map(|i| PageListEntry::new(Title::new(&format!("Page{i}"), 0)))
+            .collect()
+    }
+
+    #[test]
+    fn test_apply_results_offset_skips_from_the_start() {
+        let p = make_platform(vec![("output_offset", "3")]);
+        let mut pages = numbered_pages(10);
+        p.apply_results_limit(&mut pages);
+        assert_eq!(pages.len(), 7);
+        assert_eq!(pages[0].title().pretty(), "Page3");
+    }
+
+    #[test]
+    fn test_apply_results_offset_and_limit() {
+        let p = make_platform(vec![("output_offset", "3"), ("output_limit", "2")]);
+        let mut pages = numbered_pages(10);
+        p.apply_results_limit(&mut pages);
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].title().pretty(), "Page3");
+        assert_eq!(pages[1].title().pretty(), "Page4");
+    }
+
+    #[test]
+    fn test_apply_results_offset_past_the_end_is_empty() {
+        let p = make_platform(vec![("output_offset", "20")]);
+        let mut pages = numbered_pages(5);
+        p.apply_results_limit(&mut pages);
+        assert!(pages.is_empty());
     }
 
     // ─── get_label_sql_new ────────────────────────────────────────────────────

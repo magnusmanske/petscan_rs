@@ -371,6 +371,15 @@ paths:
             type: string
         - name: output_limit
           in: query
+          description: >-
+            Maximum number of results after sorting. 0 means no limit.
+          schema:
+            type: integer
+        - name: output_offset
+          in: query
+          description: >-
+            Number of sorted results to skip before applying `output_limit`.
+            Useful for paging through thumbnail output.
           schema:
             type: integer
         - name: referrer_url
