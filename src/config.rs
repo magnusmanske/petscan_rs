@@ -49,6 +49,15 @@ impl Config {
             .unwrap_or(DEFAULT_MAX_RESULT_ENTRIES)
     }
 
+    /// The secret that enables `?restart=…`, if any.
+    ///
+    /// An empty value (as in `config.json.template`) disables the endpoint,
+    /// just like an absent one. Treating `Some("")` as enabled made
+    /// `?restart=` shut the service down with the template's default config.
+    pub fn restart_code(&self) -> Option<&str> {
+        self.restart_code.as_deref().filter(|code| !code.is_empty())
+    }
+
     /// Load the config from a JSON file. Unknown JSON fields are ignored.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -124,6 +133,14 @@ mod tests {
         let c: Config = serde_json::from_str(r#"{"telemetry":{"token":"t"}}"#).unwrap();
         assert_eq!(c.telemetry.token.as_deref(), Some("t"));
         assert_eq!(c.telemetry.url, None);
+    }
+
+    #[test]
+    fn empty_restart_code_disables_the_endpoint() {
+        let c: Config = serde_json::from_str(r#"{"restart-code":""}"#).unwrap();
+        assert_eq!(c.restart_code(), None);
+        let enabled: Config = serde_json::from_str(r#"{"restart-code":"secret"}"#).unwrap();
+        assert_eq!(enabled.restart_code(), Some("secret"));
     }
 
     #[test]

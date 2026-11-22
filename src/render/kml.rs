@@ -90,7 +90,7 @@ impl Render for RenderKML {
 
         Ok(MyResponse {
             s: kml,
-            content_type: ContentType::Plain,
+            content_type: ContentType::KML,
             status: 200,
         })
     }

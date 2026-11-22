@@ -206,7 +206,7 @@ impl WebServer {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "en".to_string());
             return MyResponse {
-                s: self.app_state.get_main_page(interface_language),
+                s: self.app_state.get_main_page(&interface_language),
                 content_type: ContentType::HTML,
                 status: 200,
             }
@@ -251,7 +251,7 @@ impl WebServer {
                 .get("interface_language")
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "en".to_string());
-            let html = self.app_state.get_main_page(interface_language);
+            let html = self.app_state.get_main_page(&interface_language);
             let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
             return MyResponse {
                 s: html,

@@ -1048,10 +1048,12 @@ impl Platform {
                 .collect();
             let placeholders = crate::datasource::get_placeholders(escaped.len());
             let query = format!(
-                "SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id='{}' and ips_site_page IN ({})",
-                wiki, placeholders
+                "SELECT ips_site_page,ips_item_id FROM wb_items_per_site WHERE ips_site_id=? AND ips_site_page IN ({placeholders})"
             );
-            batches.push(SQLtuple(query, escaped));
+            let mut params = Vec::with_capacity(escaped.len() + 1);
+            params.push(MyValue::Bytes(wiki.clone().into()));
+            params.extend(escaped);
+            batches.push(SQLtuple(query, params));
         });
 
         let rows: TokioMutex<Vec<my::Row>> = TokioMutex::new(vec![]);

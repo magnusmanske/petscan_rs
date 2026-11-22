@@ -220,6 +220,12 @@ impl RenderParams {
         &self.json_callback
     }
 
+    /// Test-only setter for the validated JSONP callback name.
+    #[cfg(test)]
+    pub fn set_json_callback(&mut self, callback: &str) {
+        self.json_callback = callback.to_string();
+    }
+
     pub const fn json_sparse(&self) -> bool {
         self.json_sparse
     }

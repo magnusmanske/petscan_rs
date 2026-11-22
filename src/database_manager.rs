@@ -163,7 +163,7 @@ impl DatabaseManager {
     }
 
     pub fn get_restart_code(&self) -> Option<&str> {
-        self.config.restart_code.as_deref()
+        self.config.restart_code()
     }
 
     // ------------------------------------------------------------------
@@ -357,15 +357,17 @@ impl DatabaseManager {
     // ------------------------------------------------------------------
 
     pub async fn get_query_from_psid(&self, psid: &str) -> Result<String> {
-        let psid: usize = psid
+        let psid: u64 = psid
             .trim()
             .parse()
             .map_err(|_| anyhow!("Invalid PSID '{psid}': expected a number"))?;
         let mut conn = self.get_tool_db_connection().await?;
-        let sql = format!("SELECT querystring FROM query WHERE id={psid}");
 
         let rows = conn
-            .exec_iter(sql.as_str(), ())
+            .exec_iter(
+                "SELECT querystring FROM query WHERE id=?",
+                mysql_async::Params::Positional(vec![MyValue::UInt(psid)]),
+            )
             .await
             .map_err(|e| anyhow!(e))?
             .map_and_drop(from_row::<Vec<u8>>)

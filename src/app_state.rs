@@ -367,19 +367,17 @@ impl AppState {
     // Native AppState behaviour – main page / rendering
     // ------------------------------------------------------------------
 
-    pub fn get_main_page(&self, interface_language: String) -> String {
-        let direction = if self.site_matrix.is_language_rtl(&interface_language) {
-            "rtl"
-        } else {
-            "ltr"
-        };
+    pub fn get_main_page(&self, interface_language: &str) -> String {
+        let is_rtl = self.site_matrix.is_language_rtl(interface_language);
+        let direction = if is_rtl { "rtl" } else { "ltr" };
+        // The language comes from the query string, so escape it for the
+        // single-quoted attribute rather than stripping quotes by hand.
         let h = format!(
-            "<html dir='{}' lang='{}'>",
-            direction,
-            interface_language.replace('\'', "")
+            "<html dir='{direction}' lang='{}'>",
+            wikimisc::escape::html(interface_language)
         );
         let ret = self.main_page.replace("<html>", &h);
-        if self.site_matrix.is_language_rtl(&interface_language) {
+        if is_rtl {
             ret.replace("bootstrap.min.css", "bootstrap-rtl.min.css")
         } else {
             ret
@@ -411,7 +409,7 @@ impl AppState {
                     .get("interface_language")
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "en".to_string());
-                let html = self.get_main_page(interface_language);
+                let html = self.get_main_page(&interface_language);
                 let html = html.replace("<!--querystring-->", form_parameters.to_string().as_str());
                 let html = &html.replace("<!--output-->", &output);
                 MyResponse {
@@ -641,6 +639,8 @@ pub enum InputError {
     BadWiki(Option<String>),
     /// `common_wiki` named an output wiki type PetScan does not know.
     UnknownOutputWikiType(String),
+    /// The `source_combination` expression exceeded the parser's length limit.
+    CombinationTooLong,
 }
 
 // `Debug` here mirrors the message this error had before it became typed
@@ -654,6 +654,7 @@ impl std::fmt::Display for InputError {
             Self::UnknownOutputWikiType(kind) => {
                 write!(f, "Unknown output wiki type '{kind}'")
             }
+            Self::CombinationTooLong => write!(f, "The source_combination expression is too long"),
         }
     }
 }
@@ -1211,5 +1212,16 @@ mod tests {
         );
         assert!(!response.s.contains("<script>"), "{}", response.s);
         assert!(response.s.contains("&lt;script&gt;"), "{}", response.s);
+    }
+
+    #[test]
+    fn main_page_escapes_the_interface_language_attribute() {
+        let state = AppState::for_test_with_main_page("<html></html>");
+        let html = state.get_main_page("x' onmouseover='alert(1)");
+        assert!(
+            html.contains("lang='x&#39; onmouseover=&#39;alert(1)'"),
+            "{html}"
+        );
+        assert!(!html.contains("x' onmouseover"), "{html}");
     }
 }

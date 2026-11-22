@@ -341,7 +341,7 @@ impl Platform {
         // source to the other side's keys, so the large result never has to be
         // materialised. Sources that only feed membership stream their rows
         // straight into a spilled key set.
-        self.combination = self.get_combination(&available_sources);
+        self.combination = self.get_combination(&available_sources)?;
         let priorities: HashMap<String, Option<u8>> = sources
             .iter()
             .filter(|source| available_sources.contains(&source.name()))

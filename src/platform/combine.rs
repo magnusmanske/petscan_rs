@@ -1,3 +1,4 @@
+use crate::app_state::InputError;
 use crate::combination::{Combination, CombinationSequential};
 use crate::key_set::{KeySet, KeySetLimits};
 use crate::pagelist::PageList;
@@ -11,6 +12,12 @@ pub(super) static RE_PARSE_COMBINATION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\w+(?:'\w+)?|[^\w\s]")
         .expect("Platform::parse_combination_string: Regex is invalid")
 });
+
+/// Longest `source_combination` expression accepted. Real expressions name a
+/// handful of sources; the parser recurses and removes tokens from the front
+/// of a `Vec`, so an unbounded parameter could exhaust the stack or burn CPU
+/// even though the POST body itself is size-limited.
+const MAX_COMBINATION_CHARS: usize = 2_000;
 
 /// One step of the combination stack machine. `needs_entries` is false when the
 /// value is only ever used for page identity (the subtracted or
@@ -169,9 +176,14 @@ impl Platform {
         }
     }
 
-    pub(super) fn get_combination(&self, available_sources: &[String]) -> Combination {
+    pub(super) fn get_combination(&self, available_sources: &[String]) -> Result<Combination> {
         match self.get_param("source_combination") {
-            Some(combination_string) => Self::parse_combination_string(&combination_string),
+            Some(combination_string) => {
+                if combination_string.len() > MAX_COMBINATION_CHARS {
+                    return Err(InputError::CombinationTooLong.into());
+                }
+                Ok(Self::parse_combination_string(&combination_string))
+            }
             None => {
                 let mut comb = Combination::None;
                 for source in available_sources {
@@ -184,7 +196,7 @@ impl Platform {
                         ));
                     }
                 }
-                comb
+                Ok(comb)
             }
         }
     }
@@ -568,14 +580,16 @@ mod tests {
     #[test]
     fn test_get_combination_single_source() {
         let p = make_platform(vec![]);
-        let comb = p.get_combination(&["categories".to_string()]);
+        let comb = p.get_combination(&["categories".to_string()]).unwrap();
         assert_eq!(comb, Combination::Source("categories".to_string()));
     }
 
     #[test]
     fn test_get_combination_two_sources_default_intersection() {
         let p = make_platform(vec![]);
-        let comb = p.get_combination(&["categories".to_string(), "sparql".to_string()]);
+        let comb = p
+            .get_combination(&["categories".to_string(), "sparql".to_string()])
+            .unwrap();
         // Default (no source_combination param) → intersection
         let expected = Combination::Intersection((
             Box::new(Combination::Source("sparql".to_string())),
@@ -587,12 +601,27 @@ mod tests {
     #[test]
     fn test_get_combination_from_param() {
         let p = make_platform(vec![("source_combination", "manual OR pagepile")]);
-        let comb = p.get_combination(&["manual".to_string(), "pagepile".to_string()]);
+        let comb = p
+            .get_combination(&["manual".to_string(), "pagepile".to_string()])
+            .unwrap();
         let expected = Combination::Union((
             Box::new(Combination::Source("manual".to_string())),
             Box::new(Combination::Source("pagepile".to_string())),
         ));
         assert_eq!(comb, expected);
+    }
+
+    #[test]
+    fn test_get_combination_rejects_an_oversized_expression() {
+        // The parser recurses per operator, so a hostile parameter must be
+        // refused before parsing rather than overflow the stack.
+        let expression = "manual AND ".repeat(MAX_COMBINATION_CHARS);
+        let p = make_platform(vec![("source_combination", expression.as_str())]);
+        let error = p.get_combination(&["manual".to_string()]).unwrap_err();
+        assert_eq!(
+            crate::app_state::AppError::classify_anyhow(&error),
+            crate::app_state::AppError::BadRequest
+        );
     }
 
     fn ops(steps: &[CombineStep]) -> Vec<CombinationSequential> {

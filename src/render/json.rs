@@ -22,7 +22,9 @@ impl Render for RenderJSON {
         entries: Vec<PageListEntry>,
     ) -> Result<MyResponse> {
         let mut params = RenderParams::new(platform, wiki).await?;
-        let content_type = if params.json_pretty() {
+        let content_type = if !params.json_callback().is_empty() {
+            ContentType::JSONP
+        } else if params.json_pretty() {
             ContentType::Plain
         } else {
             ContentType::JSON
@@ -114,7 +116,11 @@ impl Render for RenderJSON {
             .chain(std::iter::once(Cow::Owned(close)));
         Ok(StreamResponse {
             stream: stream::to_stream(pieces),
-            content_type: ContentType::JSON,
+            content_type: if has_callback {
+                ContentType::JSONP
+            } else {
+                ContentType::JSON
+            },
         })
     }
 }
@@ -456,6 +462,29 @@ mod tests {
         assert_eq!(page["title"], "Foo_bar");
         assert_eq!(page["id"], 42);
         assert_eq!(page["len"], 7);
+    }
+
+    #[tokio::test]
+    async fn streamed_jsonp_uses_the_javascript_content_type() {
+        let platform = make_platform(vec![]);
+        let mut params =
+            RenderParams::for_tests("enwiki", Arc::new(StubNamespaceContext::enwiki()));
+        params.set_json_callback("my.callback");
+
+        let response = RenderJSON::new()
+            .stream(
+                &platform,
+                params,
+                "enwiki",
+                vec![PageListEntry::new(Title::new("Foo", 0))],
+            )
+            .unwrap();
+        assert_eq!(response.content_type, ContentType::JSONP);
+
+        let chunks = response.stream.try_collect::<Vec<_>>().await.unwrap();
+        let body = String::from_utf8(chunks.concat()).unwrap();
+        assert!(body.starts_with("my.callback("), "{body}");
+        assert!(body.ends_with(')'), "{body}");
     }
 
     #[test]

@@ -127,7 +127,7 @@ impl Render for RenderHTML {
         output += &new_rows.join("\n");
         let interface_language = platform.get_param_default("interface_language", "en");
         let state = platform.state();
-        let html = state.get_main_page(interface_language);
+        let html = state.get_main_page(&interface_language);
         let html = html.replace(
             "<!--querystring-->",
             &escape::html(&platform.form_parameters().to_string()),
@@ -323,9 +323,11 @@ impl Render for RenderHTML {
             }
             checked = "checked";
         };
+        // `q` is a title or an internal id today, but it lands in an
+        // attribute value; escape it so a future caller cannot inject markup.
+        let q = escape::html(&q);
         format!(
-            "<input type='checkbox' class='qcb' q='{}' id='autolist_checkbox_{}' {} />",
-            q, q, checked
+            "<input type='checkbox' class='qcb' q='{q}' id='autolist_checkbox_{q}' {checked} />"
         )
     }
 }
@@ -543,6 +545,15 @@ mod tests {
         let entry = PageListEntry::new(Title::new("Вулиця Шараневича (Львів)", 0));
         let html = RenderHTML.render_cell_checkbox(&entry, &params, &platform);
         assert!(html.contains("checked"), "{html}");
+    }
+
+    #[test]
+    fn checkbox_escapes_the_attribute_value() {
+        let platform = crate::test_support::make_platform(vec![]);
+        let entry = PageListEntry::new(Title::new("Q\" onmouseover=\"alert(1)", 0));
+        let html = RenderHTML.render_cell_checkbox(&entry, &params(), &platform);
+        assert!(!html.contains("\" onmouseover="), "{html}");
+        assert!(html.contains("&quot; onmouseover=&quot;alert(1)"), "{html}");
     }
 
     #[test]

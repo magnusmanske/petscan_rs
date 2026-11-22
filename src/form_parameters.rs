@@ -18,13 +18,7 @@ pub struct FormParameters {
 
 impl fmt::Display for FormParameters {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ret = self
-            .params
-            .iter()
-            .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
-            .collect::<Vec<String>>()
-            .join("&");
-        write!(f, "{ret}")
+        f.write_str(&self.query_string_except(|_| false))
     }
 }
 
@@ -34,68 +28,73 @@ impl FormParameters {
     }
 
     pub fn new_from_pairs(parameter_pairs: HashMap<String, String>) -> Self {
-        let mut ret = Self::new();
-        ret.params = parameter_pairs;
-        ret.ns = Self::ns_from_params(&ret.params);
+        Self::from_params(parameter_pairs)
+    }
+
+    /// Builds from raw parameters, applying legacy aliases before deriving
+    /// the namespace set, so aliases that add `ns[…]` entries
+    /// (`QuickIntersection`) are reflected in [`Self::ns`].
+    fn from_params(params: HashMap<String, String>) -> Self {
+        let mut ret = Self {
+            params,
+            ns: HashSet::new(),
+        };
         ret.legacy_parameters();
+        ret.recompute_namespaces();
         ret
+    }
+
+    fn recompute_namespaces(&mut self) {
+        self.ns = Self::ns_from_params(&self.params);
     }
 
     /// Extracts namespaces from parameter list
     fn ns_from_params(params: &HashMap<String, String>) -> HashSet<usize> {
-        let mut ns: HashSet<usize> = HashSet::new();
         params
             .iter()
-            .filter(|(_k, v)| *v == "1")
-            .for_each(|(k, v)| {
-                if k == "ns" && v == "*" {
-                    // Backwards compat
-                    ns.insert(0);
-                }
-                for cap in RE_NS_FROM_PARAMS.captures_iter(k) {
-                    if let Ok(ns_num) = cap[1].parse::<usize>() {
-                        ns.insert(ns_num);
-                    }
-                }
-            });
-        ns
+            .filter(|(_k, v)| v.as_str() == "1")
+            .filter_map(|(k, _v)| RE_NS_FROM_PARAMS.captures(k))
+            .filter_map(|cap| cap[1].parse::<usize>().ok())
+            .collect()
     }
 
     /// Parses a query string into a new object
     pub fn outcome_from_query(query: &str) -> Result<Self> {
         let parsed_url = Url::parse(&("https://127.0.0.1/?".to_string() + query))?;
         let params: HashMap<_, _> = parsed_url.query_pairs().into_owned().collect();
-        let ns = Self::ns_from_params(&params);
-        let mut ret = FormParameters { params, ns };
-        ret.legacy_parameters();
-        Ok(ret)
+        Ok(Self::from_params(params))
     }
 
     /// Amends a an object based on a previous one (used for PSID in main.rs)
     pub fn rebase(&mut self, base: &FormParameters) {
-        base.params.iter().for_each(|(k, v)| {
-            if self.params.contains_key(k) {
-                if self
-                    .params
-                    .get(k)
-                    .expect("FormParameters::rebase")
-                    .is_empty()
-                {
-                    self.params.insert(k.to_string(), v.to_string());
-                }
-            } else {
-                self.params.insert(k.to_string(), v.to_string());
+        for (k, v) in &base.params {
+            let current = self.params.entry(k.clone()).or_default();
+            if current.is_empty() {
+                *current = v.clone();
             }
-        });
+        }
         self.legacy_parameters();
-        self.ns = Self::ns_from_params(&self.params);
+        self.recompute_namespaces();
     }
 
     pub fn to_string_no_doit(&self) -> String {
-        self.params
+        self.query_string_except(|key| key == "doit" || key == "format")
+    }
+
+    /// A percent-encoded query string with keys sorted, so equal parameter
+    /// sets serialize identically across processes. PSIDs deduplicate on the
+    /// serialized string, and `HashMap` iteration order is not stable between
+    /// processes.
+    fn query_string_except(&self, skip: impl Fn(&str) -> bool) -> String {
+        let mut entries: Vec<(&str, &str)> = self
+            .params
             .iter()
-            .filter(|(k, _v)| *k != "doit")
-            .filter(|(k, _v)| *k != "format")
+            .filter(|(k, _)| !skip(k))
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        entries.sort_unstable_by_key(|(k, _)| *k);
+        entries
+            .iter()
             .map(|(k, v)| Self::percent_encode(k) + "=" + &Self::percent_encode(v))
             .collect::<Vec<String>>()
             .join("&")
@@ -364,6 +363,42 @@ mod tests {
         assert!(fp.ns.contains(&0));
         assert!(!fp.ns.contains(&1));
         assert!(!fp.ns.contains(&2));
+    }
+
+    #[test]
+    fn legacy_namespace_aliases_reach_the_namespace_set() {
+        // QuickIntersection encodes the namespace as `ns=4`; `legacy_parameters`
+        // turns that into `ns[4]=1`, which must also update `ns`.
+        let fp = FormParameters::new_from_pairs(
+            [
+                ("max".to_string(), "500".to_string()),
+                ("ns".to_string(), "4".to_string()),
+            ]
+            .into(),
+        );
+        assert!(fp.ns.contains(&4), "{:?}", fp.ns);
+    }
+
+    #[test]
+    fn serialization_is_independent_of_hash_map_order() {
+        let a = FormParameters::new_from_pairs(
+            [
+                ("z".to_string(), "1".to_string()),
+                ("a".to_string(), "2".to_string()),
+                ("m".to_string(), "3".to_string()),
+            ]
+            .into(),
+        );
+        let b = FormParameters::new_from_pairs(
+            [
+                ("m".to_string(), "3".to_string()),
+                ("z".to_string(), "1".to_string()),
+                ("a".to_string(), "2".to_string()),
+            ]
+            .into(),
+        );
+        assert_eq!(a.to_string(), "a=2&m=3&z=1");
+        assert_eq!(a.to_string(), b.to_string());
     }
 
     // ── has_param_with_value ─────────────────────────────────────────────────
