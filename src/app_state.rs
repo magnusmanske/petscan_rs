@@ -14,7 +14,7 @@ use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use wikimisc::jsonp::{self, CallbackRules};
-use wikimisc::mediawiki::api::Api;
+use wikimisc::mediawiki::{MediaWikiError, api::Api, reqwest};
 use wikimisc::mysql_async as my;
 use wikimisc::retry::{Retry, RetryPolicy};
 use wikimisc::site_matrix::SiteMatrix;
@@ -717,15 +717,54 @@ impl AppError {
         }
     }
 
-    /// Prefer the typed error carried anywhere in the `anyhow` chain; fall back
-    /// to the string heuristic for errors that are still untyped.
+    /// Prefer typed errors carried anywhere in the `anyhow` chain; fall back
+    /// to the string heuristic for errors that were flattened before reaching
+    /// this boundary.
     pub fn classify_anyhow(error: &anyhow::Error) -> Self {
-        if error.downcast_ref::<InputError>().is_some() {
-            AppError::BadRequest
-        } else {
-            Self::classify(&format!("{error:#}"))
+        for cause in error.chain() {
+            if cause.downcast_ref::<InputError>().is_some() {
+                return Self::BadRequest;
+            }
+            if cause.downcast_ref::<OverloadError>().is_some() {
+                return Self::Overloaded;
+            }
+            if is_upstream_error(cause) {
+                return Self::Upstream;
+            }
         }
+        Self::classify(&format!("{error:#}"))
     }
+}
+
+/// Whether a source error means a replica or upstream service failed.
+///
+/// Only errors that still carry a useful type reach here; the text heuristic
+/// in [`AppError::classify`] remains the fallback for flattened errors.
+fn is_upstream_error(cause: &(dyn std::error::Error + 'static)) -> bool {
+    if let Some(db_error) = cause.downcast_ref::<my::Error>() {
+        // A non-fatal server error (bad SQL, unknown column) is a bug in our
+        // query, not an upstream outage; leave it to the text fallback.
+        return db_error.is_fatal();
+    }
+    if cause.downcast_ref::<reqwest::Error>().is_some() {
+        return true;
+    }
+    if let Some(MediaWikiError::Reqwest(_)) = cause.downcast_ref::<MediaWikiError>() {
+        return true;
+    }
+    if let Some(io_error) = cause.downcast_ref::<std::io::Error>() {
+        return matches!(
+            io_error.kind(),
+            std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::NotConnected
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::TimedOut
+                | std::io::ErrorKind::UnexpectedEof
+        );
+    }
+    false
 }
 
 #[cfg(test)]
@@ -1057,6 +1096,49 @@ mod tests {
                 AppError::BadRequest
             );
         }
+    }
+
+    #[test]
+    fn test_app_error_classify_typed_overload() {
+        let error = anyhow::Error::new(OverloadError {
+            running: 1,
+            waiting: 2,
+            reason: "the queue is full".to_string(),
+        });
+        assert_eq!(AppError::classify_anyhow(&error), AppError::Overloaded);
+
+        // Context must not hide the typed error.
+        let with_context = error.context("while handling the request");
+        assert_eq!(
+            AppError::classify_anyhow(&with_context),
+            AppError::Overloaded
+        );
+    }
+
+    #[test]
+    fn test_app_error_classify_typed_upstream_errors() {
+        let refused =
+            anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::ConnectionRefused));
+        assert_eq!(AppError::classify_anyhow(&refused), AppError::Upstream);
+
+        let fatal_db = anyhow::Error::new(my::Error::Io(my::IoError::Io(std::io::Error::from(
+            std::io::ErrorKind::ConnectionReset,
+        ))));
+        assert_eq!(AppError::classify_anyhow(&fatal_db), AppError::Upstream);
+    }
+
+    #[test]
+    fn test_app_error_classify_non_fatal_db_error_stays_internal() {
+        // A server error such as an unknown column is our bug, not an outage.
+        let sql_error = my::Error::Server(my::ServerError {
+            code: 1054,
+            message: "Unknown column 'x' in 'field list'".to_string(),
+            state: "42S22".to_string(),
+        });
+        assert_eq!(
+            AppError::classify_anyhow(&anyhow::Error::new(sql_error)),
+            AppError::Internal
+        );
     }
 
     #[test]

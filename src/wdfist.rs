@@ -235,16 +235,14 @@ impl WDfist {
                 batches,
                 &["page", "globalimagelinks", "categorylinks", "linktarget"],
             )
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
+            .await?;
         let page_file: Vec<(String, String)> = rows
             .par_iter()
             .map(|row| my::from_row::<(String, String)>(row.to_owned()))
             .collect();
         let mut page_file = self
             .filter_page_images(&wiki, page_file)
-            .await
-            .map_err(|e| anyhow!("{e}"))?
+            .await?
             .par_iter()
             .filter_map(|(page, file)| page2q.get(page).map(|q| (q.to_string(), file.to_string())))
             .collect();
@@ -493,11 +491,9 @@ impl WDfist {
 
         let rows = conn
             .exec_iter(sql.as_str(), ())
-            .await
-            .map_err(|e| anyhow!("{e}"))?
+            .await?
             .map_and_drop(from_row::<Vec<u8>>)
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
+            .await?;
 
         for filename in rows {
             let filename = String::from_utf8_lossy(&filename);
@@ -563,10 +559,7 @@ impl WDfist {
     }
 
     async fn get_db_conn(&mut self) -> Result<my::Conn> {
-        self.state
-            .get_tool_db_connection()
-            .await
-            .map_err(|e| anyhow!("{e}"))
+        self.state.get_tool_db_connection().await
     }
 
     fn filter_files_from_ignore_database_prepare_batches(&mut self) -> Vec<SQLtuple> {
@@ -591,11 +584,9 @@ impl WDfist {
     ) -> Result<()> {
         let rows = conn
             .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
-            .await
-            .map_err(|e| anyhow!("{e}"))?
+            .await?
             .map_and_drop(from_row::<(String, String)>)
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
+            .await?;
         for (item, filename) in rows {
             let filename = Self::normalize_filename(&filename.to_string());
             if let Some(ref mut files) = self.item2files.get_mut(&item) {
@@ -814,9 +805,7 @@ impl WDfist {
     }
 
     async fn get_commons_api(&self) -> Result<Api> {
-        Api::new("https://commons.wikimedia.org/w/api.php")
-            .await
-            .map_err(|e| anyhow!("{e}"))
+        Ok(Api::new("https://commons.wikimedia.org/w/api.php").await?)
     }
 
     /// Collapses `(item, label, language)` rows into one label per item,

@@ -623,11 +623,9 @@ impl Platform {
     ) -> Result<()> {
         let rows = conn
             .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
-            .await
-            .map_err(|e| anyhow!("{e}"))?
+            .await?
             .map_and_drop(from_row::<(Vec<u8>, i64, usize)>)
-            .await
-            .map_err(|e| anyhow!("{e}"))?;
+            .await?;
 
         for (page_title, namespace_id, _count) in rows {
             let page_title = String::from_utf8_lossy(&page_title).to_string();
@@ -674,11 +672,9 @@ impl Platform {
 
             let rows = conn
                 .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
-                .await
-                .map_err(|e| anyhow!("{e}"))?
+                .await?
                 .map_and_drop(from_row::<(Vec<u8>, i64)>)
-                .await
-                .map_err(|e| anyhow!("{e}"))?;
+                .await?;
 
             for (page_title, page_namespace) in rows {
                 let page_title = String::from_utf8_lossy(&page_title);
@@ -1058,18 +1054,12 @@ impl Platform {
 
         let rows: TokioMutex<Vec<my::Row>> = TokioMutex::new(vec![]);
         for sql in batches {
-            let mut conn = self
-                .state
-                .get_wiki_db_connection("wikidatawiki")
-                .await
-                .map_err(|e| anyhow!("{e}"))?;
+            let mut conn = self.state.get_wiki_db_connection("wikidatawiki").await?;
             let mut subresult = conn
                 .exec_iter(sql.0.as_str(), my::Params::Positional(sql.1))
-                .await
-                .map_err(|e| anyhow!("{e}"))?
+                .await?
                 .collect_and_drop()
-                .await
-                .map_err(|e| anyhow!("{e}"))?;
+                .await?;
             rows.lock().await.append(&mut subresult);
         }
 

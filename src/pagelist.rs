@@ -337,8 +337,7 @@ impl PageList {
             result.extend(other);
             result
         })
-        .await
-        .map_err(|e| anyhow!("{e}"))?;
+        .await?;
         Platform::profile("PageList::union UNION DONE", None);
         self.set_entries(merged);
         Ok(())
@@ -360,8 +359,7 @@ impl PageList {
                 .filter(|e| other.contains(e))
                 .collect::<HashSet<_>>()
         })
-        .await
-        .map_err(|e| anyhow!("{e}"))?;
+        .await?;
         self.set_entries(filtered);
         Ok(())
     }
@@ -381,8 +379,7 @@ impl PageList {
                 .filter(|e| !other.contains(e))
                 .collect::<HashSet<_>>()
         })
-        .await
-        .map_err(|e| anyhow!("{e}"))?;
+        .await?;
         self.set_entries(filtered);
         Ok(())
     }

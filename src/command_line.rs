@@ -61,7 +61,7 @@ pub async fn command_line_usage(app_state: Arc<AppState>) -> Result<()> {
             let mut stream = response.stream;
             let mut stdout = std::io::stdout().lock();
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| anyhow!("{e}"))?;
+                let chunk = chunk?;
                 stdout.write_all(&chunk)?;
             }
             stdout.write_all(b"\n")?;
