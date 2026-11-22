@@ -19,6 +19,7 @@ Key paths:
 - **`audits/`, `CLAUDE.md`, `config.json`, `oauth.ini`, `flickr.key`, `.claude/` are all gitignored.** Don't try to git-add them; treat audit files as durable scratch.
 - Always keep **code readability and long-term maintenance** in mind.
 - Adhere to **SOLID and DRY principles**.
+- Prefer a **parse, don't validate** approach. A `struct` should always be valid, ideally.
 - Use **best practices** and **language standards** (idiomatic Rust, `cargo fmt`, `cargo clippy`).
 - **Keep the code simple** and elegant.
 - **Write tests** where it makes sense.
