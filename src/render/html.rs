@@ -5,6 +5,7 @@ use crate::render::params::RenderParams;
 use crate::render::{AUTOLIST_COMMONS, AUTOLIST_WIKIDATA, Render};
 use anyhow::Result;
 use async_trait::async_trait;
+use http::StatusCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use wikimisc::commons;
 use wikimisc::escape;
@@ -141,7 +142,7 @@ impl Render for RenderHTML {
         Ok(MyResponse {
             s: html,
             content_type: ContentType::HTML,
-            status: 200,
+            status: StatusCode::OK,
         })
     }
 

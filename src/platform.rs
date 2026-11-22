@@ -28,6 +28,7 @@ use crate::render::wikitext::RenderWiki;
 use crate::wdfist::WDfist;
 use anyhow::{Result, anyhow};
 use futures::stream::{StreamExt, iter};
+use http::StatusCode;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
@@ -99,9 +100,8 @@ mod process;
 pub struct MyResponse {
     pub s: String,
     pub content_type: ContentType,
-    /// Raw HTTP status code; defaults to 200 via `MyResponse::ok`. Use
-    /// `MyResponse::with_status` for error responses.
-    pub status: u16,
+    /// HTTP status; use [`MyResponse::ok`] for the common `200 OK` case.
+    pub status: StatusCode,
 }
 
 impl MyResponse {
@@ -110,7 +110,7 @@ impl MyResponse {
         Self {
             s: s.into(),
             content_type,
-            status: 200,
+            status: StatusCode::OK,
         }
     }
 }
@@ -121,7 +121,7 @@ impl MyResponse {
 pub struct StreamedResponse {
     pub stream: BodyStream,
     pub content_type: ContentType,
-    pub status: u16,
+    pub status: StatusCode,
     pub permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
@@ -504,7 +504,7 @@ impl Platform {
             return Ok(WebResponse::Streamed(StreamedResponse {
                 stream: streamed.stream,
                 content_type: streamed.content_type,
-                status: 200,
+                status: StatusCode::OK,
                 permit: None,
             }));
         }

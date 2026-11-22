@@ -6,6 +6,7 @@ use crate::render::params::RenderParams;
 use crate::render::stream::{self, StreamResponse};
 use anyhow::Result;
 use async_trait::async_trait;
+use http::StatusCode;
 use std::borrow::Cow;
 
 /// Renders `PlainText`
@@ -29,7 +30,7 @@ impl Render for RenderPlainText {
         Ok(MyResponse {
             s: output,
             content_type: ContentType::Plain,
-            status: 200,
+            status: StatusCode::OK,
         })
     }
 

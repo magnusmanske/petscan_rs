@@ -6,6 +6,7 @@ use crate::render::params::RenderParams;
 use crate::render::stream::{self, StreamResponse};
 use anyhow::Result;
 use async_trait::async_trait;
+use http::StatusCode;
 use std::borrow::Cow;
 
 /// Renders CSV and TSV
@@ -32,7 +33,7 @@ impl Render for RenderTSV {
         Ok(MyResponse {
             s: rows.join("\n"),
             content_type: self.content_type(),
-            status: 200,
+            status: StatusCode::OK,
         })
     }
 

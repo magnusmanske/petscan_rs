@@ -4,6 +4,7 @@ use crate::render::Render;
 use crate::{pagelist_entry::PageListEntry, platform::Platform};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use http::StatusCode;
 use pagepile::client::NewPage;
 
 /// Renders `PagePile`
@@ -34,7 +35,7 @@ impl Render for RenderPagePile {
         Ok(MyResponse {
             s: html,
             content_type: ContentType::HTML,
-            status: 200,
+            status: StatusCode::OK,
         })
     }
 }

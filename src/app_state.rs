@@ -5,6 +5,7 @@ use crate::database_manager::DbCluster;
 use crate::form_parameters::FormParameters;
 use crate::platform::MyResponse;
 use anyhow::{Context, Result, anyhow};
+use http::StatusCode;
 use serde_json::Value;
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -396,7 +397,7 @@ impl AppState {
         // Server-side log so monitoring/alerting can detect failures without
         // needing to scrape response bodies. The audit's P1 #9 noted that
         // `render_error` was the silent path: HTTP 200 + no log.
-        tracing::error!(error = %error, http_status = status, "rendering error response");
+        tracing::error!(error = %error, http_status = status.as_u16(), "rendering error response");
         let mut response = match form_parameters.params.get("format").map(|s| s.as_str()) {
             Some("") | Some("html") => {
                 // Error texts can echo user input (wiki names, PSIDs, …).
@@ -415,7 +416,7 @@ impl AppState {
                 MyResponse {
                     s: html.to_string(),
                     content_type: ContentType::HTML,
-                    status: 200,
+                    status: StatusCode::OK,
                 }
             }
             Some("json") => {
@@ -425,7 +426,7 @@ impl AppState {
             _ => MyResponse {
                 s: error,
                 content_type: ContentType::Plain,
-                status: 200,
+                status: StatusCode::OK,
             },
         };
         response.status = status;
@@ -441,13 +442,13 @@ impl AppState {
                 MyResponse {
                     s: text,
                     content_type: ContentType::JSONP,
-                    status: 200,
+                    status: StatusCode::OK,
                 }
             }
             None => MyResponse {
                 s: json_string,
                 content_type: ContentType::JSON,
-                status: 200,
+                status: StatusCode::OK,
             },
         }
     }
@@ -662,12 +663,12 @@ impl std::fmt::Display for InputError {
 impl std::error::Error for InputError {}
 
 impl AppError {
-    pub const fn status(self) -> u16 {
+    pub const fn status(self) -> StatusCode {
         match self {
-            AppError::BadRequest => 400,
-            AppError::Overloaded => 503,
-            AppError::Upstream => 502,
-            AppError::Internal => 500,
+            AppError::BadRequest => StatusCode::BAD_REQUEST,
+            AppError::Overloaded => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::Upstream => StatusCode::BAD_GATEWAY,
+            AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
@@ -970,9 +971,12 @@ mod tests {
 
     #[test]
     fn test_app_error_status_codes() {
-        assert_eq!(AppError::BadRequest.status(), 400);
-        assert_eq!(AppError::Upstream.status(), 502);
-        assert_eq!(AppError::Internal.status(), 500);
+        assert_eq!(AppError::BadRequest.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(AppError::Upstream.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            AppError::Internal.status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 
     #[test]
@@ -1083,14 +1087,14 @@ mod tests {
             &anyhow::anyhow!("Connection refused (os error 61)"),
             &params,
         );
-        assert_eq!(resp_upstream.status, 502);
+        assert_eq!(resp_upstream.status, StatusCode::BAD_GATEWAY);
 
         let resp_bad = state.render_error(&anyhow::anyhow!("Invalid parameter foo"), &params);
-        assert_eq!(resp_bad.status, 400);
+        assert_eq!(resp_bad.status, StatusCode::BAD_REQUEST);
 
         let resp_internal =
             state.render_error(&anyhow::anyhow!("Could not insert new PSID"), &params);
-        assert_eq!(resp_internal.status, 500);
+        assert_eq!(resp_internal.status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]
@@ -1183,7 +1187,10 @@ mod tests {
             .overload_error("the waiting queue is full")
             .to_string();
         assert_eq!(AppError::classify(&message), AppError::Overloaded);
-        assert_eq!(AppError::Overloaded.status(), 503);
+        assert_eq!(
+            AppError::Overloaded.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     #[tokio::test]

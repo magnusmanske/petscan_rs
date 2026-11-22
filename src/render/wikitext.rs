@@ -7,6 +7,7 @@ use crate::render::stream::{self, Piece, StreamResponse};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::prelude::*;
+use http::StatusCode;
 use std::borrow::Cow;
 
 /// Renders wiki text
@@ -54,7 +55,7 @@ impl Render for RenderWiki {
         Ok(MyResponse {
             s: rows.join("\n"),
             content_type: ContentType::Plain,
-            status: 200,
+            status: StatusCode::OK,
         })
     }
 

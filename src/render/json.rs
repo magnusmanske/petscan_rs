@@ -6,6 +6,7 @@ use crate::render::stream::{self, StreamResponse};
 use crate::{pagelist_entry::PageListEntry, platform::Platform};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
+use http::StatusCode;
 use serde_json::Value;
 use std::borrow::Cow;
 
@@ -55,7 +56,7 @@ impl Render for RenderJSON {
         Ok(MyResponse {
             s: out,
             content_type,
-            status: 200,
+            status: StatusCode::OK,
         })
     }
 

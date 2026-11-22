@@ -165,7 +165,7 @@ impl WebServer {
                         REQUEST_TIMEOUT.as_secs()
                     ),
                     content_type: ContentType::Plain,
-                    status: StatusCode::GATEWAY_TIMEOUT.as_u16(),
+                    status: StatusCode::GATEWAY_TIMEOUT,
                 })
             }
         }
@@ -193,7 +193,7 @@ impl WebServer {
             return MyResponse {
                 s: "Temporary maintenance".to_string(),
                 content_type: ContentType::Plain,
-                status: 200,
+                status: StatusCode::OK,
             }
             .into();
         }
@@ -208,7 +208,7 @@ impl WebServer {
             return MyResponse {
                 s: self.app_state.get_main_page(&interface_language),
                 content_type: ContentType::HTML,
-                status: 200,
+                status: StatusCode::OK,
             }
             .into();
         }
@@ -256,7 +256,7 @@ impl WebServer {
             return MyResponse {
                 s: html,
                 content_type: ContentType::HTML,
-                status: 200,
+                status: StatusCode::OK,
             }
             .into();
         }
@@ -424,10 +424,9 @@ fn error_chain_mentions(err: &(dyn std::error::Error + 'static), needle: &str) -
 
 impl IntoResponse for MyResponse {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK);
         let content_type = self.content_type.as_str();
         Response::builder()
-            .status(status)
+            .status(self.status)
             .header(header::CONTENT_TYPE, content_type)
             .body(self.s.into())
             .unwrap_or_else(|e| {
@@ -442,13 +441,12 @@ impl IntoResponse for WebResponse {
         match self {
             Self::Buffered(response) => response.into_response(),
             Self::Streamed(streamed) => {
-                let status = StatusCode::from_u16(streamed.status).unwrap_or(StatusCode::OK);
                 let body = Body::from_stream(PermitStream {
                     inner: streamed.stream,
                     _permit: streamed.permit,
                 });
                 Response::builder()
-                    .status(status)
+                    .status(streamed.status)
                     .header(header::CONTENT_TYPE, streamed.content_type.as_str())
                     .body(body)
                     .unwrap_or_else(|e| {
@@ -488,7 +486,7 @@ mod tests {
         let mr = MyResponse {
             s: "hello".to_string(),
             content_type: ContentType::JSON,
-            status: 201,
+            status: StatusCode::CREATED,
         };
         let resp = mr.into_response();
         assert_eq!(resp.status(), StatusCode::CREATED);
@@ -503,17 +501,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn my_response_into_response_falls_back_to_200_for_invalid_status() {
-        let mr = MyResponse {
-            s: String::new(),
-            content_type: ContentType::Plain,
-            status: 0,
-        };
-        let resp = mr.into_response();
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
     async fn streamed_response_is_sent_with_its_content_type_and_chunks() {
         let stream: crate::render::stream::BodyStream = Box::pin(futures::stream::iter(vec![
             Ok::<_, std::io::Error>(Bytes::from_static(b"a")),
@@ -522,7 +509,7 @@ mod tests {
         let response = WebResponse::Streamed(StreamedResponse {
             stream,
             content_type: ContentType::CSV,
-            status: 201,
+            status: StatusCode::CREATED,
             permit: None,
         })
         .into_response();
@@ -549,7 +536,7 @@ mod tests {
         let response = WebResponse::Streamed(StreamedResponse {
             stream,
             content_type: ContentType::Plain,
-            status: 200,
+            status: StatusCode::OK,
             permit: Some(permit),
         })
         .into_response();

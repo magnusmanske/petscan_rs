@@ -1719,6 +1719,7 @@ dependencies = [
  "chrono",
  "csv",
  "futures",
+ "http",
  "pagepile",
  "percent-encoding",
  "rand 0.9.5",

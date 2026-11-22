@@ -5,6 +5,7 @@ use crate::render::Render;
 use crate::render::params::RenderParams;
 use anyhow::Result;
 use async_trait::async_trait;
+use http::StatusCode;
 use wikimisc::{commons, escape};
 
 /// Width of the placemark images, in pixels.
@@ -91,7 +92,7 @@ impl Render for RenderKML {
         Ok(MyResponse {
             s: kml,
             content_type: ContentType::KML,
-            status: 200,
+            status: StatusCode::OK,
         })
     }
 
