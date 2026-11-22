@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-Project notes for Claude working on PetScan (Rust port).
+Project notes for working on PetScan (Rust port).
 
 ## Project overview
 
@@ -14,7 +14,7 @@ Key paths:
 
 ## Hard rules
 
-- **Do not add the Claude attribution to commit messages.** No `Co-Authored-By: Claude …` line.
+- **Do not add the LLM attribution to commit messages.**
 - **`git commit` is pre-authorized; `git push` is not.** When work is complete and the diff is reviewable, you may run `git add <specific files>` + `git commit` without asking — this is durable authorization. **Never `git push`, `git push --force`, or otherwise publish commits to a remote without an explicit per-action request from the user.** Same for any other remote-publishing action (PR creation, branch deletion on origin, etc.). Use sensible commit groupings for larger changes.
 - **`audits/`, `CLAUDE.md`, `config.json`, `oauth.ini`, `flickr.key`, `.claude/` are all gitignored.** Don't try to git-add them; treat audit files as durable scratch.
 - Always keep **code readability and long-term maintenance** in mind.
