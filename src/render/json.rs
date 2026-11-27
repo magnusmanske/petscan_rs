@@ -255,7 +255,7 @@ impl RenderJSON {
     }
 
     fn get_query_string(platform: &Platform) -> String {
-        "https://petscan.toolforge.org/?".to_string() + &platform.form_parameters().to_string()
+        format!("{}/?{}", platform.state().tool_url(), platform.form_parameters())
     }
 
     fn json_string(value: &str) -> String {

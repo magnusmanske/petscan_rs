@@ -1022,7 +1022,8 @@ impl Platform {
     }
 
     async fn annotate_with_wikidata_item(&self, result: &PageList) -> Result<()> {
-        if result.is_wikidata() {
+        // A single-wiki deployment has no separate Wikidata to annotate from.
+        if self.state.single_wiki().is_some() || result.is_wikidata() {
             return Ok(());
         }
         let wiki = match result.wiki() {

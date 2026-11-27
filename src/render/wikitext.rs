@@ -26,10 +26,12 @@ impl Render for RenderWiki {
         let mut rows: Vec<String> = vec![];
         rows.push("== ".to_string() + &platform.combination().to_string() + " ==");
 
+        let state = platform.state();
+        let base_url = state.tool_url();
         let petscan_query_url =
-            "https://petscan.toolforge.org/?".to_string() + &platform.form_parameters().to_string();
-        let petscan_query_url_no_doit = "https://petscan.toolforge.org/?".to_string()
-            + &platform.form_parameters().to_string_no_doit();
+            format!("{base_url}/?{}", platform.form_parameters());
+        let petscan_query_url_no_doit =
+            format!("{base_url}/?{}", platform.form_parameters().to_string_no_doit());
 
         let utc: DateTime<Utc> = Utc::now();
         rows.push(format!("Last updated on {}.", utc.to_rfc2822()));
@@ -72,15 +74,15 @@ impl Render for RenderWiki {
     ) -> Result<StreamResponse> {
         let header = self.columns(&params);
         let utc: DateTime<Utc> = Utc::now();
+        let base_url = platform.state().tool_url().to_string();
+        let query_url = format!("{base_url}/?{}", platform.form_parameters());
+        let query_url_no_doit =
+            format!("{base_url}/?{}", platform.form_parameters().to_string_no_doit());
         let head: Vec<Piece> = vec![
             Cow::Owned("== ".to_string() + &platform.combination().to_string() + " =="),
             Cow::Owned(format!("Last updated on {}.", utc.to_rfc2822())),
             Cow::Owned(format!(
-                "[{} Regenerate this table] or [{} edit the query].\n",
-                "https://petscan.toolforge.org/?".to_string()
-                    + &platform.form_parameters().to_string(),
-                "https://petscan.toolforge.org/?".to_string()
-                    + &platform.form_parameters().to_string_no_doit()
+                "[{query_url} Regenerate this table] or [{query_url_no_doit} edit the query].\n"
             )),
             Cow::Borrowed("{| border=1 class='wikitable'"),
             Cow::Owned(Self::header_line(&header)),

@@ -26,6 +26,14 @@ pub struct Config {
     /// account's credentials, overriding the `TOOL_*` variables Toolforge
     /// sets for its own.
     pub db_credentials_file: Option<PathBuf>,
+    /// A single live MediaWiki database and wiki, instead of the Wikimedia
+    /// replicas and Wikidata's site matrix. Set by an embedding service.
+    #[serde(default)]
+    pub single_wiki: Option<SingleWiki>,
+    /// The tool's public base URL, for links in the output. Defaults to the
+    /// Toolforge deployment.
+    #[serde(default)]
+    pub tool_url: Option<String>,
     /// Directory with `index.html`, `main.js` and the other static files.
     /// Defaults to `html`, relative to the service's working directory.
     pub html_root: Option<PathBuf>,
@@ -44,6 +52,30 @@ pub struct Config {
     /// The most pages a single query may load before it is refused with an
     /// explanation. Defaults to [`DEFAULT_MAX_RESULT_ENTRIES`].
     pub max_result_entries: Option<usize>,
+}
+
+/// A single wiki's database and URLs, for an embedded deployment.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SingleWiki {
+    pub host: String,
+    #[serde(default = "default_mysql_port")]
+    pub port: u16,
+    pub user: String,
+    #[serde(default)]
+    pub password: String,
+    /// The wiki's database name.
+    pub database: String,
+    /// The wiki's server root, e.g. `https://example.org`.
+    pub server: String,
+    /// The exact action API URL.
+    pub api: String,
+    /// Optional display name.
+    #[serde(default)]
+    pub name: String,
+}
+
+const fn default_mysql_port() -> u16 {
+    3306
 }
 
 impl Config {
@@ -83,6 +115,8 @@ mod tests {
         assert_eq!(c.http_server, None);
         assert_eq!(c.db_credentials_file, None);
         assert_eq!(c.html_root, None);
+        assert!(c.single_wiki.is_none());
+        assert!(c.tool_url.is_none());
         assert!(!c.use_file_table);
         assert_eq!(c.restart_code, None);
         assert_eq!(c.telemetry.token, None);
@@ -111,6 +145,17 @@ mod tests {
         assert_eq!(c.http_port, Some(3000));
         assert_eq!(c.restart_code.as_deref(), Some("abc"));
         assert!(!c.use_file_table);
+    }
+
+    #[test]
+    fn single_wiki_config() {
+        let c: Config = serde_json::from_str(
+            r#"{"single_wiki":{"host":"db","user":"u","password":"p","database":"my_wiki","server":"https://w.example","api":"https://w.example/w/api.php"}}"#,
+        )
+        .unwrap();
+        let single = c.single_wiki.unwrap();
+        assert_eq!(single.port, 3306);
+        assert_eq!(single.database, "my_wiki");
     }
 
     #[test]

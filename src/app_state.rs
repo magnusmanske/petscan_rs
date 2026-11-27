@@ -29,6 +29,9 @@ use wikimisc::telemetry::ExitReason;
 /// cannot fork-bomb the worker pool.
 const MAX_CONCURRENT_REQUESTS: usize = 50;
 
+/// The Toolforge deployment, for links in the output.
+const DEFAULT_TOOL_URL: &str = "https://petscan.toolforge.org";
+
 /// Admission queue cap: at most this many requests wait for a permit; any
 /// further one is turned away at once with a 503. An unbounded queue let a
 /// request flood hold ~1000 sockets open, exhausting the process's file
@@ -101,6 +104,11 @@ pub struct AppState {
     /// Set once the drained process has started exiting.
     exiting: Arc<AtomicBool>,
     site_matrix: SiteMatrix,
+    /// The one wiki of an embedded deployment, and its API client.
+    single_wiki: Option<String>,
+    single_api_client: Option<Api>,
+    /// The tool's public base URL, for links in the output.
+    tool_url: String,
     main_page: String,
     /// Caps inbound request concurrency. See [`MAX_CONCURRENT_REQUESTS`].
     request_semaphore: Arc<Semaphore>,
@@ -119,6 +127,9 @@ impl Default for AppState {
             shutdown_reason: Arc::default(),
             exiting: Arc::default(),
             site_matrix: SiteMatrix::default(),
+            single_wiki: None,
+            single_api_client: None,
+            tool_url: DEFAULT_TOOL_URL.to_string(),
             main_page: String::default(),
             request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             queue_semaphore: Arc::new(Semaphore::new(MAX_QUEUED_REQUESTS)),
@@ -131,35 +142,58 @@ impl AppState {
     pub async fn new_from_config(config: &Config) -> Result<Self> {
         let html_root = config.html_root.clone().unwrap_or_else(|| PathBuf::from("html"));
         let main_page_path = html_root.join("index.html");
-        // Both the Wikidata API handshake and the SiteMatrix fetch are
-        // network-dependent and previously hard-failed at startup if
-        // Wikidata was even briefly unreachable (e.g. during a systemd
-        // restart that races with the upstream). Retry with backoff so
-        // the service survives transient blips.
-        let wikidata_api = retry_with_backoff("Wikidata API", || async {
-            Api::new("https://www.wikidata.org/w/api.php")
-                .await
-                .map_err(|e| anyhow!("Can't talk to Wikidata API: {e}"))
-        })
-        .await?;
         let main_page_bytes = fs::read(&main_page_path)
             .map_err(|e| anyhow!("Could not read index.html file from disk: {e}"))?;
         let main_page = String::from_utf8_lossy(&main_page_bytes)
             .parse()
             .map_err(|e: std::convert::Infallible| anyhow!("Parsing index.html failed: {e}"))?;
 
-        let db_manager = DatabaseManager::new_from_config(config);
+        let db_manager = DatabaseManager::new_from_config(config)?;
 
-        let site_matrix = retry_with_backoff("Wikidata SiteMatrix", || async {
-            SiteMatrix::new(&wikidata_api)
-                .await
-                .map_err(|e| anyhow!("Can't get site matrix: {e}"))
-        })
-        .await?;
+        let (site_matrix, single_wiki, single_api_client) = match &config.single_wiki {
+            Some(single) => {
+                let api = Api::new(&single.api).await.with_context(|| {
+                    format!("Can't talk to the wiki API at {}", single.api)
+                })?;
+                (
+                    single_site_matrix(single),
+                    Some(single.database.clone()),
+                    Some(api),
+                )
+            }
+            None => {
+                // Both the Wikidata API handshake and the SiteMatrix fetch are
+                // network-dependent and previously hard-failed at startup if
+                // Wikidata was even briefly unreachable (e.g. during a systemd
+                // restart that races with the upstream). Retry with backoff so
+                // the service survives transient blips.
+                let wikidata_api = retry_with_backoff("Wikidata API", || async {
+                    Api::new("https://www.wikidata.org/w/api.php")
+                        .await
+                        .map_err(|e| anyhow!("Can't talk to Wikidata API: {e}"))
+                })
+                .await?;
+                let site_matrix = retry_with_backoff("Wikidata SiteMatrix", || async {
+                    SiteMatrix::new(&wikidata_api)
+                        .await
+                        .map_err(|e| anyhow!("Can't get site matrix: {e}"))
+                })
+                .await?;
+                (site_matrix, None, None)
+            }
+        };
 
         Ok(Self {
             db_manager,
             site_matrix,
+            single_wiki,
+            single_api_client,
+            tool_url: config
+                .tool_url
+                .clone()
+                .unwrap_or_else(|| DEFAULT_TOOL_URL.to_string())
+                .trim_end_matches('/')
+                .to_string(),
             main_page,
             max_result_entries: config.max_result_entries(),
             ..Self::default()
@@ -459,10 +493,25 @@ impl AppState {
     /// request. Building one costs a TLS client plus a `siteinfo` round trip,
     /// and a single query asks for the same wiki's client several times.
     pub async fn get_api_for_wiki(&self, wiki: String) -> Result<Api> {
+        if let Some(api) = &self.single_api_client
+            && self.single_wiki.as_deref() == Some(wiki.as_str())
+        {
+            return Ok(api.clone());
+        }
         self.site_matrix
             .cached_api_for_wiki(&wiki)
             .await
             .with_context(|| format!("Could not initialise the MediaWiki API client for {wiki}"))
+    }
+
+    /// The one wiki of an embedded deployment.
+    pub fn single_wiki(&self) -> Option<&str> {
+        self.single_wiki.as_deref()
+    }
+
+    /// The tool's public base URL, without a trailing slash.
+    pub fn tool_url(&self) -> &str {
+        &self.tool_url
     }
 
     // ------------------------------------------------------------------
@@ -527,6 +576,31 @@ impl AppState {
     pub const fn db_manager(&self) -> &DatabaseManager {
         &self.db_manager
     }
+}
+
+/// A site matrix with only the embedded deployment's wiki, so the existing
+/// form and link code keeps working without Wikidata.
+fn single_site_matrix(single: &crate::config::SingleWiki) -> SiteMatrix {
+    let name = if single.name.is_empty() { "Wiki" } else { &single.name };
+    SiteMatrix::from_value(
+        serde_json::json!({
+            "sitematrix": {
+                "count": 1,
+                "0": {
+                    "code": "en",
+                    "name": "English",
+                    "localname": "English",
+                    "site": [{
+                        "dbname": single.database,
+                        "url": single.server,
+                        "code": "wiki",
+                        "sitename": name,
+                    }]
+                }
+            }
+        }),
+        None,
+    )
 }
 
 async fn telemetry_shutdown_then_exit(reason: String) {
@@ -1315,4 +1389,26 @@ mod tests {
         );
         assert!(!html.contains("x' onmouseover"), "{html}");
     }
+    #[test]
+    fn a_single_site_matrix_knows_the_local_wiki() {
+        let single = crate::config::SingleWiki {
+            host: "db".into(),
+            port: 3306,
+            user: "u".into(),
+            password: "p".into(),
+            database: "my_wiki".into(),
+            server: "http://localhost".into(),
+            api: "http://localhost/api.php".into(),
+            name: "Test wiki".into(),
+        };
+        let matrix = single_site_matrix(&single);
+        assert_eq!(
+            matrix.get_server_url_for_wiki("my_wiki").unwrap(),
+            "http://localhost"
+        );
+        let languages = matrix.languages();
+        assert_eq!(languages.len(), 1);
+        assert_eq!(languages[0].wikis, vec!["my_wiki"]);
+    }
+
 }

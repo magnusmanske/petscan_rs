@@ -10,7 +10,7 @@ use wikimisc::mysql_async::Value as MyValue;
 use wikimisc::mysql_async::from_row;
 use wikimisc::mysql_async::prelude::Queryable;
 use wikimisc::toolforge::db::{Cluster, ExtensionDb, normalize_dbname};
-use wikimisc::toolforge::pool::{ToolsDbPool, WikiPool};
+use wikimisc::toolforge::pool::{CustomPool, ToolsDbPool, WikiPool};
 
 /// Where `toolforge` looks for database credentials, for error messages.
 const CREDENTIALS_HINT: &str = "credentials are read from the config's db_credentials_file, \
@@ -38,6 +38,10 @@ const TCP_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(30);
 /// Maximum live connections in the tool database pool. The replica pools
 /// keep `toolforge`'s default of 10 per section, the replicas' per-user limit.
 const TOOL_DB_POOL_MAX: usize = 5;
+
+/// Statement timeout for the single live database used by an embedded
+/// deployment.
+const SINGLE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// The replica database a query runs on: a wiki's core database, or one of
 /// the extension databases holding tables split off from it.
@@ -124,6 +128,34 @@ pub struct DatabaseManager {
     analytics_pool: Arc<OnceCell<WikiPool>>,
     /// Pool for the tool DB (PSID + query log), created on first use.
     tool_db_pool: Arc<OnceCell<ToolsDbPool>>,
+    /// The single live wiki and tool database of an embedded deployment.
+    single: Option<SinglePools>,
+}
+
+/// Pools for a single live MediaWiki database.
+#[derive(Debug, Clone)]
+struct SinglePools {
+    wiki: CustomPool,
+    tool: CustomPool,
+}
+
+impl SinglePools {
+    fn new(single: &crate::config::SingleWiki, tool_schema: &str) -> Result<Self> {
+        let build = |database: &str| {
+            CustomPool::builder(single.host.clone(), single.user.clone(), single.password.clone())
+                .port(single.port)
+                .database(database.to_string())
+                .pool_max(TOOL_DB_POOL_MAX)
+                .connect_timeout(DB_CONNECT_TIMEOUT)
+                .max_statement_time(SINGLE_QUERY_TIMEOUT)
+                .build()
+                .with_context(|| format!("Cannot set up the database pool for {database}"))
+        };
+        Ok(Self {
+            wiki: build(&single.database)?,
+            tool: build(tool_schema)?,
+        })
+    }
 }
 
 impl DatabaseManager {
@@ -135,11 +167,25 @@ impl DatabaseManager {
     /// development, `local='true'` and a `[tunnels]` section in that file
     /// route each server through its SSH tunnel. The config's
     /// `db_credentials_file` overrides all of these.
-    pub fn new_from_config(config: &Config) -> Self {
-        Self {
+    /// A config error (for example a bad single-wiki setting) is returned, so
+    /// the tool can report it instead of falling back to the replicas.
+    pub fn new_from_config(config: &Config) -> Result<Self> {
+        let single = match &config.single_wiki {
+            Some(single) => {
+                let tool_schema = if config.schema.is_empty() {
+                    format!("{}__petscan", single.database)
+                } else {
+                    config.schema.clone()
+                };
+                Some(SinglePools::new(single, &tool_schema)?)
+            }
+            None => None,
+        };
+        Ok(Self {
             config: config.clone(),
+            single,
             ..Default::default()
-        }
+        })
     }
 
     // ------------------------------------------------------------------
@@ -151,7 +197,7 @@ impl DatabaseManager {
     /// needing a real database connection.
     #[cfg(test)]
     pub(crate) fn with_config(config: Config) -> Self {
-        Self::new_from_config(&config)
+        Self::new_from_config(&config).expect("test config must be valid")
     }
 
     // ------------------------------------------------------------------
@@ -174,6 +220,9 @@ impl DatabaseManager {
     /// [`DbCluster::Core`]; an extension database exists only for the wikis
     /// whose tables were actually split off.
     pub fn wiki_has_cluster(&self, wiki: &str, cluster: DbCluster) -> bool {
+        if self.single.is_some() {
+            return true;
+        }
         let wiki = normalize_dbname(wiki);
         cluster
             .extension()
@@ -199,6 +248,9 @@ impl DatabaseManager {
     /// clauses needs: `page` is on the Commons links cluster as well as its
     /// core one, so a clause reading only `page` fits either.
     pub fn cluster_hosts_tables(&self, wiki: &str, cluster: DbCluster, tables: &[&str]) -> bool {
+        if self.single.is_some() {
+            return true;
+        }
         let wiki = normalize_dbname(wiki);
         match self.effective_cluster(&wiki, cluster).extension() {
             Some(extension) => tables.iter().all(|table| extension.has_table(table)),
@@ -213,6 +265,10 @@ impl DatabaseManager {
     /// September 2026 links-table split — which no one connection can join;
     /// such a query has to be run in parts and combined in code.
     pub fn cluster_for_tables(&self, wiki: &str, tables: &[&str]) -> Result<DbCluster> {
+        if self.single.is_some() {
+            // Everything is in the same database.
+            return Ok(DbCluster::Core);
+        }
         let wiki = normalize_dbname(wiki);
         DbCluster::from_extension(ExtensionDb::for_tables(&wiki, tables)?)
     }
@@ -279,6 +335,16 @@ impl DatabaseManager {
         wiki: &str,
         cluster: DbCluster,
     ) -> Result<my::Conn> {
+        if let Some(single) = &self.single {
+            let mut conn = single
+                .wiki
+                .connect()
+                .await
+                .context("Cannot connect to the wiki database")?;
+            conn.exec_drop("SET SESSION group_concat_max_len = 1000000000", ())
+                .await?;
+            return Ok(conn);
+        }
         let wiki = normalize_dbname(wiki);
         let wiki = wiki.as_str();
         let cluster = self.effective_cluster(wiki, cluster);
@@ -328,6 +394,13 @@ impl DatabaseManager {
     /// `ToolsDB`, as found by `toolforge` (see [`Self::new_from_config`]);
     /// locally, through its `toolsdb` tunnel.
     pub async fn get_tool_db_connection(&self) -> Result<my::Conn> {
+        if let Some(single) = &self.single {
+            return single
+                .tool
+                .connect()
+                .await
+                .context("Cannot connect to the tool database");
+        }
         let schema = &self.config.schema;
         if schema.is_empty() {
             return Err(anyhow!("No schema key in config file"));
@@ -606,4 +679,16 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("No schema key"), "{err}");
     }
+    #[test]
+    fn single_mode_builds_its_pools_without_connecting() {
+        let config: Config = serde_json::from_str(
+            r#"{"schema":"my_wiki__petscan","single_wiki":{"host":"127.0.0.1","user":"u","password":"p","database":"my_wiki","server":"http://localhost","api":"http://localhost/api.php"}}"#,
+        )
+        .unwrap();
+        let manager = DatabaseManager::new_from_config(&config).unwrap();
+        assert!(manager.single.is_some());
+        assert_eq!(manager.cluster_for_tables("my_wiki", &["page"]).unwrap(), DbCluster::Core);
+        assert!(manager.wiki_has_cluster("my_wiki", DbCluster::TermStore));
+    }
+
 }

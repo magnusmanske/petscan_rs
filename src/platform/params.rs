@@ -74,6 +74,10 @@ impl Platform {
 
     /// Maps a language + project pair to a wiki database name
     pub fn get_wiki_for_language_project(&self, language: &str, project: &str) -> Option<String> {
+        // An embedded deployment has exactly one wiki.
+        if let Some(wiki) = self.state().single_wiki() {
+            return Some(wiki.to_string());
+        }
         match (language, project) {
             (language, "wikipedia") => Some(language.to_owned() + "wiki"),
             ("commons", _) => Some("commonswiki".to_string()),
