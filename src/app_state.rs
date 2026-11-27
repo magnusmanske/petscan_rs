@@ -8,6 +8,7 @@ use anyhow::{Context, Result, anyhow};
 use http::StatusCode;
 use serde_json::Value;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -128,7 +129,8 @@ impl Default for AppState {
 
 impl AppState {
     pub async fn new_from_config(config: &Config) -> Result<Self> {
-        let main_page_path = "./html/index.html";
+        let html_root = config.html_root.clone().unwrap_or_else(|| PathBuf::from("html"));
+        let main_page_path = html_root.join("index.html");
         // Both the Wikidata API handshake and the SiteMatrix fetch are
         // network-dependent and previously hard-failed at startup if
         // Wikidata was even briefly unreachable (e.g. during a systemd
@@ -140,7 +142,7 @@ impl AppState {
                 .map_err(|e| anyhow!("Can't talk to Wikidata API: {e}"))
         })
         .await?;
-        let main_page_bytes = fs::read(main_page_path)
+        let main_page_bytes = fs::read(&main_page_path)
             .map_err(|e| anyhow!("Could not read index.html file from disk: {e}"))?;
         let main_page = String::from_utf8_lossy(&main_page_bytes)
             .parse()

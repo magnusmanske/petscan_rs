@@ -26,6 +26,9 @@ pub struct Config {
     /// account's credentials, overriding the `TOOL_*` variables Toolforge
     /// sets for its own.
     pub db_credentials_file: Option<PathBuf>,
+    /// Directory with `index.html`, `main.js` and the other static files.
+    /// Defaults to `html`, relative to the service's working directory.
+    pub html_root: Option<PathBuf>,
     /// HTTP listen port. Default 80 is applied at the webserver call site.
     pub http_port: Option<u16>,
     /// HTTP bind address. Default `0.0.0.0` is applied at the webserver call site.
@@ -79,6 +82,7 @@ mod tests {
         assert_eq!(c.http_port, None);
         assert_eq!(c.http_server, None);
         assert_eq!(c.db_credentials_file, None);
+        assert_eq!(c.html_root, None);
         assert!(!c.use_file_table);
         assert_eq!(c.restart_code, None);
         assert_eq!(c.telemetry.token, None);

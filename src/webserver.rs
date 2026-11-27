@@ -60,13 +60,17 @@ impl WebServer {
             ("/favicon.ico", "image/x-icon"),
             ("/robots.txt", "text/plain; charset=utf-8"),
         ];
+        let html_root = petscan_config
+            .html_root
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("html"));
         let mut static_files = HashMap::with_capacity(STATIC.len());
         for (url_path, content_type) in STATIC {
-            let disk_path = format!("html{url_path}");
+            let disk_path = html_root.join(url_path.trim_start_matches('/'));
             if let Ok(bytes) = std::fs::read(&disk_path) {
                 static_files.insert(*url_path, (Bytes::from(bytes), *content_type));
             } else {
-                tracing::warn!("Could not pre-load static file: {disk_path}");
+                tracing::warn!("Could not pre-load static file: {}", disk_path.display());
             }
         }
         WebServer {
